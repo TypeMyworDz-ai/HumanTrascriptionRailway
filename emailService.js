@@ -2,32 +2,54 @@
 
 const nodemailer = require('nodemailer');
 
-// Mailtrap credentials (REPLACE WITH YOUR ACTUAL CREDENTIALS)
-const mailtrapCredentials = {
-    host: 'sandbox.smtp.mailtrap.io',     // *** REPLACE with your Mailtrap Host ***
-    port: 2525,                           // *** REPLACE with your Mailtrap Port (e.g., 2525) ***
-    secure: false,                        // Use 'true' if port is 465, false otherwise (for 2525, 587 it's false)
-    auth: {
-        user: '2bb9f1220f44a7',            // *** REPLACE with your Mailtrap Username ***
-        pass: '5f05229824205f'             // *** REPLACE with your Mailtrap Password ***
+// Configure transporter based on environment variables
+const createTransporter = () => {
+    // Check if production SMTP credentials are provided
+    if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+        console.log('Using Production SMTP for email service.');
+        return nodemailer.createTransport({
+            host: process.env.SMTP_HOST,
+            port: parseInt(process.env.SMTP_PORT || '587', 10), // Default to 587 if not set
+            secure: process.env.SMTP_SECURE === 'true' || (parseInt(process.env.SMTP_PORT, 10) === 465), // Use TLS/SSL if secure is true or port is 465
+            auth: {
+                user: process.env.SMTP_USER,
+                pass: process.env.SMTP_PASS
+            }
+        });
+    } else {
+        console.warn('Production SMTP credentials not found. Falling back to Mailtrap Sandbox.');
+        // Mailtrap credentials (for development/testing)
+        return nodemailer.createTransport({
+            host: 'sandbox.smtp.mailtrap.io',
+            port: 2525,
+            secure: false,
+            auth: {
+                user: '2bb9f1220f44a7', // *** REPLACE with your Mailtrap Username ***
+                pass: '5f05229824205f'  // *** REPLACE with your Mailtrap Password ***
+            }
+        });
     }
 };
 
-// Create a Nodemailer transporter using the Mailtrap credentials
-const transporter = nodemailer.createTransport(mailtrapCredentials);
+const transporter = createTransporter();
+const FROM_ADDRESS = process.env.EMAIL_FROM_ADDRESS || '"TypeMyworDz" <noreply@typemywordz.com>';
+
 
 // Function to send a welcome email
 const sendWelcomeEmail = async (user) => {
     try {
         await transporter.sendMail({
-            from: '"TypeMyworDz" <noreply@typemywordz.com>', // Sender address (can be anything for Mailtrap)
+            from: FROM_ADDRESS, // Sender address
             to: user.email, // Receiver's email address
             subject: "Welcome to TypeMyworDz!", // Email subject
             html: `
-                <h1>Welcome, ${user.full_name || 'User'}!</h1>
-                <p>Thank you for joining us. We're excited to have you!</p>
+                <h1>Welcome to TypeMyworDz!</h1>
+                <p>Hello ${user.full_name || 'User'},</p>
+                <p>Whether you are looking to work or hire, you are in the right place. Our goal is to make this platform the best hub for professional and dedicated transcribers that can be hired all over the world!</p>
                 
+                <p>Also, check out our other product, <a href="https://typemywordz.ai">https://typemywordz.ai</a>; this is a transcription AI app that converts your audios/videos in minutes. Try it out, it's free the first 30 minutes!</p>
                 
+                <p>Karibu!</p>
                 <p>Best regards,<br>The TypeMyworDz Team</p>
             `,
         });
@@ -41,7 +63,7 @@ const sendWelcomeEmail = async (user) => {
 const sendTranscriberTestSubmittedEmail = async (user) => {
     try {
         await transporter.sendMail({
-            from: '"Your App Name" <noreply@typemywordz.com>',
+            from: FROM_ADDRESS,
             to: user.email,
             subject: "Your Transcriber Test Submission",
             html: `
@@ -50,7 +72,7 @@ const sendTranscriberTestSubmittedEmail = async (user) => {
                 <p>Your transcriber test has been successfully submitted and is now pending review by our team.</p>
                 <p>We will notify you via email once a decision has been made.</p>
                 <p>Thank you for your patience!</p>
-                <p>Best regards,<br>The Your App Team</p>
+                <p>Best regards,<br>The TypeMyworDz Team</p>
             `,
         });
         console.log(`Transcriber test submission email sent to ${user.email}`);
@@ -64,22 +86,26 @@ const sendTranscriberTestResultEmail = async (user, status, reason = null) => {
     let subject, htmlContent;
 
     if (status === 'approved') {
-        subject = "Your Transcriber Test Results: Approved!";
+        subject = "Congratulations! Your TypeMyworDz Transcriber Application is Approved!";
         htmlContent = `
             <h1>Congratulations, ${user.full_name || 'Transcriber'}!</h1>
-            <p>We're happy to inform you that your transcriber test has been reviewed and <strong>approved</strong>.</p>
-            <p>You can now proceed with setting up your profile and start taking on jobs!</p>
-            <p>Best regards,<br>The Your App Team</p>
+            <p>You have been approved to join our professional team of transcribers at TypeMyworDz. Our goal is to make Kenya a hub of trusted and professional transcribers.</p>
+            
+            <h2>What's next?</h2>
+            <p>You now need to make sure that you are alert for any offers. Remember, you have to be online to receive offers from clients. Make sure to look out for your 'Go Online', 'Go Offline', 'Set Available', 'Set Busy' buttons, toggle them accordingly in order to make sure offers don't get past you.</p>
+            <p>Remember to read our 'very brief' guidelines. If a client doesn't require special guidelines, you will follow them.</p>
+            <p>Let's grow this platform together and make it the best hub!</p>
+            
+            <p>Best regards,<br>The TypeMyworDz Team</p>
         `;
     } else if (status === 'rejected') {
         subject = "Your Transcriber Test Results: Rejected";
         htmlContent = `
             <h1>Transcriber Test Update</h1>
             <p>Hello ${user.full_name || 'Transcriber'},</p>
-            <p>Your transcriber test has been reviewed, and unfortunately, it has been <strong>rejected</strong> at this time.</p>
-            ${reason ? `<p><strong>Reason for rejection:</strong> ${reason}</p>` : ''}
-            <p>We encourage you to review the requirements and try again if you wish.</p>
-            <p>Best regards,<br>The Your App Team</p>
+            <p>We appreciate the effort you took to try our test. Your scores did not meet our threshold, and we won't onboard you now. We are always looking for transcribers and you are welcome to try again after a few 3 months.</p>
+            <p>Thank you.</p>
+            <p>Best regards,<br>The TypeMyworDz Team</p>
         `;
     } else {
         console.error(`Invalid status provided for transcriber test result email: ${status}`);
@@ -88,7 +114,7 @@ const sendTranscriberTestResultEmail = async (user, status, reason = null) => {
 
     try {
         await transporter.sendMail({
-            from: '"Your App Name" <noreply@typemywordz.com>',
+            from: FROM_ADDRESS,
             to: user.email,
             subject: subject,
             html: htmlContent,
@@ -103,16 +129,16 @@ const sendTranscriberTestResultEmail = async (user, status, reason = null) => {
 const sendNewNegotiationRequestEmail = async (transcriber, client) => {
     try {
         await transporter.sendMail({
-            from: '"Your App Name" <noreply@typemywordz.com>',
-            to: transcriber.email, // Email sent to the transcriber
+            from: FROM_ADDRESS, // Email sent to the transcriber
+            to: transcriber.email,
             subject: `New Negotiation Request from ${client.full_name}`,
             html: `
                 <h1>New Negotiation Request</h1>
                 <p>Hello ${transcriber.full_name || 'Transcriber'},</p>
                 <p>You have received a new negotiation request from <strong>${client.full_name}</strong> (${client.email}).</p>
                 <p>Please check your dashboard to review the details and respond.</p>
-                <p><a href="YOUR_APP_URL/transcriber-dashboard">Go to Dashboard</a></p>
-                <p>Best regards,<br>The Your App Team</p>
+                <p><a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/transcriber-dashboard">Go to Dashboard</a></p>
+                <p>Best regards,<br>The TypeMyworDz Team</p>
             `,
         });
         console.log(`New negotiation request email sent to ${transcriber.email} for client ${client.full_name}`);
@@ -125,7 +151,7 @@ const sendNewNegotiationRequestEmail = async (transcriber, client) => {
 const sendCounterOfferEmail = async (client, transcriber, negotiation) => {
     try {
         await transporter.sendMail({
-            from: '"Your App Name" <noreply@typemywordz.com>',
+            from: FROM_ADDRESS,
             to: client.email, // Email sent to the client
             subject: `Counter Offer Received for Negotiation #${negotiation.id}`,
             html: `
@@ -139,8 +165,8 @@ const sendCounterOfferEmail = async (client, transcriber, negotiation) => {
                     ${negotiation.transcriber_response ? `<li>Transcriber's Message: ${negotiation.transcriber_response}</li>` : ''}
                 </ul>
                 <p>Please review the counter offer on your dashboard.</p>
-                <p><a href="YOUR_APP_URL/client-dashboard">Go to Dashboard</a></p>
-                <p>Best regards,<br>The Your App Team</p>
+                <p><a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/client-dashboard">Go to Dashboard</a></p>
+                <p>Best regards,<br>The TypeMyworDz Team</p>
             `,
         });
         console.log(`Counter offer email sent to ${client.email} for negotiation #${negotiation.id}`);
@@ -153,7 +179,7 @@ const sendCounterOfferEmail = async (client, transcriber, negotiation) => {
 const sendNegotiationAcceptedEmail = async (client, transcriber, negotiation) => {
     try {
         await transporter.sendMail({
-            from: '"Your App Name" <noreply@typemywordz.com>',
+            from: FROM_ADDRESS,
             to: `${client.email}, ${transcriber.email}`, // Send to both client and transcriber
             subject: `Negotiation #${negotiation.id} Accepted!`,
             html: `
@@ -168,7 +194,7 @@ const sendNegotiationAcceptedEmail = async (client, transcriber, negotiation) =>
                     <li>Deadline: ${negotiation.deadline_hours} hours</li>
                 </ul>
                 <p>You can view the job details on your respective dashboards.</p>
-                <p>Best regards,<br>The Your App Team</p>
+                <p>Best regards,<br>The TypeMyworDz Team</p>
             `,
         });
         console.log(`Negotiation accepted email sent to client ${client.email} and transcriber ${transcriber.email} for #${negotiation.id}`);
@@ -186,14 +212,16 @@ const sendNegotiationRejectedEmail = async (user, negotiation, reason) => {
         <h1>Negotiation Rejected</h1>
         <p>Hello ${recipientName},</p>
         <p>Your negotiation request (ID: <strong>${negotiation.id}</strong>) has been rejected.</p>
-        ${reason ? `<p><strong>Reason:</strong> ${reason}</p>` : ''}
-        <p>Please review the details or contact support if you have questions.</p>
-        <p>Best regards,<br>The Your App Team</p>
+        ${reason ? `
+            <p><strong>Reason:</strong> ${reason}</p>
+            <p>We recommend reviewing the project details or contacting support if you have questions.</p>
+        ` : '<p>Please review the details or contact support if you have questions.</p>'}
+        <p>Best regards,<br>The TypeMyworDz Team</p>
     `;
 
     try {
         await transporter.sendMail({
-            from: '"Your App Name" <noreply@typemywordz.com>',
+            from: FROM_ADDRESS,
             to: recipientEmail,
             subject: subject,
             html: htmlContent,
@@ -208,7 +236,7 @@ const sendNegotiationRejectedEmail = async (user, negotiation, reason) => {
 module.exports = {
     sendWelcomeEmail,
     sendTranscriberTestSubmittedEmail,
-    sendTranscriberTestResultEmail,
+    sendTranscriberTestResultEmail, // Correctly exported
     sendNewNegotiationRequestEmail,
     sendCounterOfferEmail,
     sendNegotiationAcceptedEmail,

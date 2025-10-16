@@ -161,7 +161,7 @@ const approveTranscriberTest = async (req, res) => {
         if (userDetailsError) console.error('Error fetching user details for approval email:', userDetailsError);
 
         if (userDetails) {
-            await emailService.sendTranscriberTestApprovedEmail(userDetails);
+            await emailService.sendTranscriberTestResultEmail(userDetails, 'approved'); // FIXED: Use sendTranscriberTestResultEmail
         }
 
         res.json({ message: 'Transcriber test approved successfully.' });
@@ -209,7 +209,7 @@ const rejectTranscriberTest = async (req, res) => {
         if (userDetailsError) console.error('Error fetching user details for rejection email:', userDetailsError);
 
         if (userDetails) {
-            await emailService.sendTranscriberTestRejectedEmail(userDetails, reason);
+            await emailService.sendTranscriberTestResultEmail(userDetails, 'rejected', reason); // FIXED: Use sendTranscriberTestResultEmail
         }
 
         res.json({ message: 'Transcriber test rejected successfully.' });
@@ -463,7 +463,7 @@ module.exports = {
     getAllUsersForAdmin,
     getUserByIdForAdmin,
     getAnyUserById,
-    getAdminSettings,    
+    getAdminSettings,
     updateAdminSettings,
     getAllJobsForAdmin,
     getAllDisputesForAdmin,
