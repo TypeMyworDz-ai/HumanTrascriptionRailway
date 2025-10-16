@@ -1,4 +1,4 @@
-// backend/controllers/adminController.js - Part 1 - UPDATED with getAllDisputesForAdmin
+// backend/controllers/adminController.js - Part 1 - UPDATED for getUserByIdForAdmin fix
 
 const supabase = require('..//database');
 const emailService = require('..//emailService'); // Assuming this path is correct
@@ -240,9 +240,12 @@ const getAllUsersForAdmin = async (req, res) => {
     }
 };
 
+// FIXED: getUserByIdForAdmin - Safely handles nested one-to-one relationships
 const getUserByIdForAdmin = async (req, res) => {
     try {
         const { userId } = req.params;
+        console.log(`[getUserByIdForAdmin] Attempting to fetch user ID: ${userId}`);
+
         const { data: user, error } = await supabase
             .from('users')
             .select(`
@@ -267,20 +270,29 @@ const getUserByIdForAdmin = async (req, res) => {
             .eq('id', userId)
             .single();
 
-        if (error) throw error;
+        if (error) {
+            console.error(`[getUserByIdForAdmin] Supabase error fetching user ${userId}:`, error);
+            throw error;
+        }
+        if (!user) {
+            console.warn(`[getUserByIdForAdmin] User ${userId} not found.`);
+            return res.status(404).json({ error: 'User not found.' });
+        }
 
         // Flatten the data for easier consumption on the frontend
+        // Supabase returns one-to-one relationships as an array, so safely access the first element
         const formattedUser = {
             ...user,
-            transcriber_profile: user.transcribers?.[0] || null,
-            client_profile: user.client_profiles?.[0] || null,
+            transcriber_profile: user.transcribers?.[0] || null, // Safely access first element
+            client_profile: user.client_profiles?.[0] || null,   // Safely access first element
         };
-        delete formattedUser.transcribers;
-        delete formattedUser.client_profiles;
+        delete formattedUser.transcribers; // Clean up raw nested arrays
+        delete formattedUser.client_profiles; // Clean up raw nested arrays
 
+        console.log(`[getUserByIdForAdmin] Successfully fetched and formatted user: ${userId}`);
         res.json({ user: formattedUser });
     } catch (error) {
-        console.error('Error fetching user by ID for admin:', error);
+        console.error('[getUserByIdForAdmin] Error fetching user by ID for admin:', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -438,7 +450,7 @@ const getAllDisputesForAdmin = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
-// backend/controllers/adminController.js - Part 2 - UPDATED with getAllDisputesForAdmin (Continue from Part 1)
+// backend/controllers/adminController.js - Part 2 - UPDATED for getUserByIdForAdmin (Continue from Part 1)
 
 module.exports = {
     getPendingTranscriberTestsCount,
@@ -450,10 +462,10 @@ module.exports = {
     approveTranscriberTest,
     rejectTranscriberTest,
     getAllUsersForAdmin,
-    getUserByIdForAdmin,
+    getUserByIdForAdmin, // FIXED: Ensure this is exported
     getAnyUserById,
     getAdminSettings,    
     updateAdminSettings, 
     getAllJobsForAdmin,  
-    getAllDisputesForAdmin, // NEW: Export the disputes getter
+    getAllDisputesForAdmin, 
 };

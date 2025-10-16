@@ -1,10 +1,14 @@
-// backend/controllers/authController.js
+// backend/controllers/authController.js - Part 1 - UPDATED with Forgot/Reset Password functionality
 
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const supabase = require('../database');
-// Ensure the path to emailService is correct for your project structure
-const emailService = require('../emailService'); 
+const supabase = require('..//database');
+const emailService = require('..//emailService'); 
+const { v4: uuidv4 } = require('uuid'); // For generating UUIDs for reset tokens
+
+// Define the frontend URL for password reset links.
+// This will come from an environment variable (e.g., CLIENT_URL from Railway)
+const FRONTEND_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 
 // Register new user
 const registerUser = async (req, res) => {
@@ -48,7 +52,7 @@ const registerUser = async (req, res) => {
     }
 
     const newUser = userData;
-    console.log('registerUser: Core user created:', newUser.id, newUser.email);
+    console.log('registerUser: Core user created: ', newUser.id, newUser.email);
 
     // --- SENDING THE WELCOME EMAIL ---
     if (newUser && newUser.email) {
@@ -57,27 +61,27 @@ const registerUser = async (req, res) => {
     // --- END OF EMAIL INTEGRATION ---
 
     if (newUser.user_type === 'client') {
-        console.log('registerUser: Creating client profile for user ID:', newUser.id);
+        console.log('registerUser: Creating client profile for user ID: ', newUser.id);
         const { error: clientProfileError } = await supabase
             .from('clients')
             .insert([{ id: newUser.id, phone: phone, client_rating: 5.0 }])
             .select();
         if (clientProfileError) {
-            console.error('registerUser: Supabase error creating client profile:', clientProfileError);
+            console.error('registerUser: Supabase error creating client profile: ', clientProfileError);
             throw clientProfileError;
         }
-        console.log('registerUser: Client profile created for user ID:', newUser.id);
+        console.log('registerUser: Client profile created for user ID: ', newUser.id);
     } else if (newUser.user_type === 'transcriber') {
-        console.log('registerUser: Creating transcriber profile for user ID:', newUser.id);
+        console.log('registerUser: Creating transcriber profile for user ID: ', newUser.id);
         const { error: transcriberProfileError } = await supabase
             .from('transcribers')
             .insert([{ id: newUser.id, phone: phone, status: 'pending_assessment', user_level: 'transcriber', is_online: false, is_available: true, average_rating: 0.0, completed_jobs: 0, badges: null, current_job_id: null }])
             .select();
         if (transcriberProfileError) {
-            console.error('registerUser: Supabase error creating transcriber profile:', transcriberProfileError);
+            console.error('registerUser: Supabase error creating transcriber profile: ', transcriberProfileError);
             throw transcriberProfileError;
         }
-        console.log('registerUser: Transcriber profile created for user ID:', newUser.id);
+        console.log('registerUser: Transcriber profile created for user ID: ', newUser.id);
     } else if (newUser.user_type === 'admin') {
         console.log('registerUser: Admin user type detected. No separate profile table created.');
     }
@@ -110,10 +114,10 @@ const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    console.log('loginUser: Attempting to find user with email:', email);
+    console.log('loginUser: Attempting to find user with email: ', email);
     const { data: user, error: userFetchError } = await supabase
       .from('users')
-      .select('id, email, full_name, user_type, password_hash, is_active')
+      .select('id, email, full_name, user_type, password_hash, is_active, status, user_level') // Select status and user_level
       .eq('email', email)
       .single();
 
@@ -125,28 +129,28 @@ const loginUser = async (req, res) => {
       console.warn('loginUser: User not found for email:', email);
       return res.status(400).json({ error: 'Invalid email or password' });
     }
-    console.log('loginUser: User found:', user.email, 'ID:', user.id, 'is_active:', user.is_active, 'user_type:', user.user_type);
+    console.log('loginUser: User found: ', user.email, 'ID:', user.id, 'is_active:', user.is_active, 'user_type:', user.user_type, 'status:', user.status, 'level:', user.user_level);
 
     if (!user.is_active) {
       console.warn('loginUser: User account is deactivated for email:', email);
       return res.status(400).json({ error: 'Account is deactivated' });
     }
 
-    console.log('loginUser: Comparing password for user ID:', user.id);
+    console.log('loginUser: Comparing password for user ID: ', user.id);
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
 
     if (!isPasswordValid) {
       console.warn('loginUser: Password comparison FAILED for email:', email);
       return res.status(400).json({ error: 'Invalid email or password' });
     }
-    console.log('loginUser: Password comparison SUCCESS for user ID:', user.id);
+    console.log('loginUser: Password comparison SUCCESS for user ID: ', user.id);
 
 
     let profileData = {};
-    console.log('loginUser: User Type for profile fetching:', user.user_type);
+    console.log('loginUser: User Type for profile fetching: ', user.user_type);
 
     if (user.user_type === 'client') {
-        console.log('loginUser: Fetching client profile for user ID:', user.id);
+        console.log('loginUser: Fetching client profile for user ID: ', user.id);
         const { data: clientProfile, error: clientProfileError } = await supabase
             .from('clients')
             .select('phone, client_rating')
@@ -162,7 +166,7 @@ const loginUser = async (req, res) => {
         }
         profileData = { ...clientProfile };
 
-        console.log('loginUser: Updating last_login for client user ID:', user.id);
+        console.log('loginUser: Updating last_login for client user ID: ', user.id);
         const { error: updateError } = await supabase
             .from('users')
             .update({ last_login: new Date().toISOString() })
@@ -172,7 +176,7 @@ const loginUser = async (req, res) => {
         }
 
     } else if (user.user_type === 'transcriber') {
-        console.log('loginUser: Fetching transcriber profile for user ID:', user.id);
+        console.log('loginUser: Fetching transcriber profile for user ID: ', user.id);
         const { data: transcriberProfile, error: transcriberProfileError } = await supabase
             .from('transcribers')
             .select('phone, status, user_level, is_online, is_available, average_rating, completed_jobs, badges, current_job_id')
@@ -188,7 +192,7 @@ const loginUser = async (req, res) => {
         }
         profileData = { ...transcriberProfile };
 
-        console.log('loginUser: Updating last_login and is_online for transcriber user ID:', user.id);
+        console.log('loginUser: Updating last_login and is_online for transcriber user ID: ', user.id);
         const { error: updateError } = await supabase
             .from('users')
             .update({ last_login: new Date().toISOString() })
@@ -226,7 +230,7 @@ const loginUser = async (req, res) => {
 
     const { password_hash, ...userWithoutPasswordHash } = user;
     const fullUserObject = { ...userWithoutPasswordHash, ...profileData };
-    console.log('loginUser: Login successful. Returning user object:', fullUserObject);
+    console.log('loginUser: Login successful. Returning user object: ', fullUserObject);
 
     res.json({
       message: 'Login successful',
@@ -306,7 +310,7 @@ const getUserById = async (req, res) => {
 
 
     const fullUserObject = { ...user, ...profileData };
-    console.log('getUserById: Full user object returned:', fullUserObject);
+    console.log('getUserById: Full user object returned: ', fullUserObject);
 
     res.json({
       message: 'User retrieved successfully',
