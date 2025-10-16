@@ -77,7 +77,7 @@ const uploadNegotiationFiles = multer({
 const getAvailableTranscribers = async (req, res) => {
   try {
     console.log('Fetching available transcribers...');
-    
+
     // FIXED: Query users table directly and join with transcribers for additional info
     const { data: transcribers, error } = await supabase
       .from('users')
@@ -107,12 +107,13 @@ const getAvailableTranscribers = async (req, res) => {
         throw error;
     }
 
-    console.log('Raw transcribers data:', transcribers);
+    console.log('Raw transcribers data from Supabase:', transcribers); // Added debug log
 
-    // Filter out any transcribers without valid transcriber profiles
-    let availableTranscribers = (transcribers || []).filter(user => 
-      user.transcribers && 
-      user.transcribers.status === 'active_transcriber'
+    // Filter out any transcribers without valid transcriber profiles AND ensure they are online
+    let availableTranscribers = (transcribers || []).filter(user =>
+      user.transcribers &&
+      user.transcribers.status === 'active_transcriber' &&
+      user.is_online === true // Defensive re-check in JS
     );
 
     // Restructure data to match frontend expectations
@@ -136,12 +137,12 @@ const getAvailableTranscribers = async (req, res) => {
     // ADDED: Sort by average_rating in JavaScript after data transformation
     availableTranscribers.sort((a, b) => b.average_rating - a.average_rating);
 
-    console.log('Processed available transcribers:', availableTranscribers);
+    console.log('Processed available transcribers (after JS filter and sort):', availableTranscribers);
 
     // If no real transcribers, create sample ones in database for testing (DEV ONLY)
     if (availableTranscribers.length === 0 && process.env.NODE_ENV === 'development') {
       console.log('No transcribers found, creating sample data...');
-      
+
       const sampleUsers = [
         {
           full_name: 'Sarah Wanjiku',
@@ -220,7 +221,7 @@ const getAvailableTranscribers = async (req, res) => {
               created_at: new Date().toISOString()
             }
           }));
-          
+
           // Sort sample data by rating too
           availableTranscribers.sort((a, b) => b.average_rating - a.average_rating);
         }
@@ -265,10 +266,10 @@ const createNegotiation = async (req, res, next, io) => {
     const { data: transcriberUser, error: transcriberError } = await supabase
       .from('users')
       .select(`
-        id, 
-        full_name, 
-        email, 
-        is_online, 
+        id,
+        full_name,
+        email,
+        is_online,
         is_available,
         transcribers (
           id,
@@ -422,7 +423,7 @@ const getClientNegotiations = async (req, res) => {
 
         // Safely access nested transcriber profile data. Supabase often returns one-to-one
         // relationships as an array, so we take the first element if it exists.
-        const transcriberProfileData = transcriber?.transcribers?.[0] || {}; 
+        const transcriberProfileData = transcriber?.transcribers?.[0] || {};
 
         return {
             ...rest,
@@ -512,4 +513,3 @@ module.exports = {
   deleteNegotiation,
   syncAvailabilityStatus // Export the utility function
 };
-

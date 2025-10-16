@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const supabase = require('..//database');
-const emailService = require('..//emailService');
+const supabase = require('../database');
+const emailService = require('../emailService');
 const { v4: uuidv4 } = require('uuid');
 
 console.log('[authController.js] Module loaded.');
@@ -118,7 +118,7 @@ const loginUser = async (req, res) => {
   console.log('loginUser: Attempting to find user with email: ', email);
   const { data: user, error: userFetchError } = await supabase
     .from('users')
-    .select('id, email, full_name, user_type, password_hash, is_active, status, user_level') // Select status and user_level
+    .select('id, email, full_name, user_type, password_hash, is_active, status, user_level, is_online, is_available') // Select is_online, is_available
     .eq('email', email)
     .single();
 
@@ -130,7 +130,7 @@ const loginUser = async (req, res) => {
    console.warn('loginUser: User not found for email:', email);
    return res.status(400).json({ error: 'Invalid email or password' });
   }
-  console.log('loginUser: User found: ', user.email, 'ID:', user.id, 'is_active:', user.is_active, 'user_type:', user.user_type, 'status:', user.status, 'level:', user.user_level);
+  console.log('loginUser: User found: ', user.email, 'ID:', user.id, 'is_active:', user.is_active, 'user_type:', user.user_type, 'status:', user.status, 'level:', user.user_level, 'is_online:', user.is_online, 'is_available:', user.is_available);
 
   if (!user.is_active) {
    console.warn('loginUser: User account is deactivated for email:', email);
@@ -162,7 +162,7 @@ const loginUser = async (req, res) => {
     return res.status(500).json({ error: clientProfileError.message });
    }
    if (!clientProfile) {
-    console.error('loginUser: Client profile NOT FOUND for user ID:', user.id);
+    console.error('loginUser: Client profile NOT FOUND for user ID: ', user.id);
     return res.status(500).json({ error: 'Client profile not found.' });
    }
    profileData = { ...clientProfile };
@@ -188,27 +188,30 @@ const loginUser = async (req, res) => {
     return res.status(500).json({ error: transcriberProfileError.message });
    }
    if (!transcriberProfile) {
-    console.error('loginUser: Transcriber profile NOT FOUND for user ID:', user.id);
+    console.error('loginUser: Transcriber profile NOT FOUND for user ID: ', user.id);
     return res.status(500).json({ error: 'Transcriber profile not found.' });
    }
    profileData = { ...transcriberProfile };
 
    console.log('loginUser: Updating last_login and is_online for transcriber user ID: ', user.id);
-   const { error: updateError } = await supabase
+   // FIXED: Update is_online in the users table
+   const { error: updateUserOnlineStatusError } = await supabase
      .from('users')
-     .update({ last_login: new Date().toISOString() })
+     .update({ last_login: new Date().toISOString(), is_online: true })
      .eq('id', user.id);
-   if (updateError) {
-    console.error('loginUser: Error updating last_login for transcriber:', updateError);
+   if (updateUserOnlineStatusError) {
+    console.error('loginUser: Error updating users.is_online status:', updateUserOnlineStatusError);
    }
-   const { error: updateOnlineStatusError } = await supabase
+
+   // Still update transcribers table for consistency (though users table is primary)
+   const { error: updateTranscriberOnlineStatusError } = await supabase
      .from('transcribers')
      .update({ is_online: true, updated_at: new Date().toISOString() })
      .eq('id', user.id);
-   if (updateOnlineStatusError) {
-    console.error('loginUser: Error updating transcriber is_online status:', updateOnlineStatusError);
+   if (updateTranscriberOnlineStatusError) {
+    console.error('loginUser: Error updating transcribers.is_online status:', updateTranscriberOnlineStatusError);
    }
-   profileData.is_online = true;
+   profileData.is_online = true; // Ensure the returned profileData reflects the change
 
   } else if (user.user_type === 'admin') {
    console.log('loginUser: Admin user type detected. No separate profile table for admin yet.');
@@ -223,7 +226,9 @@ const loginUser = async (req, res) => {
       email: user.email,
       userType: user.user_type,
       userStatus: profileData.status,
-      userLevel: profileData.user_level
+      userLevel: profileData.user_level,
+      isOnline: profileData.is_online, // Include is_online in token payload
+      isAvailable: profileData.is_available // Include is_available in token payload
     },
    process.env.JWT_SECRET || 'your-secret-key',
     { expiresIn: '7d' }
