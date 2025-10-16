@@ -262,7 +262,7 @@ const getUserByIdForAdmin = async (req, res) => {
                     completed_jobs,
                     badges
                 ),
-                clients ( // Corrected from client_profiles to clients
+                clients (
                     client_rating
                 )
             `)
@@ -281,12 +281,12 @@ const getUserByIdForAdmin = async (req, res) => {
         // Flatten the data for easier consumption on the frontend
         const formattedUser = {
             ...user,
-            // FIXED: Safely access array elements for one-to-one relationships
+            // Safely access array elements for one-to-one relationships
             transcriber_profile: user.transcribers?.[0] || null,
-            client_profile: user.clients?.[0] || null, // Corrected from client_profiles to clients
+            client_profile: user.clients?.[0] || null,
         };
         delete formattedUser.transcribers; // Clean up raw nested arrays
-        delete formattedUser.clients; // Corrected from client_profiles to clients
+        delete formattedUser.clients; // Clean up raw nested arrays
 
         console.log(`[getUserByIdForAdmin] Successfully fetched and formatted user: ${userId}`);
         res.json({ user: formattedUser });
