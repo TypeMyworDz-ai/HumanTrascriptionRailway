@@ -203,6 +203,68 @@ const sendNegotiationAcceptedEmail = async (client, transcriber, negotiation) =>
     }
 };
 
+// NEW: Function to send payment confirmation email to client and job notification to transcriber
+const sendPaymentConfirmationEmail = async (client, transcriber, negotiation, payment) => {
+    try {
+        const clientSubject = `Payment Confirmed for Job #${negotiation.id} - TypeMyworDz`;
+        const clientHtmlContent = `
+            <h1>Payment Confirmed!</h1>
+            <p>Hello ${client.full_name || 'Client'},</p>
+            <p>Your payment of KES ${payment.amount} for negotiation ID <strong>${negotiation.id}</strong> has been successfully processed.</p>
+            <p>Your job is now active, and <strong>${transcriber.full_name}</strong> has been notified.</p>
+            <p><strong>Job Details:</strong></p>
+            <ul>
+                <li>Negotiation ID: ${negotiation.id}</li>
+                <li>Transcriber: ${transcriber.full_name} (${transcriber.email})</li>
+                <li>Agreed Price: KES ${negotiation.agreed_price_kes}</li>
+                <li>Deadline: ${negotiation.deadline_hours} hours</li>
+            </ul>
+            <p>You can track the progress of your job on your dashboard.</p>
+            <p><a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/client-dashboard">Go to Dashboard</a></p>
+            <p>Best regards,<br>The TypeMyworDz Team</p>
+        `;
+
+        const transcriberSubject = `New Job Hired! Negotiation #${negotiation.id} - TypeMyworDz`;
+        const transcriberHtmlContent = `
+            <h1>New Job Hired!</h1>
+            <p>Hello ${transcriber.full_name || 'Transcriber'},</p>
+            <p>A client, <strong>${client.full_name}</strong> (${client.email}), has successfully paid for negotiation ID <strong>${negotiation.id}</strong>.</p>
+            <p>This job is now active. You have been marked as busy and will not receive new offers until this job is completed.</p>
+            <p><strong>Job Details:</strong></p>
+            <ul>
+                <li>Negotiation ID: ${negotiation.id}</li>
+                <li>Client: ${client.full_name} (${client.email})</li>
+                <li>Agreed Price: KES ${negotiation.agreed_price_kes}</li>
+                <li>Deadline: ${negotiation.deadline_hours} hours</li>
+            </ul>
+            <p>Please proceed with the transcription and mark the job as complete on your dashboard once finished.</p>
+            <p><a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/transcriber-dashboard">Go to Dashboard</a></p>
+            <p>Best regards,<br>The TypeMyworDz Team</p>
+        `;
+
+        // Send to client
+        await transporter.sendMail({
+            from: FROM_ADDRESS,
+            to: client.email,
+            subject: clientSubject,
+            html: clientHtmlContent,
+        });
+        console.log(`Payment confirmation email sent to client ${client.email} for #${negotiation.id}`);
+
+        // Send to transcriber
+        await transporter.sendMail({
+            from: FROM_ADDRESS,
+            to: transcriber.email,
+            subject: transcriberSubject,
+            html: transcriberHtmlContent,
+        });
+        console.log(`New job hired email sent to transcriber ${transcriber.email} for #${negotiation.id}`);
+
+    } catch (error) {
+        console.error(`Error sending payment confirmation/job hired email for #${negotiation.id}:`, error);
+    }
+};
+
 // Function to send negotiation rejected email
 const sendNegotiationRejectedEmail = async (user, negotiation, reason) => {
     const recipientName = user.full_name || 'User';
@@ -240,5 +302,6 @@ module.exports = {
     sendNewNegotiationRequestEmail,
     sendCounterOfferEmail,
     sendNegotiationAcceptedEmail,
+    sendPaymentConfirmationEmail, // NEW: Export payment confirmation email
     sendNegotiationRejectedEmail,
 };

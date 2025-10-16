@@ -5,15 +5,18 @@ const http = require('http');
 const { Server } = require('socket.io');
 const supabase = require('./database');
 
-// Import routes
+// Import routes and controllers
 const authRoutes = require('./routes/authRoutes');
 const audioRoutes = require('./routes/audioRoutes');
 const transcriberRoutes = require('./routes/transcriberRoutes');
 const generalApiRoutes = require('./routes/generalApiRoutes');
 
+// Import setOnlineStatus from transcriberController
+const { setOnlineStatus } = require('./controllers/transcriberController'); // NEW: Import setOnlineStatus
+
 const app = express();
 // Use Railway's PORT environment variable or fallback to 5000 for local development
-const PORT = process.env.PORT || 5000; 
+const PORT = process.env.PORT || 5000;
 
 // Define allowed origins for CORS dynamically
 // For local development, it will be 'http://localhost:3000'
@@ -36,6 +39,71 @@ const io = new Server(server, {
   },
   allowEIO3: true
 });
+
+// NEW: Socket.IO Connection and Disconnection Logic for is_online status
+io.on('connection', (socket) => {
+  const userId = socket.handshake.query.userId;
+  console.log(`User connected via WebSocket: ${socket.id} (User ID: ${userId || 'N/A'})`);
+
+  if (userId) {
+    // Store userId on the socket for later use on disconnect
+    socket.userId = userId;
+
+    // Check if this user is a transcriber and set them online
+    // This assumes `is_online` is false by default in DB for new/logged out users
+    // and `authController.js` sets it to true on login.
+    // We re-confirm here, or ensure they are online if they just connected.
+    supabase.from('users').select('user_type').eq('id', userId).single()
+      .then(({ data, error }) => {
+        if (error) {
+          console.error(`Error fetching user type for socket connection ${userId}:`, error);
+          return;
+        }
+        if (data && data.user_type === 'transcriber') {
+          setOnlineStatus(userId, true)
+            .then(() => console.log(`Transcriber ${userId} set to online on socket connect.`))
+            .catch(err => console.error(`Failed to set transcriber ${userId} online on connect:`, err));
+        }
+      });
+
+    socket.on('joinUserRoom', (roomUserId) => {
+      if (roomUserId === userId) {
+        socket.join(roomUserId);
+        console.log(`Socket ${socket.id} joined room for user ${roomUserId}`);
+      } else {
+        console.warn(`Attempted to join incorrect room. Socket ID: ${socket.id}, Query User ID: ${userId}, Requested Room User ID: ${roomUserId}`);
+      }
+    });
+  } else {
+    console.warn(`Socket connected without a userId in query. Socket ID: ${socket.id}`);
+  }
+
+
+  socket.on('disconnect', (reason) => {
+    console.log(`User disconnected from WebSocket: ${socket.id} (Reason: ${reason})`);
+    if (socket.userId) {
+      // Set transcriber offline on disconnect
+      supabase.from('users').select('user_type').eq('id', socket.userId).single()
+        .then(({ data, error }) => {
+          if (error) {
+            console.error(`Error fetching user type for socket disconnect ${socket.userId}:`, error);
+            return;
+          }
+          if (data && data.user_type === 'transcriber') {
+            setOnlineStatus(socket.userId, false)
+              .then(() => console.log(`Transcriber ${socket.userId} set to offline on socket disconnect.`))
+              .catch(err => console.error(`Failed to set transcriber ${socket.userId} offline on disconnect:`, err));
+          }
+        });
+    }
+  });
+
+  // Handle errors on the socket
+  socket.on('error', (error) => {
+    console.error(`Socket error for ${socket.id}:`, error);
+  });
+});
+
 
 // Configure Express app with dynamic CORS
 app.use(cors({

@@ -1,4 +1,4 @@
-// backend/controllers/negotiationController.js - Part 1 - FINAL UPDATES
+// backend/controllers/negotiationController.js - Part 1 - UPDATED for simplified online/availability logic
 
 const supabase = require('../database');
 const multer = require('multer');
@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const emailService = require('../emailService'); // Ensure this path is correct
 
-// Utility function to sync availability status between tables (from previous update)
+// Utility function to sync availability status between tables
 const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) => {
     const updateData = {
         is_available: isAvailable,
@@ -79,6 +79,7 @@ const getAvailableTranscribers = async (req, res) => {
     console.log('Fetching available transcribers...');
 
     // FIXED: Query users table directly and join with transcribers for additional info
+    // Removed .eq('is_online', true) from Supabase query
     const { data: transcribers, error } = await supabase
       .from('users')
       .select(`
@@ -88,6 +89,7 @@ const getAvailableTranscribers = async (req, res) => {
         created_at,
         is_online,
         is_available,
+        current_job_id,
         transcribers (
             status,
             user_level,
@@ -97,8 +99,8 @@ const getAvailableTranscribers = async (req, res) => {
         )
       `)
       .eq('user_type', 'transcriber')
-      .eq('is_online', true)
-      .eq('is_available', true)
+      .eq('is_available', true) // Filter by manually set availability
+      .is('current_job_id', null) // Filter out transcribers with an active job
       .eq('transcribers.status', 'active_transcriber');
       // REMOVED: .order('transcribers.average_rating', { ascending: false }); // Handled in JS now
 
@@ -109,11 +111,13 @@ const getAvailableTranscribers = async (req, res) => {
 
     console.log('Raw transcribers data from Supabase:', transcribers); // Added debug log
 
-    // Filter out any transcribers without valid transcriber profiles AND ensure they are online
+    // Filter out any transcribers without valid transcriber profiles, not online, or with active jobs
     let availableTranscribers = (transcribers || []).filter(user =>
       user.transcribers &&
       user.transcribers.status === 'active_transcriber' &&
-      user.is_online === true // Defensive re-check in JS
+      user.is_online === true && // Ensure they are actually logged in/online
+      user.is_available === true && // Ensure they are manually set to available
+      user.current_job_id === null // Ensure they don't have an active job
     );
 
     // Restructure data to match frontend expectations
@@ -141,7 +145,7 @@ const getAvailableTranscribers = async (req, res) => {
 
     // If no real transcribers, create sample ones in database for testing (DEV ONLY)
     if (availableTranscribers.length === 0 && process.env.NODE_ENV === 'development') {
-      console.log('No transcribers found, creating sample data...');
+      console.log('No transcribers found, creating sample data... (NOTE: This will create online/available users for testing)');
 
       const sampleUsers = [
         {
@@ -149,8 +153,9 @@ const getAvailableTranscribers = async (req, res) => {
           email: 'sarah@example.com',
           password_hash: '$2b$10$sample.hash.for.demo', // Dummy hash
           user_type: 'transcriber',
-          is_online: true,
-          is_available: true
+          is_online: true, // Sample users should be online
+          is_available: true, // Sample users should be available
+          current_job_id: null
         },
         {
           full_name: 'John Kipchoge',
@@ -158,7 +163,8 @@ const getAvailableTranscribers = async (req, res) => {
           password_hash: '$2b$10$sample.hash.for.demo', // Dummy hash
           user_type: 'transcriber',
           is_online: true,
-          is_available: true
+          is_available: true,
+          current_job_id: null
         },
         {
           full_name: 'Grace Akinyi',
@@ -166,7 +172,8 @@ const getAvailableTranscribers = async (req, res) => {
           password_hash: '$2b$10$sample.hash.for.demo', // Dummy hash
           user_type: 'transcriber',
           is_online: true,
-          is_available: true
+          is_available: true,
+          current_job_id: null
         }
       ];
 
@@ -241,7 +248,7 @@ const getAvailableTranscribers = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
-// backend/controllers/negotiationController.js - Part 2 - FINAL UPDATES (Continue from Part 1)
+// backend/controllers/negotiationController.js - Part 2 - UPDATED for simplified online/availability logic (Continue from Part 1)
 
 // Create negotiation request (for clients)
 const createNegotiation = async (req, res, next, io) => {
@@ -271,6 +278,7 @@ const createNegotiation = async (req, res, next, io) => {
         email,
         is_online,
         is_available,
+        current_job_id,
         transcribers (
           id,
           status,
@@ -279,8 +287,9 @@ const createNegotiation = async (req, res, next, io) => {
       `)
       .eq('id', transcriber_id)
       .eq('user_type', 'transcriber')
-      .eq('is_online', true)
-      .eq('is_available', true)
+      .eq('is_online', true) // Ensure they are logged in
+      .eq('is_available', true) // Ensure they are manually set to available
+      .is('current_job_id', null) // Ensure they don't have an active job
       .eq('transcribers.status', 'active_transcriber')
       .single();
 
@@ -289,10 +298,15 @@ const createNegotiation = async (req, res, next, io) => {
       return res.status(404).json({ error: 'Transcriber not found or not available' });
     }
 
-    if (!transcriberUser.is_available) {
+    if (!transcriberUser.is_available) { // This check is now redundant with the Supabase query, but good for explicit error message
       if (negotiationFile) fs.unlinkSync(negotiationFile.path);
-      return res.status(400).json({ error: 'Transcriber is currently busy with another job' });
+      return res.status(400).json({ error: 'Transcriber is currently busy with another job or manually set to busy' });
     }
+    if (transcriberUser.current_job_id) { // Also redundant, but good for explicit error message
+        if (negotiationFile) fs.unlinkSync(negotiationFile.path);
+        return res.status(400).json({ error: 'Transcriber is currently busy with an active job' });
+    }
+
 
     const { data: existingNegotiation } = await supabase
       .from('negotiations')

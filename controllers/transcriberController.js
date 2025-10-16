@@ -1,4 +1,4 @@
-// backend/controllers/transcriberController.js - Part 1 - UPDATED with users table sync
+// backend/controllers/transcriberController.js - Part 1 - UPDATED for simplified online/availability logic
 
 const supabase = require('../database');
 const path = require('path');
@@ -13,21 +13,49 @@ const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) 
         updated_at: new Date().toISOString()
     };
 
-    // Update users table (primary source)
+    // Update users table (primary source for availability)
     const { error: userError } = await supabase
         .from('users')
         .update(updateData)
         .eq('id', userId);
 
-    // Update transcribers table (backup for compatibility)
+    // Update transcribers table (for profile-specific data, but not primary for is_online/is_available)
     const { error: transcriberError } = await supabase
         .from('transcribers')
         .update(updateData)
         .eq('id', userId);
 
     if (userError) throw userError;
-    if (transcriberError) console.warn('Transcribers table sync warning:', transcriberError);
+    if (transcriberError) console.warn('Transcribers table availability sync warning:', transcriberError);
 };
+
+// NEW: Function to set a transcriber's online status in the users table
+const setOnlineStatus = async (userId, isOnline) => {
+    try {
+        const { error } = await supabase
+            .from('users')
+            .update({ is_online: isOnline, updated_at: new Date().toISOString() })
+            .eq('id', userId)
+            .eq('user_type', 'transcriber'); // Ensure only transcribers can be set online/offline this way
+
+        if (error) {
+            console.error(`Error setting online status for user ${userId} to ${isOnline}:`, error);
+            throw error;
+        }
+        console.log(`User ${userId} is_online status set to ${isOnline}.`);
+
+        // If going offline, also set is_available to false and clear current_job_id
+        if (!isOnline) {
+            await syncAvailabilityStatus(userId, false, null);
+            console.log(`User ${userId} set to unavailable and current job cleared due to going offline.`);
+        }
+
+    } catch (error) {
+        console.error('setOnlineStatus error:', error);
+        throw error;
+    }
+};
+
 
 // Submit transcriber test
 const submitTest = async (req, res) => {
@@ -211,9 +239,10 @@ const acceptNegotiation = async (req, res, next, io) => {
 
     try {
         // UPDATED: Check transcriber availability from the users table (primary source)
+        // Removed is_online check here as it's implicit from being logged in
         const { data: userProfile, error: fetchUserError } = await supabase
             .from('users')
-            .select('is_available, is_online')
+            .select('is_available, current_job_id')
             .eq('id', transcriberId)
             .eq('user_type', 'transcriber')
             .single();
@@ -222,9 +251,11 @@ const acceptNegotiation = async (req, res, next, io) => {
             return res.status(404).json({ error: 'User profile not found.' });
         }
 
-        if (!userProfile.is_available || !userProfile.is_online) {
-             return res.status(409).json({ error: 'You are currently offline or busy. Please update your status before accepting a job.' });
+        // Check if transcriber is manually set to busy or has an active job
+        if (!userProfile.is_available || userProfile.current_job_id) {
+             return res.status(409).json({ error: 'You are currently busy or have an ongoing job. Please update your status before accepting a new job.' });
         }
+
 
         // Fetch the negotiation details before updating to get client_id
         const { data: negotiationToAccept, error: fetchNegError } = await supabase
@@ -239,7 +270,7 @@ const acceptNegotiation = async (req, res, next, io) => {
         }
 
         if (negotiationToAccept.status !== 'pending') {
-            return res.status(409).json({ error: 'Negotiation is no longer pending (it may have been accepted or deleted by the client).' });
+            return res.status(409).json({ error: 'Negotiation is no longer pending (it may have been accepted or deleted by the client). You can only accept pending negotiations.' });
         }
 
         // Step 2: Update the negotiation status to 'accepted'
@@ -254,24 +285,25 @@ const acceptNegotiation = async (req, res, next, io) => {
         if (negError) throw negError;
 
         if (count === 0) {
-            return res.status(409).json({ error: 'Negotiation was not found, or its status is no longer pending (it may have been accepted or deleted by the client).' });
+            return res.status(409).json({ error: 'Negotiation was not found, or its status is no longer pending (it may have been accepted or deleted by the client). This could be a race condition.' });
         }
 
-        // Step 3: UPDATED - Sync availability status in BOTH tables
-        await syncAvailabilityStatus(transcriberId, false, negotiationId);
+        // Step 3: UPDATED - Sync availability status in BOTH tables - set to busy with current job
+        await syncAvailabilityStatus(transcriberId, false, negotiationId); // Set is_available to false (busy)
 
         // Send notification to client that the negotiation was accepted.
         if (io) {
             io.to(negotiationToAccept.client_id).emit('negotiation_accepted', {
                 negotiationId: negotiationId,
                 transcriberId: transcriberId,
-                message: `Your negotiation request (ID: ${negotiationId}) was accepted by a transcriber.`
+                message: `Your negotiation request (ID: ${negotiationId}) was accepted by a transcriber.`,
+                newStatus: 'accepted' // Indicate the new status
             });
             console.log(`Emitted 'negotiation_accepted' to client ${negotiationToAccept.client_id}`);
         }
 
         res.status(200).json({
-            message: 'Negotiation accepted successfully. Job started.',
+            message: 'Negotiation accepted successfully. You are now busy with this job.',
             jobId: negotiationId
         });
 
@@ -333,7 +365,8 @@ const rejectNegotiation = async (req, res, next, io) => {
             io.to(negotiationToReject.client_id).emit('negotiation_rejected', {
                 negotiationId: negotiationId,
                 transcriberId: transcriberId,
-                message: `Your negotiation request (ID: ${negotiationId}) was rejected by a transcriber. Reason: ${transcriberResponse}`
+                message: `Your negotiation request (ID: ${negotiationId}) was rejected by a transcriber. Reason: ${transcriberResponse}`,
+                newStatus: 'rejected' // Indicate the new status
             });
             console.log(`Emitted 'negotiation_rejected' to client ${negotiationToReject.client_id}`);
         }
@@ -408,7 +441,8 @@ const counterNegotiation = async (req, res, next, io) => {
                 transcriberId: transcriberId,
                 newPrice: parsedPrice,
                 newDeadline: parsedDeadline,
-                message: `Your negotiation request (ID: ${negotiationId}) received a counter-offer: KES ${parsedPrice}, ${parsedDeadline} hours. ${transcriber_response ? `Transcriber's message: ${transcriber_response}` : ''}`
+                message: `Your negotiation request (ID: ${negotiationId}) received a counter-offer: KES ${parsedPrice}, ${parsedDeadline} hours. ${transcriber_response ? `Transcriber's message: ${transcriber_response}` : ''}`,
+                newStatus: 'transcriber_counter' // Indicate the new status
             });
             console.log(`Emitted 'negotiation_countered' to client ${negotiationToCounter.client_id}`);
         }
@@ -444,7 +478,7 @@ const completeJob = async (req, res, next, io) => {
         }
 
         if (negotiation.status !== 'accepted' && negotiation.status !== 'hired') {
-            return res.status(409).json({ error: 'Job is not in an active state.' });
+            return res.status(409).json({ error: 'Job is not in an active state. Only active jobs can be marked complete.' });
         }
 
         // Update negotiation status to 'completed'
@@ -459,14 +493,15 @@ const completeJob = async (req, res, next, io) => {
         if (updateError) throw updateError;
 
         // UPDATED: Sync availability status - make transcriber available again
-        await syncAvailabilityStatus(transcriberId, true, null);
+        await syncAvailabilityStatus(transcriberId, true, null); // Set is_available to true, clear current_job_id
 
         // Send notification to client that the job was completed
         if (io) {
             io.to(negotiation.client_id).emit('job_completed', {
                 negotiationId: negotiationId,
                 transcriberId: transcriberId,
-                message: `Your transcription job (ID: ${negotiationId}) has been completed!`
+                message: `Your transcription job (ID: ${negotiationId}) has been completed!`,
+                newStatus: 'completed' // Indicate the new status
             });
             console.log(`Emitted 'job_completed' to client ${negotiation.client_id}`);
         }
@@ -490,5 +525,6 @@ module.exports = {
   rejectNegotiation,
   counterNegotiation,
   completeJob, // NEW: Added completeJob function
-  syncAvailabilityStatus // NEW: Export utility function for other controllers to use
+  syncAvailabilityStatus, // NEW: Export utility function for other controllers to use
+  setOnlineStatus // NEW: Export the setOnlineStatus function
 };

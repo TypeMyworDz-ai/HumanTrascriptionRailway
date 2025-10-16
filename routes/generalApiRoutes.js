@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('..//database');
-const authMiddleware = require('..//middleware/authMiddleware'); 
+const supabase = require('../database');
+const authMiddleware = require('../middleware/authMiddleware');
 const fs = require('fs');
 
 // IMPORTANT: Import functions from negotiationController.js
@@ -11,8 +11,8 @@ const {
   createNegotiation,
   getClientNegotiations,
   deleteNegotiation,
-  syncAvailabilityStatus 
-} = require('..//controllers/negotiationController'); 
+  syncAvailabilityStatus,
+} = require('../controllers/negotiationController');
 
 // Import admin controller functions - NEW: Import settings, jobs, and disputes functions
 const {
@@ -27,11 +27,11 @@ const {
     getAnyUserById,
     approveTranscriberTest,
     rejectTranscriberTest,
-    getAdminSettings,    
-    updateAdminSettings, 
-    getAllJobsForAdmin,  
-    getAllDisputesForAdmin, // NEW: Import the disputes getter
-} = require('..//controllers/adminController'); 
+    getAdminSettings,
+    updateAdminSettings,
+    getAllJobsForAdmin,
+    getAllDisputesForAdmin,
+} = require('../controllers/adminController');
 
 // Import chat controller functions (including the new ones)
 const {
@@ -39,31 +39,32 @@ const {
     sendAdminDirectMessage,
     getUserDirectMessages,
     sendUserDirectMessage,
-    getUnreadMessageCount, 
+    getUnreadMessageCount,
     getAdminChatList,
     getNegotiationMessages,
-    sendNegotiationMessage 
-} = require('..//controllers/chatController'); 
+    sendNegotiationMessage
+} = require('../controllers/chatController');
 
+// NEW: Import payment controller functions
+const {
+    initializePayment,
+    verifyPayment,
+    getTranscriberPaymentHistory,
+    getClientPaymentHistory // NEW: Import client payment history function
+} = require('../controllers/paymentController');
 
 module.exports = (io) => {
-    // Socket.IO Connection Handling
-    io.on('connection', (socket) => {
-        console.log('A user connected via WebSocket:', socket.id);
-
-        socket.on('joinUserRoom', (userId) => {
-            if (userId) {
-                socket.join(userId);
-                console.log(`Socket ${socket.id} joined room for user ${userId}`);
-            } else {
-                console.warn(`Attempted to join user room without a userId from socket ${socket.id}`);
-            }
-        });
-        
-        socket.on('disconnect', () => {
-            console.log('User disconnected from WebSocket:', socket.id);
-        });
-    });
+    // Socket.IO Connection Handling (This listener is primarily for room joining now)
+    io.on('connection', (socket) => {
+        socket.on('joinUserRoom', (userId) => {
+            if (userId) {
+                socket.join(userId);
+                console.log(`Socket ${socket.id} joined room for user ${userId}`);
+            } else {
+                console.warn(`Attempted to join user room without a userId from socket ${socket.id}`);
+            }
+        });
+    });
 
 
   // --- CLIENT-SIDE NEGOTIATIONS ---
@@ -107,42 +108,7 @@ module.exports = (io) => {
     createNegotiation(req, res, next, io);
   });
 
-  // Update user's online status
-  router.put('/users/:userId/online-status', authMiddleware, async (req, res) => {
-    if (req.user.userType !== 'transcriber' && req.user.userType !== 'admin') {
-      return res.status(403).json({ error: 'Access denied. Only transcribers or admins can update online status.' });
-    }
-    const { userId } = req.params;
-    const { is_online } = req.body;
-    const currentUserId = req.user.userId;
-
-    if (userId !== currentUserId && req.user.userType !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized to update this user\'s status.' });
-    }
-
-    try {
-      const { data, error } = await supabase
-        .from('users')
-        .update({ is_online, updated_at: new Date().toISOString() })
-        .eq('id', userId)
-        .select('id, is_online, is_available')
-        .single();
-
-      if (error) {
-        console.error("Supabase error updating online status:", error);
-        return res.status(500).json({ error: error.message });
-      }
-      if (!data) {
-        return res.status(404).json({ error: 'User not found.' });
-      }
-      res.json({ message: 'Online status updated successfully', user: data });
-    } catch (err) {
-        console.error("Server error updating online status:", err);
-        res.status(500).json({ error: 'Server error updating online status' });
-    }
-  });
-
-  // Update user's availability status
+  // Update user's availability status (still needed for manual toggle)
   router.put('/users/:userId/availability-status', authMiddleware, async (req, res) => {
     if (req.user.userType !== 'transcriber' && req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only transcribers or admins can update availability status.' });
@@ -156,20 +122,23 @@ module.exports = (io) => {
     }
 
     try {
-      const { data, error } = await supabase
-        .from('users')
-        .update({ is_available, updated_at: new Date().toISOString() })
-        .eq('id', userId)
-        .select('id, is_online, is_available')
-        .single();
+        // FIXED: Use syncAvailabilityStatus from negotiationController
+        await syncAvailabilityStatus(userId, is_available, null); // current_job_id is null for simple availability toggle
 
-      if (error) {
-        console.error("Supabase error updating availability status:", error);
-        return res.status(500).json({ error: error.message });
-      }
-      if (!data) {
-        return res.status(404).json({ error: 'User not found.' });
-      }
+        // Fetch updated status to return
+        const { data, error } = await supabase
+            .from('users')
+            .select('id, is_online, is_available, current_job_id')
+            .eq('id', userId)
+            .single();
+
+        if (error) {
+            console.error("Supabase error updating availability status:", error);
+            return res.status(500).json({ error: error.message });
+        }
+        if (!data) {
+            return res.status(404).json({ error: 'User not found.' });
+        }
       res.json({ message: 'Availability status updated successfully', user: data });
     } catch (err) {
       console.error("Server error updating availability status:", err);
@@ -275,7 +244,7 @@ module.exports = (io) => {
   });
 
   router.post('/user/chat/send-message', authMiddleware, (req, res, next) => {
-      if (req.user.userType === 'admin') { 
+      if (req.user.userType === 'admin') {
           return res.status(403).json({ error: 'Admins should use their dedicated message sending route.' });
       }
       sendUserDirectMessage(req, res, io);
@@ -322,6 +291,37 @@ module.exports = (io) => {
       }
       getAllDisputesForAdmin(req, res, next);
   });
+
+  // --- NEW: Paystack Payment Routes ---
+  router.post('/payment/initialize', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+      return res.status(403).json({ error: 'Access denied. Only clients can initiate payments.' });
+    }
+    initializePayment(req, res, io); // Pass io for real-time updates
+  });
+
+  router.get('/payment/verify/:reference', authMiddleware, (req, res, next) => {
+    // Both client (after redirect) and potentially admin might need to verify
+    // For simplicity, allow any authenticated user to hit this for now,
+    // but the verification logic in controller ensures negotiation ownership/relevance.
+    verifyPayment(req, res, io); // Pass io for real-time updates
+  });
+
+  // --- NEW: Transcriber Payment History Route ---
+  router.get('/transcriber/payments', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can view their payment history.' });
+    }
+    getTranscriberPaymentHistory(req, res, next);
+  });
+
+  // NEW: Client Payment History Route
+  router.get('/client/payments', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+      return res.status(403).json({ error: 'Access denied. Only clients can view their payment history.' });
+    }
+    getClientPaymentHistory(req, res, next);
+  });
 
   return router;
 };

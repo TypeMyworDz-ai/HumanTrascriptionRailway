@@ -203,14 +203,15 @@ const loginUser = async (req, res) => {
     console.error('loginUser: Error updating users.is_online status:', updateUserOnlineStatusError);
    }
 
-   // Still update transcribers table for consistency (though users table is primary)
-   const { error: updateTranscriberOnlineStatusError } = await supabase
-     .from('transcribers')
-     .update({ is_online: true, updated_at: new Date().toISOString() })
-     .eq('id', user.id);
-   if (updateTranscriberOnlineStatusError) {
-    console.error('loginUser: Error updating transcribers.is_online status:', updateTranscriberOnlineStatusError);
-   }
+   // REMOVED: No longer updating transcribers.is_online, as users.is_online is the source of truth
+   // The transcriber's is_online status is now purely determined by their login session.
+   // const { error: updateTranscriberOnlineStatusError } = await supabase
+   //   .from('transcribers')
+   //   .update({ is_online: true, updated_at: new Date().toISOString() })
+   //   .eq('id', user.id);
+   // if (updateTranscriberOnlineStatusError) {
+   //  console.error('loginUser: Error updating transcribers.is_online status:', updateTranscriberOnlineStatusError);
+   // }
    profileData.is_online = true; // Ensure the returned profileData reflects the change
 
   } else if (user.user_type === 'admin') {
@@ -227,7 +228,7 @@ const loginUser = async (req, res) => {
       userType: user.user_type,
       userStatus: profileData.status,
       userLevel: profileData.user_level,
-      isOnline: profileData.is_online, // Include is_online in token payload
+      isOnline: true, // Always true on successful transcriber login
       isAvailable: profileData.is_available // Include is_available in token payload
     },
    process.env.JWT_SECRET || 'your-secret-key',
@@ -258,9 +259,10 @@ const getUserById = async (req, res) => {
   const { userId } = req.params;
 
   console.log('getUserById: Attempting to find user with ID:', userId);
+  // Include is_online and is_available from the users table for consistency
   const { data: user, error: userFetchError } = await supabase
     .from('users')
-    .select('id, full_name, email, user_type, last_login, created_at')
+    .select('id, full_name, email, user_type, last_login, created_at, is_online, is_available')
     .eq('id', userId)
     .single();
 
@@ -308,7 +310,8 @@ const getUserById = async (req, res) => {
     console.error('getUserById: Transcriber profile NOT FOUND for user ID:', user.id);
     return res.status(500).json({ error: 'Transcriber profile not found for user.' });
    }
-   profileData = { ...transcriberProfile };
+   // Add is_online and is_available from the users table to the profileData if they exist
+   profileData = { ...transcriberProfile, is_online: user.is_online, is_available: user.is_available };
    console.log('getUserById: Transcriber profile found:', profileData);
   } else if (user.user_type === 'admin') {
    console.log('getUserById: Admin user detected. No separate profile table assumed.');
