@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config();
+require('dotenv').config(); // Load environment variables from .env file
 const http = require('http');
 const { Server } = require('socket.io');
 const supabase = require('./database');
@@ -8,17 +8,28 @@ const supabase = require('./database');
 // Import routes
 const authRoutes = require('./routes/authRoutes');
 const audioRoutes = require('./routes/audioRoutes');
-const transcriberRoutes = require('./routes/transcriberRoutes'); // Use the consolidated transcriber routes
-const generalApiRoutes = require('./routes/generalApiRoutes'); // Use the new general API routes
+const transcriberRoutes = require('./routes/transcriberRoutes');
+const generalApiRoutes = require('./routes/generalApiRoutes');
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+// Use Railway's PORT environment variable or fallback to 5000 for local development
+const PORT = process.env.PORT || 5000; 
+
+// Define allowed origins for CORS dynamically
+// For local development, it will be 'http://localhost:3000'
+// For Railway/Vercel, these will be set as environment variables
+const ALLOWED_ORIGINS = [
+  'http://localhost:3000', // Frontend local development
+  process.env.CLIENT_URL,   // Vercel Frontend URL (e.g., https://your-frontend.vercel.app)
+  process.env.RAILWAY_BACKEND_URL // Railway Backend URL (e.g., https://your-backend.up.railway.app)
+].filter(Boolean); // Filter out any undefined/null values
 
 const server = http.createServer(app);
 
+// Configure Socket.IO server with dynamic CORS
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: ALLOWED_ORIGINS, // Use the dynamic origins
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Authorization", "Content-Type", "X-Requested-With", "X-HTTP-Method-Override"],
     credentials: true
@@ -26,8 +37,9 @@ const io = new Server(server, {
   allowEIO3: true
 });
 
+// Configure Express app with dynamic CORS
 app.use(cors({
-  origin: 'http://localhost:3000',
+  origin: ALLOWED_ORIGINS, // Use the dynamic origins
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type', 'X-Requested-With', 'X-HTTP-Method-Override'],
   credentials: true
@@ -37,16 +49,12 @@ app.use(express.urlencoded({ extended: true }));
 
 // Pass the io instance to your router setup functions
 const transcriberRouter = transcriberRoutes(io);
-const generalApiRouter = generalApiRoutes(io); // io instance passed here
+const generalApiRouter = generalApiRoutes(io);
 
 // --- ROUTES ---
-// Mount transcriber-specific routes under /api/transcriber
 app.use('/api/transcriber', transcriberRouter);
-
 app.use('/api/auth', authRoutes);
 app.use('/api/audio', audioRoutes);
-
-// Mount general API routes (including client-specific negotiations and transcriber pool) under /api
 app.use('/api', generalApiRouter);
 
 // Test database connection
@@ -65,12 +73,10 @@ app.get('/', (req, res) => {
   res.json({ message: 'Human Transcription API is running!' });
 });
 
-// Removed the io.on('connection', ...) block from here.
-// This logic is now handled within generalApiRoutes.js which receives the 'io' instance.
-
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   console.log('Socket.IO is listening for connections.');
+  console.log('Allowed CORS Origins:', ALLOWED_ORIGINS); // Log for debugging
 });
 
 module.exports = { io, server, app };
