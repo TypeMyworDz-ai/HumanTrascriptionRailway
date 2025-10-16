@@ -1,10 +1,11 @@
-// backend/controllers/negotiationController.js - Part 1 - UPDATED for simplified online/availability logic
+// backend/controllers/negotiationController.js - Part 1 - UPDATED for simplified online/availability logic and Client Rating Trigger
 
 const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const emailService = require('../emailService'); // Ensure this path is correct
+const { updateAverageRating } = require('./ratingController'); // NEW: Import updateAverageRating
 
 // Utility function to sync availability status between tables
 const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) => {
@@ -248,7 +249,7 @@ const getAvailableTranscribers = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
-// backend/controllers/negotiationController.js - Part 2 - UPDATED for simplified online/availability logic (Continue from Part 1)
+// backend/controllers/negotiationController.js - Part 2 - UPDATED for simplified online/availability logic and Client Rating Trigger (Continue from Part 1)
 
 // Create negotiation request (for clients)
 const createNegotiation = async (req, res, next, io) => {

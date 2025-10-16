@@ -1,9 +1,17 @@
-// backend/emailService.js
+// backend/emailService.js - UPDATED with connectionTimeout for Nodemailer
 
 const nodemailer = require('nodemailer');
 
 // Configure transporter based on environment variables
 const createTransporter = () => {
+    // Common Nodemailer options for all transporters
+    const commonOptions = {
+        // Add a longer connection timeout (e.g., 15 seconds)
+        // This can help with 'ETIMEDOUT' errors on some hosting providers.
+        connectionTimeout: 15000, // milliseconds
+        // You might also consider socketTimeout: 10000 // milliseconds for data transfer timeout
+    };
+
     // Check if production SMTP credentials are provided
     if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
         console.log('Using Production SMTP for email service.');
@@ -14,7 +22,8 @@ const createTransporter = () => {
             auth: {
                 user: process.env.SMTP_USER,
                 pass: process.env.SMTP_PASS
-            }
+            },
+            ...commonOptions // Apply common options
         });
     } else {
         console.warn('Production SMTP credentials not found. Falling back to Mailtrap Sandbox.');
@@ -26,7 +35,8 @@ const createTransporter = () => {
             auth: {
                 user: '2bb9f1220f44a7', // *** REPLACE with your Mailtrap Username ***
                 pass: '5f05229824205f'  // *** REPLACE with your Mailtrap Password ***
-            }
+            },
+            ...commonOptions // Apply common options
         });
     }
 };

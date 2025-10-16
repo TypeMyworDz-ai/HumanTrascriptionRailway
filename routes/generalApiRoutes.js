@@ -50,8 +50,16 @@ const {
     initializePayment,
     verifyPayment,
     getTranscriberPaymentHistory,
-    getClientPaymentHistory // NEW: Import client payment history function
+    getClientPaymentHistory
 } = require('../controllers/paymentController');
+
+// NEW: Import rating controller functions
+const {
+    rateTranscriber,
+    rateClientByAdmin,
+    getTranscriberRatings,
+    getClientRating
+} = require('../controllers/ratingController'); // NEW: Import rating functions
 
 module.exports = (io) => {
     // Socket.IO Connection Handling (This listener is primarily for room joining now)
@@ -122,10 +130,8 @@ module.exports = (io) => {
     }
 
     try {
-        // FIXED: Use syncAvailabilityStatus from negotiationController
-        await syncAvailabilityStatus(userId, is_available, null); // current_job_id is null for simple availability toggle
+        await syncAvailabilityStatus(userId, is_available, null);
 
-        // Fetch updated status to return
         const { data, error } = await supabase
             .from('users')
             .select('id, is_online, is_available, current_job_id')
@@ -301,9 +307,6 @@ module.exports = (io) => {
   });
 
   router.get('/payment/verify/:reference', authMiddleware, (req, res, next) => {
-    // Both client (after redirect) and potentially admin might need to verify
-    // For simplicity, allow any authenticated user to hit this for now,
-    // but the verification logic in controller ensures negotiation ownership/relevance.
     verifyPayment(req, res, io); // Pass io for real-time updates
   });
 
@@ -321,6 +324,33 @@ module.exports = (io) => {
       return res.status(403).json({ error: 'Access denied. Only clients can view their payment history.' });
     }
     getClientPaymentHistory(req, res, next);
+  });
+
+  // --- NEW: Rating Routes ---
+  router.post('/ratings/transcriber', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+      return res.status(403).json({ error: 'Access denied. Only clients can rate transcribers.' });
+    }
+    rateTranscriber(req, res, next);
+  });
+
+  router.post('/ratings/client', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'admin') {
+      return res.status(403).json({ error: 'Access denied. Only admins can rate clients.' });
+    }
+    rateClientByAdmin(req, res, next);
+  });
+
+  router.get('/ratings/transcriber/:transcriberId', authMiddleware, (req, res, next) => {
+    // Both client and admin might view transcriber ratings
+    // The controller will handle fetching based on the :transcriberId
+    getTranscriberRatings(req, res, next);
+  });
+
+  router.get('/ratings/client/:clientId', authMiddleware, (req, res, next) => {
+    // Both transcriber and admin might view client ratings
+    // The controller will handle fetching based on the :clientId
+    getClientRating(req, res, next);
   });
 
   return router;

@@ -63,9 +63,10 @@ const registerUser = async (req, res) => {
 
   if (newUser.user_type === 'client') {
    console.log('registerUser: Creating client profile for user ID: ', newUser.id);
+   // Initialize client with a default average_rating of 5.0
    const { error: clientProfileError } = await supabase
      .from('clients')
-     .insert([{ id: newUser.id, phone: phone, client_rating: 5.0 }])
+     .insert([{ id: newUser.id, phone: phone, average_rating: 5.0 }]) // Changed client_rating to average_rating
      .select();
    if (clientProfileError) {
     console.error('registerUser: Supabase error creating client profile: ', clientProfileError);
@@ -154,7 +155,7 @@ const loginUser = async (req, res) => {
    console.log('loginUser: Fetching client profile for user ID: ', user.id);
    const { data: clientProfile, error: clientProfileError } = await supabase
      .from('clients')
-     .select('phone, client_rating')
+     .select('phone, average_rating') // FIXED: Select average_rating
      .eq('id', user.id)
      .single();
    if (clientProfileError) {
@@ -165,7 +166,10 @@ const loginUser = async (req, res) => {
     console.error('loginUser: Client profile NOT FOUND for user ID: ', user.id);
     return res.status(500).json({ error: 'Client profile not found.' });
    }
-   profileData = { ...clientProfile };
+   profileData = { ...clientProfile, client_rating: clientProfile.average_rating }; // Map average_rating to client_rating
+   delete profileData.average_rating; // Clean up redundant field
+   console.log('loginUser: Client profile found:', profileData);
+
 
    console.log('loginUser: Updating last_login for client user ID: ', user.id);
    const { error: updateError } = await supabase
@@ -191,10 +195,10 @@ const loginUser = async (req, res) => {
     console.error('loginUser: Transcriber profile NOT FOUND for user ID: ', user.id);
     return res.status(500).json({ error: 'Transcriber profile not found.' });
    }
-   profileData = { ...transcriberProfile };
+   profileData = { ...transcriberProfile, is_online: user.is_online, is_available: user.is_available };
+   console.log('loginUser: Transcriber profile found:', profileData);
 
    console.log('loginUser: Updating last_login and is_online for transcriber user ID: ', user.id);
-   // FIXED: Update is_online in the users table
    const { error: updateUserOnlineStatusError } = await supabase
      .from('users')
      .update({ last_login: new Date().toISOString(), is_online: true })
@@ -202,17 +206,7 @@ const loginUser = async (req, res) => {
    if (updateUserOnlineStatusError) {
     console.error('loginUser: Error updating users.is_online status:', updateUserOnlineStatusError);
    }
-
-   // REMOVED: No longer updating transcribers.is_online, as users.is_online is the source of truth
-   // The transcriber's is_online status is now purely determined by their login session.
-   // const { error: updateTranscriberOnlineStatusError } = await supabase
-   //   .from('transcribers')
-   //   .update({ is_online: true, updated_at: new Date().toISOString() })
-   //   .eq('id', user.id);
-   // if (updateTranscriberOnlineStatusError) {
-   //  console.error('loginUser: Error updating transcribers.is_online status:', updateTranscriberOnlineStatusError);
-   // }
-   profileData.is_online = true; // Ensure the returned profileData reflects the change
+   profileData.is_online = true;
 
   } else if (user.user_type === 'admin') {
    console.log('loginUser: Admin user type detected. No separate profile table for admin yet.');
@@ -228,8 +222,9 @@ const loginUser = async (req, res) => {
       userType: user.user_type,
       userStatus: profileData.status,
       userLevel: profileData.user_level,
-      isOnline: true, // Always true on successful transcriber login
-      isAvailable: profileData.is_available // Include is_available in token payload
+      isOnline: true,
+      isAvailable: profileData.is_available,
+      clientRating: profileData.client_rating // NEW: Include clientRating in token for clients
     },
    process.env.JWT_SECRET || 'your-secret-key',
     { expiresIn: '7d' }
@@ -259,7 +254,6 @@ const getUserById = async (req, res) => {
   const { userId } = req.params;
 
   console.log('getUserById: Attempting to find user with ID:', userId);
-  // Include is_online and is_available from the users table for consistency
   const { data: user, error: userFetchError } = await supabase
     .from('users')
     .select('id, full_name, email, user_type, last_login, created_at, is_online, is_available')
@@ -282,7 +276,7 @@ const getUserById = async (req, res) => {
    console.log('getUserById: Fetching client profile for user ID:', user.id);
    const { data: clientProfile, error: clientProfileError } = await supabase
      .from('clients')
-     .select('phone, client_rating')
+     .select('phone, average_rating') // FIXED: Select average_rating
      .eq('id', user.id)
      .single();
    if (clientProfileError) {
@@ -293,7 +287,8 @@ const getUserById = async (req, res) => {
     console.error('getUserById: Client profile NOT FOUND for user ID:', user.id);
     return res.status(500).json({ error: 'Client profile not found for user.' });
    }
-   profileData = { ...clientProfile };
+   profileData = { ...clientProfile, client_rating: clientProfile.average_rating }; // Map average_rating to client_rating
+   delete profileData.average_rating; // Clean up redundant field
    console.log('getUserById: Client profile found:', profileData);
   } else if (user.user_type === 'transcriber') {
    console.log('getUserById: Fetching transcriber profile for user ID:', user.id);
@@ -307,10 +302,9 @@ const getUserById = async (req, res) => {
     return res.status(500).json({ error: transcriberProfileError.message });
    }
    if (!transcriberProfile) {
-    console.error('getUserById: Transcriber profile NOT FOUND for user ID:', user.id);
+    console.error('getUserById: Transcriber profile NOT FOUND for user ID: ', user.id);
     return res.status(500).json({ error: 'Transcriber profile not found for user.' });
    }
-   // Add is_online and is_available from the users table to the profileData if they exist
    profileData = { ...transcriberProfile, is_online: user.is_online, is_available: user.is_available };
    console.log('getUserById: Transcriber profile found:', profileData);
   } else if (user.user_type === 'admin') {
