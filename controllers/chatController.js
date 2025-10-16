@@ -1,5 +1,3 @@
-// backend/controllers/chatController.js - COMPLETE AND FULLY CORRECTED FILE
-
 const supabase = require('..//database');
 
 // Function to get direct messages between an admin and a user
@@ -10,10 +8,13 @@ const getAdminDirectMessages = async (req, res, io) => {
 
         console.log(`[getAdminDirectMessages] Admin ID: ${adminId}, Target User ID: ${userId}`);
 
+        // FIX: Ensure UUIDs are correctly quoted in the OR filter string to prevent Supabase error
+        const orFilter = `and(sender_id.eq."${adminId}",receiver_id.eq."${userId}"),and(sender_id.eq."${userId}",receiver_id.eq."${adminId}")`;
+
         const { data: messages, error } = await supabase
             .from('messages')
             .select('id, sender_id, receiver_id, content, timestamp, is_read')
-            .or(`and(sender_id.eq.${adminId},receiver_id.eq.${userId}),and(sender_id.eq.${userId},receiver_id.eq.${adminId})`)
+            .or(orFilter) // Using the corrected filter string
             .is('negotiation_id', null) // Only fetch direct messages
             .order('timestamp', { ascending: true });
 
@@ -98,11 +99,14 @@ const getUserDirectMessages = async (req, res, io) => {
     try {
         const { chatId } = req.params; // This will be the ID of the other user (e.g., Admin's ID)
         const userId = req.user.userId; // The logged-in user's ID
+        
+        // FIX: Ensure UUIDs are correctly quoted in the OR filter string to prevent Supabase error
+        const orFilter = `and(sender_id.eq."${userId}",receiver_id.eq."${chatId}"),and(sender_id.eq."${chatId}",receiver_id.eq."${userId}")`;
 
         const { data: messages, error } = await supabase
             .from('messages')
             .select('id, sender_id, receiver_id, content, timestamp, is_read')
-            .or(`and(sender_id.eq.${userId},receiver_id.eq.${chatId}),and(sender_id.eq.${chatId},receiver_id.eq.${userId})`)
+            .or(orFilter) // Using the corrected filter string
             .is('negotiation_id', null) // Only fetch direct messages
             .order('timestamp', { ascending: true });
 
@@ -338,7 +342,8 @@ const getAdminChatList = async (req, res) => {
 
         if (latestMessagesError) {
             console.error('Error in RPC get_latest_direct_messages:', latestMessagesError);
-            throw latestMessagesError;
+            // This is a common point of failure for 500 errors if the RPC is missing
+            return res.status(500).json({ error: 'Database function get_latest_direct_messages not found or failed.' });
         }
 
         const chatList = await Promise.all(latestMessages.map(async (msg) => {
