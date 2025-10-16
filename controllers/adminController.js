@@ -1,456 +1,453 @@
-// backend/controllers/adminController.js - Part 1 - UPDATED for getUserByIdForAdmin fix
+// backend/controllers/adminController.js - Part 1 - UPDATED for getUserByIdForAdmin (Final Fix)
 
 const supabase = require('..//database');
-const emailService = require('..//emailService'); // Assuming this path is correct
+const emailService = require('..//emailService'); 
+const { v4: uuidv4 } = require('uuid'); 
 
-// --- Admin Statistics ---
+console.log('[authController.js] Module loaded.'); // DEBUG
+console.log('[authController.js] uuidv4 imported:', typeof uuidv4); // DEBUG
 
-const getPendingTranscriberTestsCount = async (req, res) => {
-    try {
-        const { count, error } = await supabase
-            .from('test_submissions')
-            .select('*', { count: 'exact', head: true })
-            .eq('status', 'pending');
+const FRONTEND_URL = process.env.CLIENT_URL || 'http://localhost:3000';
+console.log('[authController.js] FRONTEND_URL:', FRONTEND_URL); // DEBUG
 
-        if (error) throw error;
-        res.json({ count });
-    } catch (error) {
-        console.error('Error fetching pending transcriber tests count:', error);
-        res.status(500).json({ error: error.message });
+// Register new user
+const registerUser = async (req, res) => {
+  console.log('[registerUser] Function called.'); // DEBUG
+  try {
+    const { email, password, full_name, user_type = 'client', phone } = req.body;
+
+    console.log('registerUser: Request body:', req.body);
+    console.log('registerUser: Attempting to register user with email:', email, 'user_type:', user_type);
+
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email)
+      .single();
+
+    if (existingUser) {
+      console.warn('registerUser: User already exists for email:', email);
+      return res.status(400).json({ error: 'User already exists' });
     }
-};
 
-const getActiveJobsCount = async (req, res) => {
-    try {
-        const { count, error } = await supabase
-            .from('negotiations')
-            .select('*', { count: 'exact', head: true })
-            .in('status', ['accepted', 'hired']);
+    const password_hash = await bcrypt.hash(password, 10);
+    console.log('registerUser: Password hashed.');
 
-        if (error) throw error;
-        res.json({ count });
-    } catch (error) {
-        console.error('Error fetching active jobs count:', error);
-        res.status(500).json({ error: error.message });
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .insert([
+        {
+          email,
+          password_hash,
+          full_name,
+          user_type,
+          last_login: null
+        }
+      ])
+      .select('id, email, full_name, user_type, created_at, last_login')
+      .single();
+
+    if (userError) {
+        console.error('registerUser: Supabase error creating core user:', userError);
+        throw userError;
     }
-};
 
-const getOpenDisputesCount = async (req, res) => {
-    try {
-        // Assuming a 'disputes' table and a 'status' column for open/closed
-        const { count, error } = await supabase
-            .from('disputes')
-            .select('*', { count: 'exact', head: true })
-            .eq('status', 'open'); // Or 'pending', depending on your schema
+    const newUser = userData;
+    console.log('registerUser: Core user created: ', newUser.id, newUser.email);
 
-        if (error) throw error;
-        res.json({ count });
-    } catch (error) {
-        console.error('Error fetching open disputes count:', error);
-        res.status(500).json({ error: error.message });
+    // --- SENDING THE WELCOME EMAIL ---
+    if (newUser && newUser.email) {
+        await emailService.sendWelcomeEmail(newUser);
     }
-};
+    // --- END OF EMAIL INTEGRATION ---
 
-const getTotalUsersCount = async (req, res) => {
-    try {
-        const { count, error } = await supabase
-            .from('users')
-            .select('*', { count: 'exact', head: true });
-
-        if (error) throw error;
-        res.json({ count });
-    } catch (error) {
-        console.error('Error fetching total users count:', error);
-        res.status(500).json({ error: error.message });
-    }
-};
-
-// --- Admin Transcriber Test Management ---
-
-const getAllTranscriberTestSubmissions = async (req, res) => {
-    try {
-        const { data: submissions, error } = await supabase
-            .from('test_submissions')
-            .select(`
-                id,
-                user_id,
-                grammar_score,
-                transcription_text,
-                status,
-                created_at,
-                rejection_reason,
-                users (
-                    full_name,
-                    email
-                )
-            `)
-            .order('created_at', { ascending: false });
-
-        if (error) throw error;
-        res.json({ submissions });
-    } catch (error) {
-        console.error('Error fetching all transcriber test submissions:', error);
-        res.status(500).json({ error: error.message });
-    }
-};
-
-const getTranscriberTestSubmissionById = async (req, res) => {
-    try {
-        const { submissionId } = req.params;
-        const { data: submission, error } = await supabase
-            .from('test_submissions')
-            .select(`
-                id,
-                user_id,
-                grammar_score,
-                transcription_text,
-                status,
-                created_at,
-                rejection_reason,
-                users (
-                    full_name,
-                    email
-                )
-            `)
-            .eq('id', submissionId)
-            .single();
-
-        if (error) throw error;
-        res.json({ submission });
-    } catch (error) {
-        console.error('Error fetching transcriber test submission by ID:', error);
-        res.status(500).json({ error: error.message });
-    }
-};
-
-const approveTranscriberTest = async (req, res) => {
-    try {
-        const { submissionId } = req.params;
-        const { transcriberId } = req.body;
-
-        const { error: submissionUpdateError } = await supabase
-            .from('test_submissions')
-            .update({ status: 'approved', admin_notes: 'Approved by admin', updated_at: new Date().toISOString() })
-            .eq('id', submissionId);
-
-        if (submissionUpdateError) throw submissionUpdateError;
-
-        // Update the transcriber's profile status to 'active_transcriber'
+    if (newUser.user_type === 'client') {
+        console.log('registerUser: Creating client profile for user ID: ', newUser.id);
+        const { error: clientProfileError } = await supabase
+            .from('clients')
+            .insert([{ id: newUser.id, phone: phone, client_rating: 5.0 }])
+            .select();
+        if (clientProfileError) {
+            console.error('registerUser: Supabase error creating client profile: ', clientProfileError);
+            throw clientProfileError;
+        }
+        console.log('registerUser: Client profile created for user ID: ', newUser.id);
+    } else if (newUser.user_type === 'transcriber') {
+        console.log('registerUser: Creating transcriber profile for user ID: ', newUser.id);
         const { error: transcriberProfileError } = await supabase
             .from('transcribers')
-            .update({ status: 'active_transcriber', updated_at: new Date().toISOString() })
-            .eq('id', transcriberId);
-
-        if (transcriberProfileError) throw transcriberProfileError;
-
-        // NEW: Update the user's main profile status as well
-        const { error: userStatusError } = await supabase
-            .from('users')
-            .update({ status: 'active_transcriber', updated_at: new Date().toISOString() })
-            .eq('id', transcriberId);
-
-        if (userStatusError) console.error('Error updating user status after test approval:', userStatusError);
-
-        // Fetch user details for email
-        const { data: userDetails, error: userDetailsError } = await supabase
-            .from('users')
-            .select('full_name, email')
-            .eq('id', transcriberId)
-            .single();
-
-        if (userDetailsError) console.error('Error fetching user details for approval email:', userDetailsError);
-
-        if (userDetails) {
-            await emailService.sendTranscriberTestApprovedEmail(userDetails);
+            .insert([{ id: newUser.id, phone: phone, status: 'pending_assessment', user_level: 'transcriber', is_online: false, is_available: true, average_rating: 0.0, completed_jobs: 0, badges: null, current_job_id: null }])
+            .select();
+        if (transcriberProfileError) {
+            console.error('registerUser: Supabase error creating transcriber profile: ', transcriberProfileError);
+            throw transcriberProfileError;
         }
-
-        res.json({ message: 'Transcriber test approved successfully.' });
-    } catch (error) {
-        console.error('Error approving transcriber test:', error);
-        res.status(500).json({ error: error.message });
+        console.log('registerUser: Transcriber profile created for user ID: ', newUser.id);
+    } else if (newUser.user_type === 'admin') {
+        console.log('registerUser: Admin user type detected. No separate profile table created.');
     }
+
+
+    res.status(201).json({
+      message: 'User registered successfully',
+      user: {
+        id: newUser.id,
+        email: newUser.email,
+        full_name: newUser.full_name,
+        user_type: newUser.user_type,
+      }
+    });
+
+  } catch (error) {
+    console.error('registerUser: Unexpected error during registration process:', error);
+    res.status(500).json({ error: error.message });
+  } finally {
+      console.groupEnd();
+  }
 };
 
-const rejectTranscriberTest = async (req, res) => {
-    try {
-        const { submissionId } = req.params;
-        const { transcriberId, reason } = req.body;
+// Login user
+const loginUser = async (req, res) => {
+  console.groupCollapsed('Backend: loginUser triggered (START)');
+  console.log('Timestamp:', new Date().toLocaleTimeString());
+  console.log('Request body:', req.body);
 
-        const { error: submissionUpdateError } = await supabase
-            .from('test_submissions')
-            .update({ status: 'rejected', rejection_reason: reason, admin_notes: 'Rejected by admin', updated_at: new Date().toISOString() })
-            .eq('id', submissionId);
+  try {
+    const { email, password } = req.body;
 
-        if (submissionUpdateError) throw submissionUpdateError;
+    console.log('loginUser: Attempting to find user with email: ', email);
+    const { data: user, error: userFetchError } = await supabase
+      .from('users')
+      .select('id, email, full_name, user_type, password_hash, is_active, status, user_level') // Select status and user_level
+      .eq('email', email)
+      .single();
 
-        // Update the transcriber's profile status to 'rejected'
-        const { error: transcriberProfileError } = await supabase
+    if (userFetchError) {
+      console.error('loginUser: Supabase error fetching user:', userFetchError);
+      return res.status(500).json({ error: userFetchError.message });
+    }
+    if (!user) {
+      console.warn('loginUser: User not found for email:', email);
+      return res.status(400).json({ error: 'Invalid email or password' });
+    }
+    console.log('loginUser: User found: ', user.email, 'ID:', user.id, 'is_active:', user.is_active, 'user_type:', user.user_type, 'status:', user.status, 'level:', user.user_level);
+
+    if (!user.is_active) {
+      console.warn('loginUser: User account is deactivated for email:', email);
+      return res.status(400).json({ error: 'Account is deactivated' });
+    }
+
+    console.log('loginUser: Comparing password for user ID: ', user.id);
+    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+
+    if (!isPasswordValid) {
+      console.warn('loginUser: Password comparison FAILED for email:', email);
+      return res.status(400).json({ error: 'Invalid email or password' });
+    }
+    console.log('loginUser: Password comparison SUCCESS for user ID: ', user.id);
+
+
+    let profileData = {};
+    console.log('loginUser: User Type for profile fetching: ', user.user_type);
+
+    if (user.user_type === 'client') {
+        console.log('loginUser: Fetching client profile for user ID: ', user.id);
+        const { data: clientProfile, error: clientProfileError } = await supabase
+            .from('clients')
+            .select('phone, client_rating')
+            .eq('id', user.id)
+            .single();
+        if (clientProfileError) {
+            console.error('loginUser: Error fetching client profile:', clientProfileError);
+            return res.status(500).json({ error: clientProfileError.message });
+        }
+        if (!clientProfile) {
+            console.error('loginUser: Client profile NOT FOUND for user ID:', user.id);
+            return res.status(500).json({ error: 'Client profile not found.' });
+        }
+        profileData = { ...clientProfile };
+
+        console.log('loginUser: Updating last_login for client user ID: ', user.id);
+        const { error: updateError } = await supabase
+            .from('users')
+            .update({ last_login: new Date().toISOString() })
+            .eq('id', user.id);
+        if (updateError) {
+            console.error('loginUser: Error updating last_login for client:', updateError);
+        }
+
+    } else if (user.user_type === 'transcriber') {
+        console.log('loginUser: Fetching transcriber profile for user ID: ', user.id);
+        const { data: transcriberProfile, error: transcriberProfileError } = await supabase
             .from('transcribers')
-            .update({ status: 'rejected', updated_at: new Date().toISOString() })
-            .eq('id', transcriberId);
-
-        if (transcriberProfileError) throw transcriberProfileError;
-
-        // NEW: Update the user's main profile status as well
-        const { error: userStatusError } = await supabase
-            .from('users')
-            .update({ status: 'rejected', updated_at: new Date().toISOString() })
-            .eq('id', transcriberId);
-
-        if (userStatusError) console.error('Error updating user status after test rejection:', userStatusError);
-
-        // Fetch user details for email
-        const { data: userDetails, error: userDetailsError } = await supabase
-            .from('users')
-            .select('full_name, email')
-            .eq('id', transcriberId)
+            .select('phone, status, user_level, is_online, is_available, average_rating, completed_jobs, badges, current_job_id')
+            .eq('id', user.id)
             .single();
-
-        if (userDetailsError) console.error('Error fetching user details for rejection email:', userDetailsError);
-
-        if (userDetails) {
-            await emailService.sendTranscriberTestRejectedEmail(userDetails, reason);
+        if (transcriberProfileError) {
+            console.error('loginUser: Error fetching transcriber profile:', transcriberProfileError);
+            return res.status(500).json({ error: transcriberProfileError.message });
         }
+        if (!transcriberProfile) {
+            console.error('loginUser: Transcriber profile NOT FOUND for user ID:', user.id);
+            return res.status(500).json({ error: 'Transcriber profile not found.' });
+        }
+        profileData = { ...transcriberProfile };
 
-        res.json({ message: 'Transcriber test rejected successfully.' });
-    } catch (error) {
-        console.error('Error rejecting transcriber test:', error);
-        res.status(500).json({ error: error.message });
+        console.log('loginUser: Updating last_login and is_online for transcriber user ID: ', user.id);
+        const { error: updateError } = await supabase
+            .from('users')
+            .update({ last_login: new Date().toISOString() })
+            .eq('id', user.id);
+        if (updateError) {
+            console.error('loginUser: Error updating last_login for transcriber:', updateError);
+        }
+        const { error: updateOnlineStatusError } = await supabase
+            .from('transcribers')
+            .update({ is_online: true, updated_at: new Date().toISOString() })
+            .eq('id', user.id);
+        if (updateOnlineStatusError) {
+            console.error('loginUser: Error updating transcriber is_online status:', updateOnlineStatusError);
+        }
+        profileData.is_online = true;
+
+    } else if (user.user_type === 'admin') {
+        console.log('loginUser: Admin user type detected. No separate profile table for admin yet.');
+    } else {
+        console.error('loginUser: Unknown user type detected:', user.user_type);
+        return res.status(400).json({ error: 'Unknown user type.' });
     }
+
+    const token = jwt.sign(
+      {
+        userId: user.id,
+        email: user.email,
+        userType: user.user_type,
+        userStatus: profileData.status,
+        userLevel: profileData.user_level
+      },
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: '7d' }
+    );
+
+    const { password_hash, ...userWithoutPasswordHash } = user;
+    const fullUserObject = { ...userWithoutPasswordHash, ...profileData };
+    console.log('loginUser: Login successful. Returning user object: ', fullUserObject);
+
+    res.json({
+      message: 'Login successful',
+      token,
+      user: fullUserObject
+    });
+
+  } catch (error) {
+    console.error('loginUser: Unexpected error during login process:', error);
+    res.status(500).json({ error: error.message });
+  } finally {
+      console.groupEnd();
+  }
 };
 
-// --- Admin User Management ---
+// Get user by ID
+const getUserById = async (req, res) => {
+  try {
+    const { userId } = req.params;
 
-const getAllUsersForAdmin = async (req, res) => {
-    try {
-        const { search } = req.query; // Get search term from query parameters
-        let query = supabase.from('users').select('id, full_name, email, user_type, created_at');
+    console.log('getUserById: Attempting to find user with ID:', userId);
+    const { data: user, error: userFetchError } = await supabase
+      .from('users')
+      .select('id, full_name, email, user_type, last_login, created_at')
+      .eq('id', userId)
+      .single();
 
-        if (search) {
-            query = query.or(`full_name.ilike.%${search}%,email.ilike.%${search}%`);
-        }
-
-        const { data: users, error } = await query.order('created_at', { ascending: false });
-
-        if (error) throw error;
-        res.json({ users });
-    } catch (error) {
-        console.error('Error fetching all users for admin:', error);
-        res.status(500).json({ error: error.message });
+    if (userFetchError) {
+        console.error('getUserById: Supabase error fetching core user:', userFetchError);
+        return res.status(500).json({ error: userFetchError.message });
     }
+    if (!user) {
+        console.warn('getUserById: Core user NOT FOUND for ID:', userId);
+        return res.status(404).json({ error: 'User not found' });
+    }
+    console.log('getUserById: Core user found:', user.full_name, 'Type:', user.user_type);
+
+
+    let profileData = {};
+    if (user.user_type === 'client') {
+        console.log('getUserById: Fetching client profile for user ID:', user.id);
+        const { data: clientProfile, error: clientProfileError } = await supabase
+            .from('clients')
+            .select('phone, client_rating')
+            .eq('id', user.id)
+            .single();
+        if (clientProfileError) {
+            console.error('Error fetching client profile by ID:', clientProfileError);
+            return res.status(500).json({ error: clientProfileError.message });
+        }
+        if (!clientProfile) {
+            console.error('getUserById: Client profile NOT FOUND for user ID:', user.id);
+            return res.status(500).json({ error: 'Client profile not found for user.' });
+        }
+        profileData = { ...clientProfile };
+        console.log('getUserById: Client profile found:', profileData);
+    } else if (user.user_type === 'transcriber') {
+        console.log('getUserById: Fetching transcriber profile for user ID:', user.id);
+        const { data: transcriberProfile, error: transcriberProfileError } = await supabase
+            .from('transcribers')
+            .select('phone, status, user_level, is_online, is_available, average_rating, completed_jobs, badges, current_job_id')
+            .eq('id', user.id)
+            .single();
+        if (transcriberProfileError) {
+            console.error('Error fetching transcriber profile by ID:', transcriberProfileError);
+            return res.status(500).json({ error: transcriberProfileError.message });
+        }
+        if (!transcriberProfile) {
+            console.error('getUserById: Transcriber profile NOT FOUND for user ID:', user.id);
+            return res.status(500).json({ error: 'Transcriber profile not found for user.' });
+        }
+        profileData = { ...transcriberProfile };
+        console.log('getUserById: Transcriber profile found:', profileData);
+    } else if (user.user_type === 'admin') {
+        console.log('getUserById: Admin user detected. No separate profile table assumed.');
+    }
+
+
+    const fullUserObject = { ...user, ...profileData };
+    console.log('getUserById: Full user object returned: ', fullUserObject);
+
+    res.json({
+      message: 'User retrieved successfully',
+      user: fullUserObject
+    });
+
+  } catch (error) {
+    console.error('Get user by ID error:', error);
+    res.status(500).json({ error: error.message });
+  } finally {
+      console.groupEnd();
+  }
 };
 
-// FIXED: getUserByIdForAdmin - Safely handles nested one-to-one relationships
-const getUserByIdForAdmin = async (req, res) => {
+// NEW: Password Reset Request function
+const requestPasswordReset = async (req, res) => {
+    console.log('[requestPasswordReset] Function called.');
     try {
-        const { userId } = req.params;
-        console.log(`[getUserByIdForAdmin] Attempting to fetch user ID: ${userId}`);
+        const { email } = req.body;
 
-        const { data: user, error } = await supabase
+        if (!email) {
+            return res.status(400).json({ error: 'Email is required.' });
+        }
+
+        // Find the user by email
+        const { data: user, error: userError } = await supabase
             .from('users')
-            .select(`
-                id,
-                full_name,
-                email,
-                user_type,
-                created_at,
-                is_online,
-                is_available,
-                transcribers (
-                    status,
-                    user_level,
-                    average_rating,
-                    completed_jobs,
-                    badges
-                ),
-                client_profiles (
-                    client_rating
-                )
-            `)
-            .eq('id', userId)
+            .select('id, full_name, email')
+            .eq('email', email)
             .single();
 
-        if (error) {
-            console.error(`[getUserByIdForAdmin] Supabase error fetching user ${userId}:`, error);
-            throw error;
+        if (userError) {
+            console.error('[requestPasswordReset] Supabase error finding user:', userError);
+            return res.status(500).json({ error: userError.message });
         }
         if (!user) {
-            console.warn(`[getUserByIdForAdmin] User ${userId} not found.`);
-            return res.status(404).json({ error: 'User not found.' });
+            console.warn('[requestPasswordReset] User not found for email:', email);
+            // Still return success to prevent email enumeration
+            return res.json({ message: 'If a matching account is found, a password reset link has been sent to your email.' });
         }
 
-        // Flatten the data for easier consumption on the frontend
-        // Supabase returns one-to-one relationships as an array, so safely access the first element
-        const formattedUser = {
-            ...user,
-            transcriber_profile: user.transcribers?.[0] || null, // Safely access first element
-            client_profile: user.client_profiles?.[0] || null,   // Safely access first element
-        };
-        delete formattedUser.transcribers; // Clean up raw nested arrays
-        delete formattedUser.client_profiles; // Clean up raw nested arrays
+        // Generate a unique token
+        const token = uuidv4();
+        const expiresAt = new Date(Date.now() + 3600000); // Token valid for 1 hour
 
-        console.log(`[getUserByIdForAdmin] Successfully fetched and formatted user: ${userId}`);
-        res.json({ user: formattedUser });
-    } catch (error) {
-        console.error('[getUserByIdForAdmin] Error fetching user by ID for admin:', error);
-        res.status(500).json({ error: error.message });
-    }
-};
-
-const getAnyUserById = async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const { data: user, error } = await supabase
-            .from('users')
-            .select('id, full_name, email, user_type')
-            .eq('id', userId)
-            .single();
-
-        if (error) throw error;
-        res.json({ user });
-    } catch (error) {
-        console.error('Error fetching any user by ID:', error);
-        res.status(500).json({ error: error.message });
-    }
-};
-
-// --- Admin Global Settings ---
-
-const getAdminSettings = async (req, res) => {
-    try {
-        const { data: settings, error } = await supabase
-            .from('admin_settings')
-            .select('default_price_per_minute, default_deadline_hours')
-            .single();
-
-        if (error && error.code === 'PGRST116') { // No rows found, return defaults
-            return res.json({
-                settings: {
-                    default_price_per_minute: 0.00,
-                    default_deadline_hours: 24,
+        // Save the token to the database
+        const { error: tokenError } = await supabase
+            .from('password_reset_tokens')
+            .insert([
+                {
+                    user_id: user.id,
+                    token: token,
+                    expires_at: expiresAt.toISOString()
                 }
-            });
-        }
-        if (error) throw error;
+            ]);
 
-        res.json({ settings });
-    } catch (error) {
-        console.error('Error fetching admin settings:', error);
-        res.status(500).json({ error: error.message });
-    }
-};
-
-const updateAdminSettings = async (req, res) => {
-    try {
-        const { default_price_per_minute, default_deadline_hours } = req.body;
-
-        const { data, error } = await supabase
-            .from('admin_settings')
-            .update({
-                default_price_per_minute: default_price_per_minute,
-                default_deadline_hours: default_deadline_hours,
-                updated_at: new Date().toISOString(),
-            })
-            .limit(1) // Ensure only one row is affected
-            .select();
-
-        if (error) throw error;
-
-        if (!data || data.length === 0) {
-            const { data: insertData, error: insertError } = await supabase
-                .from('admin_settings')
-                .insert({
-                    default_price_per_minute: default_price_per_minute,
-                    default_deadline_hours: default_deadline_hours,
-                })
-                .select();
-            if (insertError) throw insertError;
-            return res.json({ message: 'Settings initialized and saved successfully.', settings: insertData[0] });
+        if (tokenError) {
+            console.error('[requestPasswordReset] Supabase error saving reset token:', tokenError);
+            throw tokenError;
         }
 
-        res.json({ message: 'Settings updated successfully.', settings: data[0] });
+        // Send password reset email
+        const resetLink = `${FRONTEND_URL}/reset-password?token=${token}`;
+        await emailService.sendPasswordResetEmail(user, resetLink);
+
+        console.log(`[requestPasswordReset] Password reset link sent to ${email}`);
+        res.json({ message: 'If a matching account is found, a password reset link has been sent to your email.' });
+
     } catch (error) {
-        console.error('Error updating admin settings:', error);
+        console.error('[requestPasswordReset] Error during password reset request:', error);
         res.status(500).json({ error: error.message });
     }
 };
 
-// NEW: Function to get all jobs (negotiations) for admin
-const getAllJobsForAdmin = async (req, res) => {
+// NEW: Password Reset function
+const resetPassword = async (req, res) => {
+    console.log('[resetPassword] Function called.');
     try {
-        const { data: negotiations, error } = await supabase
-            .from('negotiations')
-            .select(`
-                id,
-                status,
-                agreed_price_kes,
-                requirements,
-                deadline_hours,
-                created_at,
-                client:users!client_id (
-                    full_name
-                ),
-                transcriber:users!transcriber_id (
-                    full_name
-                )
-            `)
-            .order('created_at', { ascending: false });
+        const { token, newPassword } = req.body;
 
-        if (error) throw error;
+        if (!token || !newPassword) {
+            return res.status(400).json({ error: 'Token and new password are required.' });
+        }
 
-        // Flatten the client and transcriber names for easier frontend consumption
-        const jobs = negotiations.map(n => ({
-            ...n,
-            client: n.client || { full_name: 'Unknown Client' }, // Ensure client object exists
-            transcriber: n.transcriber || { full_name: 'Unassigned' } // Ensure transcriber object exists
-        }));
+        // Find and validate the token
+        const { data: resetToken, error: tokenError } = await supabase
+            .from('password_reset_tokens')
+            .select('id, user_id, expires_at')
+            .eq('token', token)
+            .single();
 
-        res.json({ jobs });
+        if (tokenError) {
+            console.error('[resetPassword] Supabase error finding reset token:', tokenError);
+            return res.status(500).json({ error: tokenError.message });
+        }
+        if (!resetToken || new Date() > new Date(resetToken.expires_at)) {
+            console.warn('[resetPassword] Invalid or expired token:', token);
+            return res.status(400).json({ error: 'Invalid or expired password reset token.' });
+        }
+
+        // Hash the new password
+        const newPasswordHash = await bcrypt.hash(newPassword, 10);
+
+        // Update user's password
+        const { error: userUpdateError } = await supabase
+            .from('users')
+            .update({ password_hash: newPasswordHash, updated_at: new Date().toISOString() })
+            .eq('id', resetToken.user_id);
+
+        if (userUpdateError) {
+            console.error('[resetPassword] Supabase error updating user password:', userUpdateError);
+            throw userUpdateError;
+        }
+
+        // Invalidate the token (delete it so it can't be reused)
+        const { error: deleteTokenError } = await supabase
+            .from('password_reset_tokens')
+            .delete()
+            .eq('id', resetToken.id);
+
+        if (deleteTokenError) {
+            console.error('[resetPassword] Supabase error deleting used reset token:', deleteTokenError);
+            // Don't throw error, password was updated, but log it.
+        }
+
+        console.log(`[resetPassword] Password successfully reset for user ID: ${resetToken.user_id}`);
+        res.json({ message: 'Password has been reset successfully.' });
+
     } catch (error) {
-        console.error('Error fetching all jobs for admin:', error);
+        console.error('[resetPassword] Error during password reset:', error);
         res.status(500).json({ error: error.message });
     }
 };
 
-// NEW: Function to get all disputes for admin
-const getAllDisputesForAdmin = async (req, res) => {
-    try {
-        const { data: disputes, error } = await supabase
-            .from('disputes')
-            .select(`
-                id,
-                negotiation_id,
-                reason,
-                description,
-                status,
-                opened_at,
-                resolved_at,
-                resolution_notes,
-                client:users!client_id (
-                    full_name
-                ),
-                transcriber:users!transcriber_id (
-                    full_name
-                )
-            `)
-            .order('opened_at', { ascending: false });
-
-        if (error) throw error;
-
-        // Flatten client and transcriber names
-        const formattedDisputes = disputes.map(d => ({
-            ...d,
-            client: d.client || { full_name: 'Unknown Client' },
-            transcriber: d.transcriber || { full_name: 'Unknown Transcriber' }
-        }));
-
-        res.json({ disputes: formattedDisputes });
-    } catch (error) {
-        console.error('Error fetching all disputes for admin:', error);
-        res.status(500).json({ error: error.message });
-    }
-};
-// backend/controllers/adminController.js - Part 2 - UPDATED for getUserByIdForAdmin (Continue from Part 1)
+module.exports = { registerUser, loginUser, getUserById };
+// backend/controllers/adminController.js - Part 2 - UPDATED for getUserByIdForAdmin (Final Fix) (Continue from Part 1)
 
 module.exports = {
     getPendingTranscriberTestsCount,
@@ -462,7 +459,7 @@ module.exports = {
     approveTranscriberTest,
     rejectTranscriberTest,
     getAllUsersForAdmin,
-    getUserByIdForAdmin, // FIXED: Ensure this is exported
+    getUserByIdForAdmin, // FIXED: Ensure this is exported correctly
     getAnyUserById,
     getAdminSettings,    
     updateAdminSettings, 
