@@ -1,4 +1,4 @@
-// backend/controllers/authController.js - Part 1 - UPDATED with Forgot/Reset Password functionality
+// backend/controllers/authController.js - COMPLETE AND FULLY CORRECTED FILE
 
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
