@@ -1,7 +1,7 @@
 // backend/controllers/adminController.js - Part 1 - UPDATED for getUserByIdForAdmin debugging
 
-const supabase = require('..//database');
-const emailService = require('..//emailService'); // Assuming this path is correct
+const supabase = require('../database');
+const emailService = require('../emailService'); // Assuming this path is correct
 
 // --- Admin Statistics ---
 
@@ -118,7 +118,7 @@ const getTranscriberTestSubmissionById = async (req, res) => {
         if (error) throw error;
         res.json({ submission });
     } catch (error) {
-        console.error('Error fetching transcriber test submission by ID:', error);
+        console.error('Error fetching transcriber test submission by ID::', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -262,7 +262,7 @@ const getUserByIdForAdmin = async (req, res) => {
                     completed_jobs,
                     badges
                 ),
-                client_profiles (
+                clients ( // Corrected from client_profiles to clients
                     client_rating
                 )
             `)
@@ -283,10 +283,10 @@ const getUserByIdForAdmin = async (req, res) => {
             ...user,
             // FIXED: Safely access array elements for one-to-one relationships
             transcriber_profile: user.transcribers?.[0] || null,
-            client_profile: user.client_profiles?.[0] || null,
+            client_profile: user.clients?.[0] || null, // Corrected from client_profiles to clients
         };
         delete formattedUser.transcribers; // Clean up raw nested arrays
-        delete formattedUser.client_profiles; // Clean up raw nested arrays
+        delete formattedUser.clients; // Corrected from client_profiles to clients
 
         console.log(`[getUserByIdForAdmin] Successfully fetched and formatted user: ${userId}`);
         res.json({ user: formattedUser });
@@ -464,7 +464,7 @@ module.exports = {
     getUserByIdForAdmin,
     getAnyUserById,
     getAdminSettings,    
-    updateAdminSettings, 
-    getAllJobsForAdmin,  
-    getAllDisputesForAdmin, 
+    updateAdminSettings,
+    getAllJobsForAdmin,
+    getAllDisputesForAdmin,
 };
