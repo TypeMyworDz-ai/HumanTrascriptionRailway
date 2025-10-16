@@ -1,4 +1,4 @@
-// backend/controllers/authController.js - Part 1 - UPDATED with Forgot/Reset Password functionality (Aggressive Debugging)
+// backend/controllers/authController.js - COMPLETE AND FULLY CORRECTED FILE (Final Fix for undefined handlers)
 
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -326,6 +326,126 @@ const getUserById = async (req, res) => {
   } finally {
       console.groupEnd();
   }
+};
+
+// NEW: Password Reset Request function
+const requestPasswordReset = async (req, res) => {
+    console.log('[requestPasswordReset] Function called.');
+    try {
+        const { email } = req.body;
+
+        if (!email) {
+            return res.status(400).json({ error: 'Email is required.' });
+        }
+
+        // Find the user by email
+        const { data: user, error: userError } = await supabase
+            .from('users')
+            .select('id, full_name, email')
+            .eq('email', email)
+            .single();
+
+        if (userError) {
+            console.error('[requestPasswordReset] Supabase error finding user:', userError);
+            return res.status(500).json({ error: userError.message });
+        }
+        if (!user) {
+            console.warn('[requestPasswordReset] User not found for email:', email);
+            // Still return success to prevent email enumeration
+            return res.json({ message: 'If a matching account is found, a password reset link has been sent to your email.' });
+        }
+
+        // Generate a unique token
+        const token = uuidv4();
+        const expiresAt = new Date(Date.now() + 3600000); // Token valid for 1 hour
+
+        // Save the token to the database
+        const { error: tokenError } = await supabase
+            .from('password_reset_tokens')
+            .insert([
+                {
+                    user_id: user.id,
+                    token: token,
+                    expires_at: expiresAt.toISOString()
+                }
+            ]);
+
+        if (tokenError) {
+            console.error('[requestPasswordReset] Supabase error saving reset token:', tokenError);
+            throw tokenError;
+        }
+
+        // Send password reset email
+        const resetLink = `${FRONTEND_URL}/reset-password?token=${token}`;
+        await emailService.sendPasswordResetEmail(user, resetLink);
+
+        console.log(`[requestPasswordReset] Password reset link sent to ${email}`);
+        res.json({ message: 'If a matching account is found, a password reset link has been sent to your email.' });
+
+    } catch (error) {
+        console.error('[requestPasswordReset] Error during password reset request:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// NEW: Password Reset function
+const resetPassword = async (req, res) => {
+    console.log('[resetPassword] Function called.');
+    try {
+        const { token, newPassword } = req.body;
+
+        if (!token || !newPassword) {
+            return res.status(400).json({ error: 'Token and new password are required.' });
+        }
+
+        // Find and validate the token
+        const { data: resetToken, error: tokenError } = await supabase
+            .from('password_reset_tokens')
+            .select('id, user_id, expires_at')
+            .eq('token', token)
+            .single();
+
+        if (tokenError) {
+            console.error('[resetPassword] Supabase error finding reset token:', tokenError);
+            return res.status(500).json({ error: tokenError.message });
+        }
+        if (!resetToken || new Date() > new Date(resetToken.expires_at)) {
+            console.warn('[resetPassword] Invalid or expired token:', token);
+            return res.status(400).json({ error: 'Invalid or expired password reset token.' });
+        }
+
+        // Hash the new password
+        const newPasswordHash = await bcrypt.hash(newPassword, 10);
+
+        // Update user's password
+        const { error: userUpdateError } = await supabase
+            .from('users')
+            .update({ password_hash: newPasswordHash, updated_at: new Date().toISOString() })
+            .eq('id', resetToken.user_id);
+
+        if (userUpdateError) {
+            console.error('[resetPassword] Supabase error updating user password:', userUpdateError);
+            throw userUpdateError;
+        }
+
+        // Invalidate the token (delete it so it can't be reused)
+        const { error: deleteTokenError } = await supabase
+            .from('password_reset_tokens')
+            .delete()
+            .eq('id', resetToken.id);
+
+        if (deleteTokenError) {
+            console.error('[resetPassword] Supabase error deleting used reset token:', deleteTokenError);
+            // Don't throw error, password was updated, but log it.
+        }
+
+        console.log(`[resetPassword] Password successfully reset for user ID: ${resetToken.user_id}`);
+        res.json({ message: 'Password has been reset successfully.' });
+
+    } catch (error) {
+        console.error('[resetPassword] Error during password reset:', error);
+        res.status(500).json({ error: error.message });
+    }
 };
 
 module.exports = { registerUser, loginUser, getUserById };
