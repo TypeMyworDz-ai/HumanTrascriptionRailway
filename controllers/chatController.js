@@ -1,4 +1,4 @@
-// backend/controllers/chatController.js - Part 1 - UPDATED for Negotiation Chat
+// backend/controllers/chatController.js - COMPLETE AND FULLY CORRECTED FILE
 
 const supabase = require('..//database');
 
@@ -8,6 +8,8 @@ const getAdminDirectMessages = async (req, res, io) => {
         const { userId } = req.params; // The user the admin is chatting with
         const adminId = req.user.userId; // The logged-in admin's ID
 
+        console.log(`[getAdminDirectMessages] Admin ID: ${adminId}, Target User ID: ${userId}`);
+
         const { data: messages, error } = await supabase
             .from('messages')
             .select('id, sender_id, receiver_id, content, timestamp, is_read')
@@ -15,9 +17,13 @@ const getAdminDirectMessages = async (req, res, io) => {
             .is('negotiation_id', null) // Only fetch direct messages
             .order('timestamp', { ascending: true });
 
-        if (error) throw error;
+        if (error) {
+            console.error(`[getAdminDirectMessages] Supabase error fetching messages:`, error);
+            throw error;
+        }
+        console.log(`[getAdminDirectMessages] Fetched ${messages?.length || 0} messages.`);
 
-        // NEW: Mark messages as read when fetched by the admin
+        // Mark messages as read when fetched by the admin
         if (messages && messages.length > 0 && io) {
             const unreadMessagesForAdmin = messages.filter(msg => msg.receiver_id === adminId && !msg.is_read);
             if (unreadMessagesForAdmin.length > 0) {
@@ -28,8 +34,9 @@ const getAdminDirectMessages = async (req, res, io) => {
                     .in('id', unreadIds);
 
                 if (updateError) {
-                    console.error('Error marking admin messages as read:', updateError);
+                    console.error('[getAdminDirectMessages] Error marking admin messages as read:', updateError);
                 } else {
+                    console.log(`[getAdminDirectMessages] Marked ${unreadIds.length} messages as read for admin ${adminId}.`);
                     io.to(adminId).emit('unreadMessageCountUpdate', { userId: adminId, change: -unreadIds.length });
                     io.to(userId).emit('messageRead', { senderId: adminId, receiverId: userId, messageIds: unreadIds });
                 }
@@ -38,7 +45,7 @@ const getAdminDirectMessages = async (req, res, io) => {
 
         res.json({ messages });
     } catch (error) {
-        console.error('Error fetching admin direct messages:', error);
+        console.error('[getAdminDirectMessages] Error fetching admin direct messages:', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -101,7 +108,7 @@ const getUserDirectMessages = async (req, res, io) => {
 
         if (error) throw error;
 
-        // NEW: Mark messages as read when fetched by the user
+        // Mark messages as read when fetched by the user
         if (messages && messages.length > 0 && io) {
             const unreadMessagesForUser = messages.filter(msg => msg.receiver_id === userId && !msg.is_read);
             if (unreadMessagesForUser.length > 0) {
@@ -222,7 +229,7 @@ const getNegotiationMessages = async (req, res, io) => {
 
         if (error) throw error;
 
-        // NEW: Mark messages as read when fetched by the user
+        // Mark messages as read when fetched by the user
         if (messages && messages.length > 0 && io) {
             const unreadMessagesForUser = messages.filter(msg => msg.receiver_id === userId && !msg.is_read);
             if (unreadMessagesForUser.length > 0) {
@@ -236,15 +243,14 @@ const getNegotiationMessages = async (req, res, io) => {
                     console.error('Error marking negotiation messages as read:', updateError);
                 } else {
                     io.to(userId).emit('unreadMessageCountUpdate', { userId: userId, change: -unreadIds.length });
-                    // Optionally, emit an update to the sender that their message was read
                     // Determine sender for these messages
                     const senderOfUnreadMessages = unreadMessagesForUser[0].sender_id;
                     if (senderOfUnreadMessages !== userId) { // Don't emit to self
-                        io.to(senderOfUnreadMessages).emit('messageRead', { 
-                            senderId: userId, 
-                            receiverId: senderOfUnreadMessages, 
+                        io.to(senderOfUnreadMessages).emit('messageRead', {
+                            senderId: userId,
+                            receiverId: senderOfUnreadMessages,
                             negotiationId: negotiationId,
-                            messageIds: unreadIds 
+                            messageIds: unreadIds
                         });
                     }
                 }
@@ -375,7 +381,6 @@ const getAdminChatList = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
-
 
 module.exports = {
     getAdminDirectMessages,
