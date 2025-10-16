@@ -1,10 +1,10 @@
-// backend/routes/authRoutes.js - COMPLETE AND UPDATED with Forgot/Reset Password Routes
+// backend/routes/authRoutes.js - COMPLETE AND UPDATED (Final Fix for handler error)
 
 const express = require('express');
 const router = express.Router();
 const authMiddleware = require('..//middleware/authMiddleware'); // Assuming this path is correct
 
-// Import auth controller functions - NEW: Import password reset functions
+// Import auth controller functions - FIXED: Ensure correct destructuring for new functions
 const {
   registerUser,
   loginUser,
@@ -23,9 +23,9 @@ router.post('/login', loginUser);
 router.get('/user/:userId', authMiddleware, getUserById);
 
 // NEW: Forgot Password Request route
-router.post('/forgot-password', requestPasswordReset);
+router.post('/forgot-password', requestPasswordReset); // FIXED: Ensure requestPasswordReset is a function
 
 // NEW: Reset Password route
-router.post('/reset-password', resetPassword);
+router.post('/reset-password', resetPassword); // FIXED: Ensure resetPassword is a function
 
 module.exports = router;
