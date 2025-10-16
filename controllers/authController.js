@@ -1,21 +1,20 @@
-// backend/controllers/authController.js - Part 1 - UPDATED with Forgot/Reset Password functionality (Debugging)
+// backend/controllers/authController.js - Part 1 - UPDATED with Forgot/Reset Password functionality (Aggressive Debugging)
 
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const supabase = require('..//database');
 const emailService = require('..//emailService'); 
-const { v4: uuidv4 } = require('uuid'); // For generating UUIDs for reset tokens
+const { v4: uuidv4 } = require('uuid'); 
 
-console.log('[authController.js] Module loaded.'); // DEBUG
-console.log('[authController.js] uuidv4 imported:', typeof uuidv4); // DEBUG
+console.log('[authController.js] Module loaded.');
+console.log('[authController.js] uuidv4 imported:', typeof uuidv4);
 
-// Define the frontend URL for password reset links.
 const FRONTEND_URL = process.env.CLIENT_URL || 'http://localhost:3000';
-console.log('[authController.js] FRONTEND_URL:', FRONTEND_URL); // DEBUG
+console.log('[authController.js] FRONTEND_URL:', FRONTEND_URL);
 
 // Register new user
 const registerUser = async (req, res) => {
-  console.log('[registerUser] Function called.'); // DEBUG
+  console.log('[registerUser] Function called.');
   try {
     const { email, password, full_name, user_type = 'client', phone } = req.body;
 
