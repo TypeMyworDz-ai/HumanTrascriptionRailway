@@ -1,4 +1,4 @@
-// backend/routes/generalApiRoutes.js - COMPLETE AND FULLY CORRECTED FILE
+// backend/routes/generalApiRoutes.js - COMPLETE AND UPDATED with Admin Disputes Route
 
 const express = require('express');
 const router = express.Router();
@@ -16,7 +16,7 @@ const {
   syncAvailabilityStatus 
 } = require('..//controllers/negotiationController'); 
 
-// Import admin controller functions
+// Import admin controller functions - NEW: Import settings, jobs, and disputes functions
 const {
     getPendingTranscriberTestsCount,
     getActiveJobsCount,
@@ -29,6 +29,10 @@ const {
     getAnyUserById,
     approveTranscriberTest,
     rejectTranscriberTest,
+    getAdminSettings,    
+    updateAdminSettings, 
+    getAllJobsForAdmin,  
+    getAllDisputesForAdmin, // NEW: Import the disputes getter
 } = require('..//controllers/adminController'); 
 
 // Import chat controller functions (including the new ones)
@@ -39,8 +43,8 @@ const {
     sendUserDirectMessage,
     getUnreadMessageCount, 
     getAdminChatList,
-    getNegotiationMessages, // NEW: Import the negotiation message getter
-    sendNegotiationMessage // NEW: Import the negotiation message sender
+    getNegotiationMessages,
+    sendNegotiationMessage 
 } = require('..//controllers/chatController'); 
 
 
@@ -49,7 +53,6 @@ module.exports = (io) => {
     io.on('connection', (socket) => {
         console.log('A user connected via WebSocket:', socket.id);
 
-        // Listen for 'joinUserRoom' (camelCase) as standardized in ChatService.js
         socket.on('joinUserRoom', (userId) => {
             if (userId) {
                 socket.join(userId);
@@ -58,9 +61,6 @@ module.exports = (io) => {
                 console.warn(`Attempted to join user room without a userId from socket ${socket.id}`);
             }
         });
-
-        // The 'sendMessage' event is now handled by HTTP routes that call chatController functions.
-        // This ensures authentication middleware and consistent logic.
         
         socket.on('disconnect', () => {
             console.log('User disconnected from WebSocket:', socket.id);
@@ -84,17 +84,11 @@ module.exports = (io) => {
   });
 
   // --- MESSAGING ROUTES (General) ---
-  // FIXED: This route now uses the new getNegotiationMessages from chatController
   router.get('/messages/:negotiationId', authMiddleware, (req, res, next) => {
-    // This endpoint now specifically fetches messages for a negotiation.
-    // The chatController function handles validation and fetching.
-    getNegotiationMessages(req, res, io); // Pass 'io' if controller needs to emit
+    getNegotiationMessages(req, res, io);
   });
 
-  // NEW: Route for sending messages within a negotiation
   router.post('/messages/negotiation/send', authMiddleware, (req, res, next) => {
-    // This endpoint handles sending messages for a specific negotiation.
-    // The chatController function handles validation, saving, and emitting.
     sendNegotiationMessage(req, res, io);
   });
 
@@ -115,7 +109,7 @@ module.exports = (io) => {
     createNegotiation(req, res, next, io);
   });
 
-  // FIXED: Update transcriber's online status - Now updates users table
+  // Update user's online status
   router.put('/users/:userId/online-status', authMiddleware, async (req, res) => {
     if (req.user.userType !== 'transcriber' && req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only transcribers or admins can update online status.' });
@@ -129,7 +123,6 @@ module.exports = (io) => {
     }
 
     try {
-      // FIXED: Update users table instead of transcribers table
       const { data, error } = await supabase
         .from('users')
         .update({ is_online, updated_at: new Date().toISOString() })
@@ -146,12 +139,12 @@ module.exports = (io) => {
       }
       res.json({ message: 'Online status updated successfully', user: data });
     } catch (err) {
-      console.error("Server error updating online status:", err);
-      res.status(500).json({ error: 'Server error updating online status' });
+        console.error("Server error updating online status:", err);
+        res.status(500).json({ error: 'Server error updating online status' });
     }
   });
 
-  // FIXED: Update transcriber's availability status - Now updates users table
+  // Update user's availability status
   router.put('/users/:userId/availability-status', authMiddleware, async (req, res) => {
     if (req.user.userType !== 'transcriber' && req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only transcribers or admins can update availability status.' });
@@ -165,7 +158,6 @@ module.exports = (io) => {
     }
 
     try {
-      // FIXED: Update users table instead of transcribers table
       const { data, error } = await supabase
         .from('users')
         .update({ is_available, updated_at: new Date().toISOString() })
@@ -187,7 +179,7 @@ module.exports = (io) => {
     }
   });
 
-  // --- Admin Statistics Routes (Existing) ---
+  // --- Admin Statistics Routes ---
   router.get('/admin/stats/pending-tests', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can view this statistic.' });
@@ -216,7 +208,7 @@ module.exports = (io) => {
       getTotalUsersCount(req, res, next);
   });
 
-  // Admin Transcriber Test Management Routes
+  // --- Admin Transcriber Test Management Routes ---
   router.get('/admin/transcriber-tests', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can view transcriber tests.' });
@@ -224,7 +216,6 @@ module.exports = (io) => {
       getAllTranscriberTestSubmissions(req, res, next);
   });
 
-  // Route to get a single transcriber test submission by ID
   router.get('/admin/transcriber-tests/:submissionId', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can view transcriber test details.' });
@@ -246,7 +237,7 @@ module.exports = (io) => {
       rejectTranscriberTest(req, res, next);
   });
 
-  // Admin User Management Routes
+  // --- Admin User Management Routes ---
   router.get('/admin/users', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can manage users.' });
@@ -254,7 +245,6 @@ module.exports = (io) => {
       getAllUsersForAdmin(req, res, next);
   });
 
-  // Route to get a single user by ID for admin chat
   router.get('/admin/users/:userId', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can view user details.' });
@@ -262,19 +252,16 @@ module.exports = (io) => {
       getUserByIdForAdmin(req, res, next);
   });
 
-  // Generic User Details Route (accessible to any authenticated user)
   router.get('/users/:userId', authMiddleware, (req, res, next) => {
-      // This route is for any authenticated user to fetch basic details of another user for display purposes (e.g., chat partner name).
-      // The `authMiddleware` ensures the user is logged in.
       getAnyUserById(req, res, next);
   });
 
-  // Admin Direct Chat Routes
+  // --- Admin Direct Chat Routes ---
   router.get('/admin/chat/messages/:userId', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can view chat history.' });
       }
-      getAdminDirectMessages(req, res, io); // Pass 'io' here
+      getAdminDirectMessages(req, res, io);
   });
 
   router.post('/admin/chat/send-message', authMiddleware, (req, res, next) => {
@@ -284,12 +271,9 @@ module.exports = (io) => {
       sendAdminDirectMessage(req, res, io);
   });
 
-  // User Direct Chat Routes (for clients and transcribers to chat with admin)
+  // --- User Direct Chat Routes ---
   router.get('/user/chat/messages/:chatId', authMiddleware, (req, res, next) => {
-      // This route is for any authenticated user (client or transcriber) to view their direct chat history with 'chatId'.
-      // The `chatController` logic will ensure only relevant messages are returned.
-      // The authMiddleware ensures the user is authenticated.
-      getUserDirectMessages(req, res, io); // Pass 'io' to getUserDirectMessages
+      getUserDirectMessages(req, res, io);
   });
 
   router.post('/user/chat/send-message', authMiddleware, (req, res, next) => {
@@ -299,18 +283,46 @@ module.exports = (io) => {
       sendUserDirectMessage(req, res, io);
   });
 
-  // Route to get unread message count for a user
   router.get('/user/chat/unread-count', authMiddleware, (req, res, next) => {
-      // Allow any authenticated user to get their own unread message count
       getUnreadMessageCount(req, res, next);
   });
 
-  // NEW: Admin Chat List Route
   router.get('/admin/chat/list', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can view the chat list.' });
       }
       getAdminChatList(req, res, next);
+  });
+
+  // --- NEW: Admin Global Settings Routes ---
+  router.get('/admin/settings', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view settings.' });
+      }
+      getAdminSettings(req, res, next);
+  });
+
+  router.put('/admin/settings', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can update settings.' });
+      }
+      updateAdminSettings(req, res, next);
+  });
+
+  // --- NEW: Admin Jobs Route ---
+  router.get('/admin/jobs', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view all jobs.' });
+      }
+      getAllJobsForAdmin(req, res, next);
+  });
+
+  // --- NEW: Admin Disputes Route ---
+  router.get('/admin/disputes/all', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view all disputes.' });
+      }
+      getAllDisputesForAdmin(req, res, next);
   });
 
   return router;

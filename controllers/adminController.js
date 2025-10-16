@@ -1,9 +1,10 @@
-// backend/controllers/adminController.js
+// backend/controllers/adminController.js - Part 1 - UPDATED with getAllDisputesForAdmin
 
-const supabase = require('../database');
-const emailService = require('../emailService'); // Make sure this path is correct
+const supabase = require('..//database');
+const emailService = require('..//emailService'); // Assuming this path is correct
 
-// Get count of pending transcriber tests
+// --- Admin Statistics ---
+
 const getPendingTranscriberTestsCount = async (req, res) => {
     try {
         const { count, error } = await supabase
@@ -12,7 +13,6 @@ const getPendingTranscriberTestsCount = async (req, res) => {
             .eq('status', 'pending');
 
         if (error) throw error;
-
         res.json({ count });
     } catch (error) {
         console.error('Error fetching pending transcriber tests count:', error);
@@ -20,7 +20,6 @@ const getPendingTranscriberTestsCount = async (req, res) => {
     }
 };
 
-// Get count of active jobs
 const getActiveJobsCount = async (req, res) => {
     try {
         const { count, error } = await supabase
@@ -29,7 +28,6 @@ const getActiveJobsCount = async (req, res) => {
             .in('status', ['accepted', 'hired']);
 
         if (error) throw error;
-
         res.json({ count });
     } catch (error) {
         console.error('Error fetching active jobs count:', error);
@@ -37,26 +35,29 @@ const getActiveJobsCount = async (req, res) => {
     }
 };
 
-// Get count of open disputes (placeholder for now)
 const getOpenDisputesCount = async (req, res) => {
     try {
-        const disputesCount = 0; // Placeholder
-        res.json({ count: disputesCount });
+        // Assuming a 'disputes' table and a 'status' column for open/closed
+        const { count, error } = await supabase
+            .from('disputes')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'open'); // Or 'pending', depending on your schema
+
+        if (error) throw error;
+        res.json({ count });
     } catch (error) {
         console.error('Error fetching open disputes count:', error);
         res.status(500).json({ error: error.message });
     }
 };
 
-// Get total users count (clients + transcribers + admins)
 const getTotalUsersCount = async (req, res) => {
     try {
         const { count, error } = await supabase
-            .from('users') // Query the core users table
+            .from('users')
             .select('*', { count: 'exact', head: true });
 
         if (error) throw error;
-
         res.json({ count });
     } catch (error) {
         console.error('Error fetching total users count:', error);
@@ -64,16 +65,28 @@ const getTotalUsersCount = async (req, res) => {
     }
 };
 
-// Get all transcriber test submissions (for admin review)
+// --- Admin Transcriber Test Management ---
+
 const getAllTranscriberTestSubmissions = async (req, res) => {
     try {
         const { data: submissions, error } = await supabase
             .from('test_submissions')
-            .select('id, user_id, grammar_score, transcription_text, status, rejection_reason, created_at, users(id, full_name, email)')
-            .order('created_at', { ascending: true });
+            .select(`
+                id,
+                user_id,
+                grammar_score,
+                transcription_text,
+                status,
+                created_at,
+                rejection_reason,
+                users (
+                    full_name,
+                    email
+                )
+            `)
+            .order('created_at', { ascending: false });
 
         if (error) throw error;
-
         res.json({ submissions });
     } catch (error) {
         console.error('Error fetching all transcriber test submissions:', error);
@@ -81,97 +94,207 @@ const getAllTranscriberTestSubmissions = async (req, res) => {
     }
 };
 
-// Get a single transcriber test submission by ID
 const getTranscriberTestSubmissionById = async (req, res) => {
     try {
         const { submissionId } = req.params;
         const { data: submission, error } = await supabase
             .from('test_submissions')
-            .select('id, user_id, grammar_score, transcription_text, status, rejection_reason, created_at, users(id, full_name, email)')
+            .select(`
+                id,
+                user_id,
+                grammar_score,
+                transcription_text,
+                status,
+                created_at,
+                rejection_reason,
+                users (
+                    full_name,
+                    email
+                )
+            `)
             .eq('id', submissionId)
             .single();
 
         if (error) throw error;
-        if (!submission) {
-            return res.status(404).json({ error: 'Test submission not found.' });
-        }
-
         res.json({ submission });
     } catch (error) {
-        console.error('Error fetching single transcriber test submission:', error);
+        console.error('Error fetching transcriber test submission by ID:', error);
         res.status(500).json({ error: error.message });
     }
 };
 
-// Get all users for admin management, with optional search
+const approveTranscriberTest = async (req, res) => {
+    try {
+        const { submissionId } = req.params;
+        const { transcriberId } = req.body;
+
+        const { error: submissionUpdateError } = await supabase
+            .from('test_submissions')
+            .update({ status: 'approved', admin_notes: 'Approved by admin', updated_at: new Date().toISOString() })
+            .eq('id', submissionId);
+
+        if (submissionUpdateError) throw submissionUpdateError;
+
+        // Update the transcriber's profile status to 'active_transcriber'
+        const { error: transcriberProfileError } = await supabase
+            .from('transcribers')
+            .update({ status: 'active_transcriber', updated_at: new Date().toISOString() })
+            .eq('id', transcriberId);
+
+        if (transcriberProfileError) throw transcriberProfileError;
+
+        // NEW: Update the user's main profile status as well
+        const { error: userStatusError } = await supabase
+            .from('users')
+            .update({ status: 'active_transcriber', updated_at: new Date().toISOString() })
+            .eq('id', transcriberId);
+
+        if (userStatusError) console.error('Error updating user status after test approval:', userStatusError);
+
+        // Fetch user details for email
+        const { data: userDetails, error: userDetailsError } = await supabase
+            .from('users')
+            .select('full_name, email')
+            .eq('id', transcriberId)
+            .single();
+
+        if (userDetailsError) console.error('Error fetching user details for approval email:', userDetailsError);
+
+        if (userDetails) {
+            await emailService.sendTranscriberTestApprovedEmail(userDetails);
+        }
+
+        res.json({ message: 'Transcriber test approved successfully.' });
+    } catch (error) {
+        console.error('Error approving transcriber test:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+const rejectTranscriberTest = async (req, res) => {
+    try {
+        const { submissionId } = req.params;
+        const { transcriberId, reason } = req.body;
+
+        const { error: submissionUpdateError } = await supabase
+            .from('test_submissions')
+            .update({ status: 'rejected', rejection_reason: reason, admin_notes: 'Rejected by admin', updated_at: new Date().toISOString() })
+            .eq('id', submissionId);
+
+        if (submissionUpdateError) throw submissionUpdateError;
+
+        // Update the transcriber's profile status to 'rejected'
+        const { error: transcriberProfileError } = await supabase
+            .from('transcribers')
+            .update({ status: 'rejected', updated_at: new Date().toISOString() })
+            .eq('id', transcriberId);
+
+        if (transcriberProfileError) throw transcriberProfileError;
+
+        // NEW: Update the user's main profile status as well
+        const { error: userStatusError } = await supabase
+            .from('users')
+            .update({ status: 'rejected', updated_at: new Date().toISOString() })
+            .eq('id', transcriberId);
+
+        if (userStatusError) console.error('Error updating user status after test rejection:', userStatusError);
+
+        // Fetch user details for email
+        const { data: userDetails, error: userDetailsError } = await supabase
+            .from('users')
+            .select('full_name, email')
+            .eq('id', transcriberId)
+            .single();
+
+        if (userDetailsError) console.error('Error fetching user details for rejection email:', userDetailsError);
+
+        if (userDetails) {
+            await emailService.sendTranscriberTestRejectedEmail(userDetails, reason);
+        }
+
+        res.json({ message: 'Transcriber test rejected successfully.' });
+    } catch (error) {
+        console.error('Error rejecting transcriber test:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// --- Admin User Management ---
+
 const getAllUsersForAdmin = async (req, res) => {
     try {
-        const { search } = req.query; // Get search query from URL parameters
-        console.log(`Backend: getAllUsersForAdmin called with search term: '${search}'`);
-        
+        const { search } = req.query; // Get search term from query parameters
         let query = supabase.from('users').select('id, full_name, email, user_type, created_at');
 
         if (search) {
             query = query.or(`full_name.ilike.%${search}%,email.ilike.%${search}%`);
-            console.log(`Backend: Applying search filter: ${search}`);
         }
-
-        // Only fetch 'client' and 'transcriber' types for management
-        query = query.in('user_type', ['client', 'transcriber']);
-        console.log('Backend: Applying user_type filter: client, transcriber');
 
         const { data: users, error } = await query.order('created_at', { ascending: false });
 
-        if (error) {
-            console.error('Supabase error in getAllUsersForAdmin:', error);
-            throw error;
-        }
-
-        console.log(`Backend: Successfully fetched ${users ? users.length : 0} users.`);
+        if (error) throw error;
         res.json({ users });
     } catch (error) {
-        console.error('Error fetching all users for admin (caught):', error);
-        res.status(500).json({ error: error.message || 'Internal server error' });
+        console.error('Error fetching all users for admin:', error);
+        res.status(500).json({ error: error.message });
     }
 };
 
-// Get a single user by ID for admin (e.g., for chat) - Admin-specific, kept separate
 const getUserByIdForAdmin = async (req, res) => {
     try {
         const { userId } = req.params;
         const { data: user, error } = await supabase
             .from('users')
-            .select('id, full_name, email, user_type') // Select only necessary fields
+            .select(`
+                id,
+                full_name,
+                email,
+                user_type,
+                created_at,
+                is_online,
+                is_available,
+                transcribers (
+                    status,
+                    user_level,
+                    average_rating,
+                    completed_jobs,
+                    badges
+                ),
+                client_profiles (
+                    client_rating
+                )
+            `)
             .eq('id', userId)
             .single();
 
         if (error) throw error;
-        if (!user) {
-            return res.status(404).json({ error: 'User not found.' });
-        }
 
-        res.json({ user });
+        // Flatten the data for easier consumption on the frontend
+        const formattedUser = {
+            ...user,
+            transcriber_profile: user.transcribers?.[0] || null,
+            client_profile: user.client_profiles?.[0] || null,
+        };
+        delete formattedUser.transcribers;
+        delete formattedUser.client_profiles;
+
+        res.json({ user: formattedUser });
     } catch (error) {
         console.error('Error fetching user by ID for admin:', error);
         res.status(500).json({ error: error.message });
     }
 };
 
-// NEW: Generic function to get any user by ID (accessible to any authenticated user)
 const getAnyUserById = async (req, res) => {
     try {
         const { userId } = req.params;
         const { data: user, error } = await supabase
             .from('users')
-            .select('id, full_name, email, user_type') // Select only necessary fields
+            .select('id, full_name, email, user_type')
             .eq('id', userId)
             .single();
 
         if (error) throw error;
-        if (!user) {
-            return res.status(404).json({ error: 'User not found.' });
-        }
-
         res.json({ user });
     } catch (error) {
         console.error('Error fetching any user by ID:', error);
@@ -179,117 +302,143 @@ const getAnyUserById = async (req, res) => {
     }
 };
 
+// --- Admin Global Settings ---
 
-// Approve a transcriber test submission
-const approveTranscriberTest = async (req, res) => {
+const getAdminSettings = async (req, res) => {
     try {
-        const { submissionId } = req.params;
-        const { transcriberId } = req.body; // Get transcriberId from the request body
-
-        if (!submissionId || !transcriberId) {
-            return res.status(400).json({ error: 'Submission ID and Transcriber ID are required.' });
-        }
-
-        // 1. Update test_submissions status to 'approved'
-        const { data: updatedSubmission, error: submissionError } = await supabase
-            .from('test_submissions')
-            .update({ status: 'approved', rejection_reason: null, updated_at: new Date().toISOString() })
-            .eq('id', submissionId)
-            .eq('user_id', transcriberId) // Ensure we're updating the correct submission
-            .select('user_id')
+        const { data: settings, error } = await supabase
+            .from('admin_settings')
+            .select('default_price_per_minute, default_deadline_hours')
             .single();
 
-        if (submissionError) throw submissionError;
-        if (!updatedSubmission) {
-            return res.status(404).json({ error: 'Test submission not found or does not belong to the transcriber.' });
+        if (error && error.code === 'PGRST116') { // No rows found, return defaults
+            return res.json({
+                settings: {
+                    default_price_per_minute: 0.00,
+                    default_deadline_hours: 24,
+                }
+            });
         }
+        if (error) throw error;
 
-        // 2. Update transcriber's profile status to 'active_transcriber'
-        const { error: profileUpdateError } = await supabase
-            .from('transcribers') // Update the 'transcribers' table
-            .update({ status: 'active_transcriber', updated_at: new Date().toISOString() })
-            .eq('id', transcriberId); // Update the transcriber's profile
-
-        if (profileUpdateError) throw profileUpdateError;
-
-        // --- SEND WELCOME EMAIL TO TRANSCRIBER UPON APPROVAL ---
-        // Fetch transcriber details to send the email
-        const { data: transcriberDetails, error: transcriberDetailsError } = await supabase
-            .from('users') // Fetch from 'users' table for email and name
-            .select('id, email, full_name')
-            .eq('id', transcriberId)
-            .single();
-        
-        if (transcriberDetailsError) {
-            console.error(`Error fetching transcriber details for email for ID ${transcriberId}:`, transcriberDetailsError);
-            // Continue without blocking the response, but log the error
-        } else if (transcriberDetails && transcriberDetails.email) {
-            await emailService.sendTranscriberTestResultEmail(transcriberDetails, 'approved');
-        }
-        // --- END OF EMAIL INTEGRATION ---
-
-        res.json({ message: 'Transcriber test approved and status updated.' });
+        res.json({ settings });
     } catch (error) {
-        console.error('Error approving transcriber test:', error);
+        console.error('Error fetching admin settings:', error);
         res.status(500).json({ error: error.message });
     }
 };
 
-// Reject a transcriber test submission
-const rejectTranscriberTest = async (req, res) => {
+const updateAdminSettings = async (req, res) => {
     try {
-        const { submissionId } = req.params;
-        const { transcriberId, reason } = req.body;
+        const { default_price_per_minute, default_deadline_hours } = req.body;
 
-        if (!submissionId || !transcriberId) {
-            return res.status(400).json({ error: 'Submission ID and Transcriber ID are required.' });
+        const { data, error } = await supabase
+            .from('admin_settings')
+            .update({
+                default_price_per_minute: default_price_per_minute,
+                default_deadline_hours: default_deadline_hours,
+                updated_at: new Date().toISOString(),
+            })
+            .limit(1) // Ensure only one row is affected
+            .select();
+
+        if (error) throw error;
+
+        if (!data || data.length === 0) {
+            const { data: insertData, error: insertError } = await supabase
+                .from('admin_settings')
+                .insert({
+                    default_price_per_minute: default_price_per_minute,
+                    default_deadline_hours: default_deadline_hours,
+                })
+                .select();
+            if (insertError) throw insertError;
+            return res.json({ message: 'Settings initialized and saved successfully.', settings: insertData[0] });
         }
 
-        // 1. Update test_submissions status to 'rejected'
-        const { data: updatedSubmission, error: submissionError } = await supabase
-            .from('test_submissions')
-            .update({ status: 'rejected', rejection_reason: reason, updated_at: new Date().toISOString() })
-            .eq('id', submissionId)
-            .eq('user_id', transcriberId) // Ensure we're updating the correct submission
-            .select('user_id')
-            .single();
-
-        if (submissionError) throw submissionError;
-        if (!updatedSubmission) {
-            return res.status(404).json({ error: 'Test submission not found or does not belong to the transcriber.' });
-        }
-
-        // 2. Update transcriber's profile status to 'rejected'
-        const { error: profileUpdateError } = await supabase
-            .from('transcribers') // Update the 'transcribers' table
-            .update({ status: 'rejected', updated_at: new Date().toISOString() })
-            .eq('id', transcriberId);
-
-        if (profileUpdateError) throw profileUpdateError;
-
-        // --- SEND REJECTION EMAIL TO TRANSCRIBER ---
-        // Fetch transcriber details to send the email
-        const { data: transcriberDetails, error: transcriberDetailsError } = await supabase
-            .from('users') // Fetch from 'users' table for email and name
-            .select('id, email, full_name')
-            .eq('id', transcriberId)
-            .single();
-        
-        if (transcriberDetailsError) {
-            console.error(`Error fetching transcriber details for email for ID ${transcriberId}:`, transcriberDetailsError);
-            // Continue without blocking the response, but log the error
-        } else if (transcriberDetails && transcriberDetails.email) {
-            await emailService.sendTranscriberTestResultEmail(transcriberDetails, 'rejected', reason);
-        }
-        // --- END OF EMAIL INTEGRATION ---
-
-        res.json({ message: 'Transcriber test rejected and status updated.' });
+        res.json({ message: 'Settings updated successfully.', settings: data[0] });
     } catch (error) {
-        console.error('Error rejecting transcriber test:', error);
+        console.error('Error updating admin settings:', error);
         res.status(500).json({ error: error.message });
     }
 };
 
+// NEW: Function to get all jobs (negotiations) for admin
+const getAllJobsForAdmin = async (req, res) => {
+    try {
+        const { data: negotiations, error } = await supabase
+            .from('negotiations')
+            .select(`
+                id,
+                status,
+                agreed_price_kes,
+                requirements,
+                deadline_hours,
+                created_at,
+                client:users!client_id (
+                    full_name
+                ),
+                transcriber:users!transcriber_id (
+                    full_name
+                )
+            `)
+            .order('created_at', { ascending: false });
+
+        if (error) throw error;
+
+        // Flatten the client and transcriber names for easier frontend consumption
+        const jobs = negotiations.map(n => ({
+            ...n,
+            client: n.client || { full_name: 'Unknown Client' }, // Ensure client object exists
+            transcriber: n.transcriber || { full_name: 'Unassigned' } // Ensure transcriber object exists
+        }));
+
+        res.json({ jobs });
+    } catch (error) {
+        console.error('Error fetching all jobs for admin:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// NEW: Function to get all disputes for admin
+const getAllDisputesForAdmin = async (req, res) => {
+    try {
+        const { data: disputes, error } = await supabase
+            .from('disputes')
+            .select(`
+                id,
+                negotiation_id,
+                reason,
+                description,
+                status,
+                opened_at,
+                resolved_at,
+                resolution_notes,
+                client:users!client_id (
+                    full_name
+                ),
+                transcriber:users!transcriber_id (
+                    full_name
+                )
+            `)
+            .order('opened_at', { ascending: false });
+
+        if (error) throw error;
+
+        // Flatten client and transcriber names
+        const formattedDisputes = disputes.map(d => ({
+            ...d,
+            client: d.client || { full_name: 'Unknown Client' },
+            transcriber: d.transcriber || { full_name: 'Unknown Transcriber' }
+        }));
+
+        res.json({ disputes: formattedDisputes });
+    } catch (error) {
+        console.error('Error fetching all disputes for admin:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+// backend/controllers/adminController.js - Part 2 - UPDATED with getAllDisputesForAdmin (Continue from Part 1)
 
 module.exports = {
     getPendingTranscriberTestsCount,
@@ -298,9 +447,13 @@ module.exports = {
     getTotalUsersCount,
     getAllTranscriberTestSubmissions,
     getTranscriberTestSubmissionById,
-    getAllUsersForAdmin,
-    getUserByIdForAdmin, // Admin-specific user fetch
-    getAnyUserById,       // NEW: Generic user fetch
     approveTranscriberTest,
     rejectTranscriberTest,
+    getAllUsersForAdmin,
+    getUserByIdForAdmin,
+    getAnyUserById,
+    getAdminSettings,    
+    updateAdminSettings, 
+    getAllJobsForAdmin,  
+    getAllDisputesForAdmin, // NEW: Export the disputes getter
 };
