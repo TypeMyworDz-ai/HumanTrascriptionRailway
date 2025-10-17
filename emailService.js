@@ -1,4 +1,4 @@
-// backend/emailService.js - UPDATED with connectionTimeout for Nodemailer
+// backend/emailService.js - UPDATED for Resend SMTP with fallback
 
 const nodemailer = require('nodemailer');
 
@@ -6,28 +6,41 @@ const nodemailer = require('nodemailer');
 const createTransporter = () => {
     // Common Nodemailer options for all transporters
     const commonOptions = {
-        // Add a longer connection timeout (e.g., 15 seconds)
-        // This can help with 'ETIMEDOUT' errors on some hosting providers.
         connectionTimeout: 15000, // milliseconds
-        // You might also consider socketTimeout: 10000 // milliseconds for data transfer timeout
+        socketTimeout: 10000 // milliseconds
     };
 
-    // Check if production SMTP credentials are provided
-    if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-        console.log('Using Production SMTP for email service.');
+    // --- Prioritize Resend SMTP ---
+    if (process.env.RESEND_API_KEY && process.env.RESEND_SMTP_HOST) {
+        console.log('Using Resend SMTP for email service.');
+        return nodemailer.createTransport({
+            host: process.env.RESEND_SMTP_HOST,
+            port: parseInt(process.env.RESEND_SMTP_PORT || '587', 10),
+            secure: process.env.RESEND_SMTP_SECURE === 'true' || (parseInt(process.env.RESEND_SMTP_PORT, 10) === 465),
+            auth: {
+                user: process.env.RESEND_SMTP_USER || 'resend', // Resend often uses 'resend' or 'apikey' as the username
+                pass: process.env.RESEND_API_KEY // Your Resend API Key
+            },
+            ...commonOptions
+        });
+    } 
+    // --- Fallback to Generic Production SMTP (e.g., Mailtrap Transactional) ---
+    else if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+        console.log('Resend credentials not found. Falling back to Generic Production SMTP.');
         return nodemailer.createTransport({
             host: process.env.SMTP_HOST,
-            port: parseInt(process.env.SMTP_PORT || '587', 10), // Default to 587 if not set
-            secure: process.env.SMTP_SECURE === 'true' || (parseInt(process.env.SMTP_PORT, 10) === 465), // Use TLS/SSL if secure is true or port is 465
+            port: parseInt(process.env.SMTP_PORT || '587', 10),
+            secure: process.env.SMTP_SECURE === 'true' || (parseInt(process.env.SMTP_PORT, 10) === 465),
             auth: {
                 user: process.env.SMTP_USER,
                 pass: process.env.SMTP_PASS
             },
-            ...commonOptions // Apply common options
+            ...commonOptions
         });
-    } else {
-        console.warn('Production SMTP credentials not found. Falling back to Mailtrap Sandbox.');
-        // Mailtrap credentials (for development/testing)
+    } 
+    // --- Fallback to Mailtrap Sandbox (for local development/testing) ---
+    else {
+        console.warn('Neither Resend nor Generic Production SMTP credentials found. Falling back to Mailtrap Sandbox.');
         return nodemailer.createTransport({
             host: 'sandbox.smtp.mailtrap.io',
             port: 2525,
@@ -36,7 +49,7 @@ const createTransporter = () => {
                 user: '2bb9f1220f44a7', // *** REPLACE with your Mailtrap Username ***
                 pass: '5f05229824205f'  // *** REPLACE with your Mailtrap Password ***
             },
-            ...commonOptions // Apply common options
+            ...commonOptions
         });
     }
 };
@@ -49,9 +62,9 @@ const FROM_ADDRESS = process.env.EMAIL_FROM_ADDRESS || '"TypeMyworDz" <noreply@t
 const sendWelcomeEmail = async (user) => {
     try {
         await transporter.sendMail({
-            from: FROM_ADDRESS, // Sender address
-            to: user.email, // Receiver's email address
-            subject: "Welcome to TypeMyworDz!", // Email subject
+            from: FROM_ADDRESS,
+            to: user.email,
+            subject: "Welcome to TypeMyworDz!",
             html: `
                 <h1>Welcome to TypeMyworDz!</h1>
                 <p>Hello ${user.full_name || 'User'},</p>
@@ -119,7 +132,7 @@ const sendTranscriberTestResultEmail = async (user, status, reason = null) => {
         `;
     } else {
         console.error(`Invalid status provided for transcriber test result email: ${status}`);
-        return; // Do not send email if status is invalid
+        return;
     }
 
     try {
@@ -139,7 +152,7 @@ const sendTranscriberTestResultEmail = async (user, status, reason = null) => {
 const sendNewNegotiationRequestEmail = async (transcriber, client) => {
     try {
         await transporter.sendMail({
-            from: FROM_ADDRESS, // Email sent to the transcriber
+            from: FROM_ADDRESS,
             to: transcriber.email,
             subject: `New Negotiation Request from ${client.full_name}`,
             html: `
@@ -162,7 +175,7 @@ const sendCounterOfferEmail = async (client, transcriber, negotiation) => {
     try {
         await transporter.sendMail({
             from: FROM_ADDRESS,
-            to: client.email, // Email sent to the client
+            to: client.email,
             subject: `Counter Offer Received for Negotiation #${negotiation.id}`,
             html: `
                 <h1>Counter Offer Received</h1>
@@ -190,7 +203,7 @@ const sendNegotiationAcceptedEmail = async (client, transcriber, negotiation) =>
     try {
         await transporter.sendMail({
             from: FROM_ADDRESS,
-            to: `${client.email}, ${transcriber.email}`, // Send to both client and transcriber
+            to: `${client.email}, ${transcriber.email}`,
             subject: `Negotiation #${negotiation.id} Accepted!`,
             html: `
                 <h1>Negotiation Accepted!</h1>
@@ -308,10 +321,10 @@ const sendNegotiationRejectedEmail = async (user, negotiation, reason) => {
 module.exports = {
     sendWelcomeEmail,
     sendTranscriberTestSubmittedEmail,
-    sendTranscriberTestResultEmail, // Correctly exported
+    sendTranscriberTestResultEmail,
     sendNewNegotiationRequestEmail,
     sendCounterOfferEmail,
     sendNegotiationAcceptedEmail,
-    sendPaymentConfirmationEmail, // NEW: Export payment confirmation email
+    sendPaymentConfirmationEmail,
     sendNegotiationRejectedEmail,
 };
