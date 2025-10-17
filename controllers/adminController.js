@@ -236,27 +236,10 @@ const getUserByIdForAdmin = async (req, res) => {
         const { userId } = req.params;
         console.log(`[getUserByIdForAdmin] Attempting to fetch user ID: ${userId}`);
 
+        // CORRECTED: Consolidated select fields to a single line and ensured correct syntax.
         const { data: user, error } = await supabase
             .from('users')
-            .select(`
-                id,
-                full_name,
-                email,
-                user_type,
-                created_at,
-                is_online,
-                is_available,
-                transcribers (
-                    status,
-                    user_level,
-                    average_rating,
-                    completed_jobs,
-                    badges
-                ),
-                clients (
-                    average_rating // CORRECTED: Changed from 'client_rating' to 'average_rating'
-                )
-            `)
+            .select(`id, full_name, email, user_type, created_at, is_online, is_available, transcribers (status, user_level, average_rating, completed_jobs, badges), clients (average_rating)`)
             .eq('id', userId)
             .single();
 
