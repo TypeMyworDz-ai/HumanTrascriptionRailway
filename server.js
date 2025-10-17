@@ -86,15 +86,8 @@ io.on('connection', (socket) => {
 });
 
 // Configure Express app with dynamic CORS
-// Explicitly allow OPTIONS requests (preflight) before any other middleware
-app.options('*', cors({
-  origin: ALLOWED_ORIGINS,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Authorization', 'Content-Type', 'X-Requested-With', 'X-HTTP-Method-Override'],
-  credentials: true
-}));
-
-// Apply CORS middleware globally for all requests
+// REMOVED: app.options('*', cors(...));
+// Relying solely on the 'cors' middleware below, which handles OPTIONS requests correctly.
 app.use(cors({
   origin: ALLOWED_ORIGINS,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -105,7 +98,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// NEW: Debugging middleware to log headers before routes are hit
+// Debugging middleware to log headers before routes are hit
 app.use((req, res, next) => {
     console.log('--- Incoming Request Debug ---');
     console.log(`Path: ${req.path}`);
