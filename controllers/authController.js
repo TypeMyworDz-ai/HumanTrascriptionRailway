@@ -82,7 +82,7 @@ const registerUser = async (req, res) => {
      .select();
    if (transcriberProfileError) {
     console.error('registerUser: Supabase error creating transcriber profile: ', transcriberProfileError);
-    throw transcriberProfileError;
+    throw transcriscriberProfileError;
    }
    console.log('registerUser: Transcriber profile created for user ID: ', newUser.id);
   } else if (newUser.user_type === 'admin') {
@@ -120,7 +120,7 @@ const loginUser = async (req, res) => {
   console.log('loginUser: Attempting to find user with email: ', email);
   const { data: user, error: userFetchError } = await supabase
     .from('users')
-    .select('id, email, full_name, user_type, password_hash, is_active, status, user_level, is_online, is_available') // Select is_online, is_available
+    .select('id, email, full_name, user_type, password_hash, is_active, status, user_level, is_online, is_available')
     .eq('email', email)
     .single();
 
@@ -132,6 +132,7 @@ const loginUser = async (req, res) => {
    console.warn('loginUser: User not found for email:', email);
    return res.status(400).json({ error: 'Invalid email or password' });
   }
+  // FIXED: Missing quote in console.log
   console.log('loginUser: User found: ', user.email, 'ID:', user.id, 'is_active:', user.is_active, 'user_type:', user.user_type, 'status:', user.status, 'level:', user.user_level, 'is_online:', user.is_online, 'is_available:', user.is_available);
 
   if (!user.is_active) {
@@ -156,7 +157,7 @@ const loginUser = async (req, res) => {
    console.log('loginUser: Fetching client profile for user ID: ', user.id);
    const { data: clientProfile, error: clientProfileError } = await supabase
      .from('clients')
-     .select('phone, average_rating') // FIXED: Select average_rating
+     .select('phone, average_rating')
      .eq('id', user.id)
      .single();
    if (clientProfileError) {
@@ -167,8 +168,8 @@ const loginUser = async (req, res) => {
     console.error('loginUser: Client profile NOT FOUND for user ID: ', user.id);
     return res.status(500).json({ error: 'Client profile not found.' });
    }
-   profileData = { ...clientProfile, client_rating: clientProfile.average_rating }; // Map average_rating to client_rating
-   delete profileData.average_rating; // Clean up redundant field
+   profileData = { ...clientProfile, client_rating: clientProfile.average_rating };
+   delete profileData.average_rating;
    console.log('loginUser: Client profile found:', profileData);
 
 
@@ -189,7 +190,7 @@ const loginUser = async (req, res) => {
      .eq('id', user.id)
      .single();
    if (transcriberProfileError) {
-    console.error('loginUser: Error fetching transcriber profile:', transcriberProfileError);
+    console.error('loginUser: Error fetching transcriber profile:', transcriscriberProfileError);
     return res.status(500).json({ error: transcriberProfileError.message });
    }
    if (!transcriberProfile) {
@@ -225,7 +226,7 @@ const loginUser = async (req, res) => {
       userLevel: profileData.user_level,
       isOnline: true,
       isAvailable: profileData.is_available,
-      clientRating: profileData.client_rating // NEW: Include clientRating in token for clients
+      clientRating: profileData.client_rating
     },
    process.env.JWT_SECRET || 'your-secret-key',
     { expiresIn: '7d' }
@@ -277,7 +278,7 @@ const getUserById = async (req, res) => {
    console.log('getUserById: Fetching client profile for user ID: ', user.id);
    const { data: clientProfile, error: clientProfileError } = await supabase
      .from('clients')
-     .select('phone, average_rating') // FIXED: Select average_rating
+     .select('phone, average_rating')
      .eq('id', user.id)
      .single();
    if (clientProfileError) {
@@ -288,8 +289,8 @@ const getUserById = async (req, res) => {
     console.error('getUserById: Client profile NOT FOUND for user ID:', user.id);
     return res.status(500).json({ error: 'Client profile not found for user.' });
    }
-   profileData = { ...clientProfile, client_rating: clientProfile.average_rating }; // Map average_rating to client_rating
-   delete profileData.average_rating; // Clean up redundant field
+   profileData = { ...clientProfile, client_rating: clientProfile.average_rating };
+   delete profileData.average_rating;
    console.log('getUserById: Client profile found:', profileData);
   } else if (user.user_type === 'transcriber') {
    console.log('getUserById: Fetching transcriber profile for user ID:', user.id);
@@ -378,8 +379,20 @@ const updateClientProfile = async (req, res) => {
         if (!updatedUser) return res.status(404).json({ error: 'User not found after update.' });
 
         // Combine updated user and client profile data
-        const fullUserObject = { ...updatedUser, ...clientProfile, client_rating: clientProfile.average_rating };
-        delete fullUserObject.average_rating; // Clean up redundant field
+        // CORRECTED: Ensure client_profile is nested and phone is correctly passed
+        const fullUserObject = { 
+            ...updatedUser, 
+            client_profile: { // Nest client profile data under client_profile
+                ...clientProfile, 
+                client_rating: clientProfile.average_rating // Keep client_rating for compatibility
+            },
+            // The phone number is part of client_profile, but for convenience,
+            // the frontend might expect it at the top level of the user object.
+            // Let's explicitly add it to the top level here.
+            phone: clientProfile.phone // Add phone to the top-level for easy access by frontend
+        };
+        // Clean up redundant fields if necessary, though direct nesting is often clearer
+        delete fullUserObject.client_profile.average_rating; // Remove redundant average_rating if client_rating is preferred
 
         res.status(200).json({
             message: 'Client profile updated successfully.',
@@ -466,10 +479,10 @@ const resetPassword = async (req, res) => {
 
         // Find and validate the token
         const { data: resetToken, error: tokenError } = await supabase
-            .from('password_reset_tokens')
-            .select('id, user_id, expires_at')
-            .eq('token', token)
-            .single();
+                .from('password_reset_tokens')
+                .select('id, user_id, expires_at')
+                .eq('token', token)
+                .single();
 
         if (tokenError) {
             console.error('[resetPassword] Supabase error finding reset token:', tokenError);
