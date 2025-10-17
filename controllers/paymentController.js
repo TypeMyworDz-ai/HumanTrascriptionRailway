@@ -2,7 +2,7 @@ const axios = require('axios');
 const supabase = require('../database'); // CORRECTED: Changed from '../supabaseClient' to '../database'
 const { syncAvailabilityStatus } = require('./transcriberController'); // Import syncAvailabilityStatus
 const emailService = require('../emailService'); // For sending payment confirmation emails
-const { calculateTranscriberEarning } = require('../utils/paymentUtils'); // Assuming a utility for this
+const { calculateTranscriberEarning } = require('../utils/paymentUtils'); // Now imports from the new file
 
 // Paystack Secret Key from environment variables
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
@@ -153,8 +153,8 @@ const verifyPayment = async (req, res, io) => {
             return res.status(200).json({ message: 'Payment already processed and job already hired.' });
         }
 
-        // Calculate transcriber's pay (80% of client's payment)
-        const transcriberPayAmount = parseFloat((transaction.amount / 100 * 0.8).toFixed(2)); // 80%
+        // Calculate transcriber's pay using the utility function
+        const transcriberPayAmount = calculateTranscriberEarning(transaction.amount / 100);
 
         // Record payment
         const { data: paymentRecord, error: paymentError } = await supabase
