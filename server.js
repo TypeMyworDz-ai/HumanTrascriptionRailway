@@ -12,7 +12,7 @@ const generalApiRoutes = require('./routes/generalApiRoutes');
 const { setOnlineStatus } = require('./controllers/transcriberController');
 
 const app = express();
-const PORT = process.env.PORT || 10000; // Render typically uses port 10000
+const PORT = process.env.PORT || 10000; // Explicitly setting 10000 as Render's expected port
 
 const ALLOWED_ORIGINS = [
   'http://localhost:3000',
@@ -86,16 +86,52 @@ io.on('connection', (socket) => {
 });
 
 // Configure Express app with dynamic CORS
-// Removed the custom app.use((req, res, next) => { ... }) block
-// Relying solely on the 'cors' middleware which is robust
+// Explicitly allow OPTIONS requests (preflight) before any other middleware
+app.options('*', cors({
+  origin: ALLOWED_ORIGINS,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Authorization', 'Content-Type', 'X-Requested-With', 'X-HTTP-Method-Override'],
+  credentials: true
+}));
+
+// Apply CORS middleware globally for all requests
 app.use(cors({
   origin: ALLOWED_ORIGINS,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type', 'X-Requested-With', 'X-HTTP-Method-Override'],
   credentials: true
 }));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// NEW: Debugging middleware to log headers before routes are hit
+app.use((req, res, next) => {
+    console.log('--- Incoming Request Debug ---');
+    console.log(`Path: ${req.path}`);
+    console.log(`Method: ${req.method}`);
+    console.log(`Origin Header: ${req.headers.origin}`);
+    console.log(`Access-Control-Request-Method: ${req.headers['access-control-request-method']}`);
+    console.log(`Access-Control-Request-Headers: ${req.headers['access-control-request-headers']}`);
+    console.log('--- End Incoming Request Debug ---');
+
+    // Add a listener to log response headers before they are sent
+    const originalEnd = res.end;
+    res.end = function (...args) {
+        console.log('--- Outgoing Response Debug ---');
+        console.log(`Path: ${req.path}`);
+        console.log(`Method: ${req.method}`);
+        console.log(`Response Status: ${res.statusCode}`);
+        console.log(`Access-Control-Allow-Origin: ${res.getHeader('Access-Control-Allow-Origin')}`);
+        console.log(`Access-Control-Allow-Methods: ${res.getHeader('Access-Control-Allow-Methods')}`);
+        console.log(`Access-Control-Allow-Headers: ${res.getHeader('Access-Control-Allow-Headers')}`);
+        console.log(`Access-Control-Allow-Credentials: ${res.getHeader('Access-Control-Allow-Credentials')}`);
+        console.log('--- End Outgoing Response Debug ---');
+        originalEnd.apply(res, args);
+    };
+    next();
+});
+
 
 const transcriberRouter = transcriberRoutes(io);
 const generalApiRouter = generalApiRoutes(io);
