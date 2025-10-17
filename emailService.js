@@ -1,4 +1,4 @@
-// backend/emailService.js - UPDATED for Resend SMTP TLS version fix
+// backend/emailService.js - UPDATED for Mailtrap Transactional SMTP
 
 const nodemailer = require('nodemailer');
 
@@ -10,40 +10,13 @@ const createTransporter = () => {
         socketTimeout: 10000 // milliseconds
     };
 
-    // --- Prioritize Resend SMTP (using environment variables) ---
-    if (process.env.RESEND_API_KEY && process.env.RESEND_SMTP_HOST) {
-        console.log('Using Resend SMTP for email service.');
-        const isSecure = process.env.RESEND_SMTP_SECURE === 'true' || (parseInt(process.env.RESEND_SMTP_PORT, 10) === 465);
-        
-        const transporterOptions = {
-            host: process.env.RESEND_SMTP_HOST,
-            port: parseInt(process.env.RESEND_SMTP_PORT || '587', 10),
-            secure: isSecure,
-            auth: {
-                user: process.env.RESEND_SMTP_USER || 'resend',
-                pass: process.env.RESEND_API_KEY
-            },
-            ...commonOptions
-        };
-
-        // NEW: Add SSL options if secure connection is used
-        if (isSecure) {
-            // Explicitly set minimum TLS version to 1.2
-            // This can resolve 'wrong version number' errors with some SMTP servers.
-            transporterOptions.tls = {
-                minVersion: 'TLSv1.2', 
-                // Alternatively, you might try 'TLSv1.3' if 1.2 still fails and the server is modern.
-                // You can also try rejectUnauthorized: false in development if you suspect certificate issues, 
-                // but DO NOT use in production.
-            };
-        }
-
-        return nodemailer.createTransport(transporterOptions);
-    } 
-    // --- Fallback to Generic Production SMTP (e.g., Mailtrap Transactional - using environment variables) ---
-    else if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-        console.log('Resend credentials not found. Falling back to Generic Production SMTP.');
-        const isSecure = process.env.SMTP_SECURE === 'true' || (parseInt(process.env.SMTP_PORT, 10) === 465);
+    // --- Prioritize Mailtrap Transactional SMTP ---
+    // We'll use the generic SMTP_HOST, SMTP_USER, SMTP_PASS for Mailtrap Transactional
+    if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+        console.log('Using Mailtrap Transactional SMTP for email service.');
+        // For Mailtrap's transactional on port 587, secure: false is often the correct setting
+        // as it initiates STARTTLS.
+        const isSecure = false; // Explicitly set to false for Mailtrap 587/STARTTLS
         
         const transporterOptions = {
             host: process.env.SMTP_HOST,
@@ -56,21 +29,22 @@ const createTransporter = () => {
             ...commonOptions
         };
 
-        if (isSecure) {
-            transporterOptions.tls = {
-                minVersion: 'TLSv1.2',
-            };
-        }
+        // Remove tls.minVersion if secure: false, as it's not applicable
+        // if (isSecure) {
+        //     transporterOptions.tls = {
+        //         minVersion: 'TLSv1.2', 
+        //     };
+        // }
 
         return nodemailer.createTransport(transporterOptions);
     } 
     // --- Fallback to Mailtrap Sandbox (for local development/testing) ---
     else {
-        console.warn('Neither Resend nor Generic Production SMTP credentials found. Falling back to Mailtrap Sandbox.');
+        console.warn('Production SMTP credentials not found. Falling back to Mailtrap Sandbox.');
         return nodemailer.createTransport({
             host: 'sandbox.smtp.mailtrap.io',
             port: 2525,
-            secure: false, // Mailtrap sandbox typically uses STARTTLS, so secure: false is correct here
+            secure: false, 
             auth: {
                 user: '2bb9f1220f44a7', // *** REPLACE with your Mailtrap Username ***
                 pass: '5f05229824205f'  // *** REPLACE with your Mailtrap Password ***
@@ -84,7 +58,7 @@ const transporter = createTransporter();
 const FROM_ADDRESS = process.env.EMAIL_FROM_ADDRESS || '"TypeMyworDz" <noreply@typemywordz.com>';
 
 
-// Function to send a welcome email
+// Function to send a welcome email (rest of functions unchanged)
 const sendWelcomeEmail = async (user) => {
     try {
         await transporter.sendMail({
@@ -108,7 +82,6 @@ const sendWelcomeEmail = async (user) => {
     }
 };
 
-// Function to send transcriber test submission email
 const sendTranscriberTestSubmittedEmail = async (user) => {
     try {
         await transporter.sendMail({
@@ -130,7 +103,6 @@ const sendTranscriberTestSubmittedEmail = async (user) => {
     }
 };
 
-// Function to send transcriber test result email (approval/rejection)
 const sendTranscriberTestResultEmail = async (user, status, reason = null) => {
     let subject, htmlContent;
 
@@ -174,7 +146,6 @@ const sendTranscriberTestResultEmail = async (user, status, reason = null) => {
     }
 };
 
-// Function to send new negotiation request email
 const sendNewNegotiationRequestEmail = async (transcriber, client) => {
     try {
         await transporter.sendMail({
@@ -196,7 +167,6 @@ const sendNewNegotiationRequestEmail = async (transcriber, client) => {
     }
 };
 
-// Function to send counter offer email
 const sendCounterOfferEmail = async (client, transcriber, negotiation) => {
     try {
         await transporter.sendMail({
@@ -224,7 +194,6 @@ const sendCounterOfferEmail = async (client, transcriber, negotiation) => {
     }
 };
 
-// Function to send negotiation accepted email
 const sendNegotiationAcceptedEmail = async (client, transcriber, negotiation) => {
     try {
         await transporter.sendMail({
@@ -252,7 +221,6 @@ const sendNegotiationAcceptedEmail = async (client, transcriber, negotiation) =>
     }
 };
 
-// NEW: Function to send payment confirmation email to client and job notification to transcriber
 const sendPaymentConfirmationEmail = async (client, transcriber, negotiation, payment) => {
     try {
         const clientSubject = `Payment Confirmed for Job #${negotiation.id} - TypeMyworDz`;
@@ -314,7 +282,6 @@ const sendPaymentConfirmationEmail = async (client, transcriber, negotiation, pa
     }
 };
 
-// Function to send negotiation rejected email
 const sendNegotiationRejectedEmail = async (user, negotiation, reason) => {
     const recipientName = user.full_name || 'User';
     const recipientEmail = user.email;
