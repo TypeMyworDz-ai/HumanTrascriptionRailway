@@ -38,7 +38,7 @@ const directUploadFileFilter = (req, file, cb) => {
     'image/jpeg',
     'image/jpg',
     'image/png',
-    'image/gif'
+    'image/png'
   ];
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);

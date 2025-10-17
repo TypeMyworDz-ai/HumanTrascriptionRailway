@@ -3,7 +3,7 @@ const cors = require('cors');
 require('dotenv').config();
 const http = require('http');
 const { Server } = require('socket.io');
-const supabase = require('./database');
+const supabase = require('./database'); // Ensure this path is correct, should be ../database if in root
 
 const authRoutes = require('./routes/authRoutes');
 const audioRoutes = require('./routes/audioRoutes');
@@ -86,8 +86,15 @@ io.on('connection', (socket) => {
 });
 
 // Configure Express app with dynamic CORS
-// REMOVED: app.options('*', cors(...));
-// Relying solely on the 'cors' middleware below, which handles OPTIONS requests correctly.
+// Explicitly allow OPTIONS requests (preflight) before any other middleware
+app.options('*', cors({
+  origin: ALLOWED_ORIGINS,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Authorization', 'Content-Type', 'X-Requested-With', 'X-HTTP-Method-Override'],
+  credentials: true
+}));
+
+// Apply CORS middleware globally for all requests
 app.use(cors({
   origin: ALLOWED_ORIGINS,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -98,7 +105,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Debugging middleware to log headers before routes are hit
+// NEW: Debugging middleware to log headers before routes are hit
 app.use((req, res, next) => {
     console.log('--- Incoming Request Debug ---');
     console.log(`Path: ${req.path}`);
@@ -124,7 +131,6 @@ app.use((req, res, next) => {
     };
     next();
 });
-
 
 const transcriberRouter = transcriberRoutes(io);
 const generalApiRouter = generalApiRoutes(io);

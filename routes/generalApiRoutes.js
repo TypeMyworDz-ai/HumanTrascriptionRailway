@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('../database'); // CORRECTED: Changed from '../supabaseClient' to '../database'
+const supabase = require('../database');
 const authMiddleware = require('../middleware/authMiddleware');
 const fs = require('fs');
 
@@ -76,7 +76,7 @@ const {
     takeDirectUploadJob,
     completeDirectUploadJob,
     getAllDirectUploadJobsForAdmin // NEW: Import for admin oversight
-} = require('../controllers/directUploadController'); // NEW: Import direct upload job functions
+} = require('../controllers/directUploadController');
 
 
 module.exports = (io) => {
@@ -340,11 +340,11 @@ module.exports = (io) => {
     if (req.user.userType !== 'client') {
       return res.status(403).json({ error: 'Access denied. Only clients can initiate payments.' });
     }
-    initializePayment(req, res, io); // Pass io for real-time updates
+    initializePayment(req, res, io);
   });
 
   router.get('/payment/verify/:reference', authMiddleware, (req, res, next) => {
-    verifyPayment(req, res, io); // Pass io for real-time updates
+    verifyPayment(req, res, io);
   });
 
   // --- NEW: Transcriber Payment History Route ---
@@ -406,7 +406,7 @@ module.exports = (io) => {
       }
       return res.status(403).json({ error: 'Access denied. Only clients can create direct upload jobs.' });
     }
-    createDirectUploadJob(req, res, io); // Pass io for real-time updates
+    createDirectUploadJob(req, res, io);
   });
 
   router.get('/client/direct-jobs', authMiddleware, (req, res, next) => {

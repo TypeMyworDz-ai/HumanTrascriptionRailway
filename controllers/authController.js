@@ -12,7 +12,7 @@ console.log('[authController.js] FRONTEND_URL:', FRONTEND_URL);
 
 // Register new user
 const registerUser = async (req, res) => {
- console.log('[registerUser] Function called.');
+ console.groupCollapsed('[registerUser] Function called.');
  try {
   const { email, password, full_name, user_type = 'client', phone } = req.body;
 
@@ -56,6 +56,7 @@ const registerUser = async (req, res) => {
   console.log('registerUser: Core user created: ', newUser.id, newUser.email);
 
   // --- SENDING THE WELCOME EMAIL ---
+  // This will now use the emailService, which will fall back to Mailtrap Sandbox if Resend is not configured
   if (newUser && newUser.email) {
     await emailService.sendWelcomeEmail(newUser);
   }
@@ -334,7 +335,7 @@ const updateClientProfile = async (req, res) => {
     const { full_name, phone } = req.body;
     const currentUserId = req.user.userId; // User making the request
 
-    // Ensure the user is updating their own profile or is an admin
+    // Ensure the user is updating their own profile or is an "admin"
     if (userId !== currentUserId && req.user.userType !== 'admin') {
         return res.status(403).json({ error: 'Unauthorized to update this client profile.' });
     }
@@ -441,6 +442,7 @@ const requestPasswordReset = async (req, res) => {
 
         // Send password reset email
         const resetLink = `${FRONTEND_URL}/reset-password?token=${token}`;
+        // This will now use the emailService, which will fall back to Mailtrap Sandbox if Resend is not configured
         await emailService.sendPasswordResetEmail(user, resetLink);
 
         console.log(`[requestPasswordReset] Password reset link sent to ${email}`);
@@ -512,4 +514,4 @@ const resetPassword = async (req, res) => {
     }
 };
 
-module.exports = { registerUser, loginUser, getUserById, requestPasswordReset, resetPassword, updateClientProfile }; // NEW: Export updateClientProfile
+module.exports = { registerUser, loginUser, getUserById, requestPasswordReset, resetPassword, updateClientProfile };
