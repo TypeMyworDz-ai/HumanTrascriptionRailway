@@ -1,6 +1,6 @@
 // backend/controllers/directUploadController.js - CONFIRMED AND UPDATED for 4-star and 5-star transcribers
 
-const supabase = require('../supabaseClient'); // Changed from '../database' to '../supabaseClient' based on previous context
+const supabase = require('../database'); // CORRECTED: Changed from '../supabaseClient' to '../database'
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -318,7 +318,7 @@ const takeDirectUploadJob = async (req, res, io) => {
         if (userError || !transcriberUser) {
             return res.status(404).json({ error: 'Transcriber profile not found.' });
         }
-        if (!transcriberUser.is_online || !transcriberUser.is_available || transcriscriberUser.current_job_id) {
+        if (!transcriberUser.is_online || !transcriberUser.is_available || transcriberUser.current_job_id) {
             return res.status(409).json({ error: 'You are not online, available, or already have an active job.' });
         }
         if (transcriberUser.transcribers?.[0]?.average_rating < 4) {

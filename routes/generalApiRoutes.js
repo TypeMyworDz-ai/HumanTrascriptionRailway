@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('../supabaseClient'); // Changed from '../database' to '../supabaseClient' based on previous context
+const supabase = require('../database'); // CORRECTED: Changed from '../supabaseClient' to '../database'
 const authMiddleware = require('../middleware/authMiddleware');
 const fs = require('fs');
 

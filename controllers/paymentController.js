@@ -1,9 +1,8 @@
-// backend/controllers/paymentController.js - UPDATED with getClientPaymentHistory and 80% Transcriber Pay
-
 const axios = require('axios');
-const supabase = require('../supabaseClient'); // Changed from '../database' to '../supabaseClient' based on previous context
+const supabase = require('../database'); // CORRECTED: Changed from '../supabaseClient' to '../database'
 const { syncAvailabilityStatus } = require('./transcriberController'); // Import syncAvailabilityStatus
 const emailService = require('../emailService'); // For sending payment confirmation emails
+const { calculateTranscriberEarning } = require('../utils/paymentUtils'); // Assuming a utility for this
 
 // Paystack Secret Key from environment variables
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
@@ -270,7 +269,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Server error fetching transcriber payment history:', error);
+        console.error('Server error fetching transcriber payment history: ', error);
         res.status(500).json({ error: 'Server error fetching payment history.' });
     }
 };
