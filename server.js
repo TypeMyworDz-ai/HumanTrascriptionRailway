@@ -1,35 +1,29 @@
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config(); // Load environment variables from .env file
+require('dotenv').config();
 const http = require('http');
 const { Server } = require('socket.io');
 const supabase = require('./database');
 
-// Import routes and controllers
 const authRoutes = require('./routes/authRoutes');
 const audioRoutes = require('./routes/audioRoutes');
 const transcriberRoutes = require('./routes/transcriberRoutes');
 const generalApiRoutes = require('./routes/generalApiRoutes');
-
-// Import setOnlineStatus from transcriberController
 const { setOnlineStatus } = require('./controllers/transcriberController');
 
 const app = express();
-// Use Railway's PORT environment variable or fallback to 5000 for local development
 const PORT = process.env.PORT || 5000;
 
-// Define allowed origins for CORS dynamically
 const ALLOWED_ORIGINS = [
-  'http://localhost:3000', // Frontend local development
-  process.env.CLIENT_URL,   // Vercel Frontend URL (e.g., https://human-transcription-frontend-vercel.vercel.app)
-].filter(Boolean); // Filter out any undefined/null values
+  'http://localhost:3000',
+  process.env.CLIENT_URL,
+].filter(Boolean);
 
 const server = http.createServer(app);
 
-// Configure Socket.IO server with dynamic CORS
 const io = new Server(server, {
   cors: {
-    origin: ALLOWED_ORIGINS, // Use the dynamic origins
+    origin: ALLOWED_ORIGINS,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Authorization", "Content-Type", "X-Requested-With", "X-HTTP-Method-Override"],
     credentials: true
@@ -37,16 +31,12 @@ const io = new Server(server, {
   allowEIO3: true
 });
 
-// NEW: Socket.IO Connection and Disconnection Logic for is_online status
 io.on('connection', (socket) => {
   const userId = socket.handshake.query.userId;
   console.log(`User connected via WebSocket: ${socket.id} (User ID: ${userId || 'N/A'})`);
 
   if (userId) {
-    // Store userId on the socket for later use on disconnect
     socket.userId = userId;
-
-    // Check if this user is a transcriber and set them online
     supabase.from('users').select('user_type').eq('id', userId).single()
       .then(({ data, error }) => {
         if (error) {
@@ -72,11 +62,9 @@ io.on('connection', (socket) => {
     console.warn(`Socket connected without a userId in query. Socket ID: ${socket.id}`);
   }
 
-
   socket.on('disconnect', (reason) => {
     console.log(`User disconnected from WebSocket: ${socket.id} (Reason: ${reason})`);
     if (socket.userId) {
-      // Set transcriber offline on disconnect
       supabase.from('users').select('user_type').eq('id', socket.userId).single()
         .then(({ data, error }) => {
           if (error) {
@@ -92,16 +80,14 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle errors on the socket
   socket.on('error', (error) => {
     console.error(`Socket error for ${socket.id}:`, error);
   });
 });
 
-
 // Configure Express app with dynamic CORS
 app.use(cors({
-  origin: ALLOWED_ORIGINS, // Use the dynamic origins
+  origin: ALLOWED_ORIGINS,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type', 'X-Requested-With', 'X-HTTP-Method-Override'],
   credentials: true
@@ -109,7 +95,24 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Pass the io instance to your router setup functions
+// NEW: Explicitly set CORS headers for all responses and log them
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (ALLOWED_ORIGINS.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        console.log(`CORS: Setting Access-Control-Allow-Origin to ${origin} for request to ${req.path}`);
+    } else {
+        console.warn(`CORS: Request from disallowed origin ${origin} to ${req.path}`);
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Requested-With, X-HTTP-Method-Override');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    next();
+});
+
 const transcriberRouter = transcriberRoutes(io);
 const generalApiRouter = generalApiRoutes(io);
 
@@ -119,7 +122,6 @@ app.use('/api/auth', authRoutes);
 app.use('/api/audio', audioRoutes);
 app.use('/api', generalApiRouter);
 
-// Test database connection
 app.get('/test-db', async (req, res) => {
   try {
     const { data, error } = await supabase.from('users').select('*').limit(1);
@@ -130,7 +132,6 @@ app.get('/test-db', async (req, res) => {
   }
 });
 
-// Basic route for testing
 app.get('/', (req, res) => {
   res.json({ message: 'Human Transcription API is running!' });
 });
