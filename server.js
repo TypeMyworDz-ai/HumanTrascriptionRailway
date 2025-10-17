@@ -12,7 +12,7 @@ const generalApiRoutes = require('./routes/generalApiRoutes');
 const { setOnlineStatus } = require('./controllers/transcriberController');
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000; // Render typically uses port 10000
 
 const ALLOWED_ORIGINS = [
   'http://localhost:3000',
@@ -86,6 +86,8 @@ io.on('connection', (socket) => {
 });
 
 // Configure Express app with dynamic CORS
+// Removed the custom app.use((req, res, next) => { ... }) block
+// Relying solely on the 'cors' middleware which is robust
 app.use(cors({
   origin: ALLOWED_ORIGINS,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -94,24 +96,6 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// NEW: Explicitly set CORS headers for all responses and log them
-app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    if (ALLOWED_ORIGINS.includes(origin)) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        console.log(`CORS: Setting Access-Control-Allow-Origin to ${origin} for request to ${req.path}`);
-    } else {
-        console.warn(`CORS: Request from disallowed origin ${origin} to ${req.path}`);
-    }
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Requested-With, X-HTTP-Method-Override');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
-    }
-    next();
-});
 
 const transcriberRouter = transcriberRoutes(io);
 const generalApiRouter = generalApiRoutes(io);
