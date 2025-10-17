@@ -1,46 +1,32 @@
-// backend/emailService.js - UPDATED for Resend SMTP with fallback
+// backend/emailService.js - TEMPORARILY UPDATED with hardcoded Resend for debugging ETIMEDOUT
 
 const nodemailer = require('nodemailer');
 
-// Configure transporter based on environment variables
+// --- HARDCODED RESEND CREDENTIALS FOR DEBUGGING ---
+// !!! WARNING: This is a temporary measure for debugging. !!!
+// !!! DO NOT deploy to production with hardcoded credentials. !!!
+const HARDCODED_RESEND_API_KEY = 're_WtQHEDZu_LLqWMzR9XyAvt69ahYnjKpKr'; // <<< REPLACE THIS
+const HARDCODED_RESEND_SMTP_HOST = 'smtp.resend.com';
+const HARDCODED_RESEND_SMTP_PORT = 587;
+const HARDCODED_RESEND_SMTP_USER = 'resend';
+const HARDCODED_RESEND_SMTP_SECURE = true; // true for TLS on 587
+
+const HARDCODED_FROM_ADDRESS = '"TypeMyworDz" <noreply@typemywordz.com>'; // <<< REPLACE WITH YOUR VERIFIED SENDER EMAIL
+// --- END HARDCODED SECTION ---
+
+
+// Configure transporter based on environment variables (or hardcoded for debugging)
 const createTransporter = () => {
-    // Common Nodemailer options for all transporters
     const commonOptions = {
         connectionTimeout: 15000, // milliseconds
         socketTimeout: 10000 // milliseconds
     };
 
-    // --- Prioritize Resend SMTP ---
-    if (process.env.RESEND_API_KEY && process.env.RESEND_SMTP_HOST) {
-        console.log('Using Resend SMTP for email service.');
-        return nodemailer.createTransport({
-            host: process.env.RESEND_SMTP_HOST,
-            port: parseInt(process.env.RESEND_SMTP_PORT || '587', 10),
-            secure: process.env.RESEND_SMTP_SECURE === 'true' || (parseInt(process.env.RESEND_SMTP_PORT, 10) === 465),
-            auth: {
-                user: process.env.RESEND_SMTP_USER || 'resend', // Resend often uses 'resend' or 'apikey' as the username
-                pass: process.env.RESEND_API_KEY // Your Resend API Key
-            },
-            ...commonOptions
-        });
-    } 
-    // --- Fallback to Generic Production SMTP (e.g., Mailtrap Transactional) ---
-    else if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-        console.log('Resend credentials not found. Falling back to Generic Production SMTP.');
-        return nodemailer.createTransport({
-            host: process.env.SMTP_HOST,
-            port: parseInt(process.env.SMTP_PORT || '587', 10),
-            secure: process.env.SMTP_SECURE === 'true' || (parseInt(process.env.SMTP_PORT, 10) === 465),
-            auth: {
-                user: process.env.SMTP_USER,
-                pass: process.env.SMTP_PASS
-            },
-            ...commonOptions
-        });
-    } 
-    // --- Fallback to Mailtrap Sandbox (for local development/testing) ---
-    else {
-        console.warn('Neither Resend nor Generic Production SMTP credentials found. Falling back to Mailtrap Sandbox.');
+    // For debugging, we'll bypass environment variables and use hardcoded values
+    if (HARDCODED_RESEND_API_KEY === 'YOUR_ACTUAL_RESEND_API_KEY_HERE' || HARDCODED_FROM_ADDRESS === '"TypeMyworDz" <noreply@typemywordz.com>') {
+        console.error('!!! WARNING: Resend credentials are still placeholders in emailService.js. Please update them. !!!');
+        // Fallback to Mailtrap Sandbox if hardcoded values are not set (for safety during development)
+        console.warn('Falling back to Mailtrap Sandbox due to unset hardcoded Resend credentials.');
         return nodemailer.createTransport({
             host: 'sandbox.smtp.mailtrap.io',
             port: 2525,
@@ -52,10 +38,23 @@ const createTransporter = () => {
             ...commonOptions
         });
     }
+
+
+    console.log('Using HARDCODED Resend SMTP for email service debugging.');
+    return nodemailer.createTransport({
+        host: HARDCODED_RESEND_SMTP_HOST,
+        port: HARDCODED_RESEND_SMTP_PORT,
+        secure: HARDCODED_RESEND_SMTP_SECURE,
+        auth: {
+            user: HARDCODED_RESEND_SMTP_USER,
+            pass: HARDCODED_RESEND_API_KEY
+        },
+        ...commonOptions
+    });
 };
 
 const transporter = createTransporter();
-const FROM_ADDRESS = process.env.EMAIL_FROM_ADDRESS || '"TypeMyworDz" <noreply@typemywordz.com>';
+const FROM_ADDRESS = HARDCODED_FROM_ADDRESS; // Use hardcoded FROM_ADDRESS for consistency
 
 
 // Function to send a welcome email
