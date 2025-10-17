@@ -86,15 +86,7 @@ io.on('connection', (socket) => {
 });
 
 // Configure Express app with dynamic CORS
-// Explicitly allow OPTIONS requests (preflight) before any other middleware
-app.options('*', cors({
-  origin: ALLOWED_ORIGINS,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Authorization', 'Content-Type', 'X-Requested-With', 'X-HTTP-Method-Override'],
-  credentials: true
-}));
-
-// Apply CORS middleware globally for all requests
+// The app.options('*', cors(...)) middleware was removed, as app.use(cors(...)) handles preflights.
 app.use(cors({
   origin: ALLOWED_ORIGINS,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -131,6 +123,7 @@ app.use((req, res, next) => {
     };
     next();
 });
+
 
 const transcriberRouter = transcriberRoutes(io);
 const generalApiRouter = generalApiRoutes(io);
