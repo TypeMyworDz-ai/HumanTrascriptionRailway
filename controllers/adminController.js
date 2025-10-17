@@ -1,7 +1,5 @@
-// backend/controllers/adminController.js - Part 1 - UPDATED for getUserByIdForAdmin debugging
-
 const supabase = require('../database');
-const emailService = require('../emailService'); // Assuming this path is correct
+const emailService = require('../emailService');
 
 // --- Admin Statistics ---
 
@@ -37,11 +35,10 @@ const getActiveJobsCount = async (req, res) => {
 
 const getOpenDisputesCount = async (req, res) => {
     try {
-        // Assuming a 'disputes' table and a 'status' column for open/closed
         const { count, error } = await supabase
             .from('disputes')
             .select('*', { count: 'exact', head: true })
-            .eq('status', 'open'); // Or 'pending', depending on your schema
+            .eq('status', 'open');
 
         if (error) throw error;
         res.json({ count });
@@ -135,7 +132,6 @@ const approveTranscriberTest = async (req, res) => {
 
         if (submissionUpdateError) throw submissionUpdateError;
 
-        // Update the transcriber's profile status to 'active_transcriber'
         const { error: transcriberProfileError } = await supabase
             .from('transcribers')
             .update({ status: 'active_transcriber', updated_at: new Date().toISOString() })
@@ -143,7 +139,6 @@ const approveTranscriberTest = async (req, res) => {
 
         if (transcriberProfileError) throw transcriberProfileError;
 
-        // NEW: Update the user's main profile status as well
         const { error: userStatusError } = await supabase
             .from('users')
             .update({ status: 'active_transcriber', updated_at: new Date().toISOString() })
@@ -151,7 +146,6 @@ const approveTranscriberTest = async (req, res) => {
 
         if (userStatusError) console.error('Error updating user status after test approval:', userStatusError);
 
-        // Fetch user details for email
         const { data: userDetails, error: userDetailsError } = await supabase
             .from('users')
             .select('full_name, email')
@@ -161,7 +155,7 @@ const approveTranscriberTest = async (req, res) => {
         if (userDetailsError) console.error('Error fetching user details for approval email:', userDetailsError);
 
         if (userDetails) {
-            await emailService.sendTranscriberTestResultEmail(userDetails, 'approved'); // FIXED: Use sendTranscriberTestResultEmail
+            await emailService.sendTranscriberTestResultEmail(userDetails, 'approved');
         }
 
         res.json({ message: 'Transcriber test approved successfully.' });
@@ -183,7 +177,6 @@ const rejectTranscriberTest = async (req, res) => {
 
         if (submissionUpdateError) throw submissionUpdateError;
 
-        // Update the transcriber's profile status to 'rejected'
         const { error: transcriberProfileError } = await supabase
             .from('transcribers')
             .update({ status: 'rejected', updated_at: new Date().toISOString() })
@@ -191,7 +184,6 @@ const rejectTranscriberTest = async (req, res) => {
 
         if (transcriberProfileError) throw transcriberProfileError;
 
-        // NEW: Update the user's main profile status as well
         const { error: userStatusError } = await supabase
             .from('users')
             .update({ status: 'rejected', updated_at: new Date().toISOString() })
@@ -199,7 +191,6 @@ const rejectTranscriberTest = async (req, res) => {
 
         if (userStatusError) console.error('Error updating user status after test rejection:', userStatusError);
 
-        // Fetch user details for email
         const { data: userDetails, error: userDetailsError } = await supabase
             .from('users')
             .select('full_name, email')
@@ -209,7 +200,7 @@ const rejectTranscriberTest = async (req, res) => {
         if (userDetailsError) console.error('Error fetching user details for rejection email:', userDetailsError);
 
         if (userDetails) {
-            await emailService.sendTranscriberTestResultEmail(userDetails, 'rejected', reason); // FIXED: Use sendTranscriberTestResultEmail
+            await emailService.sendTranscriberTestResultEmail(userDetails, 'rejected', reason);
         }
 
         res.json({ message: 'Transcriber test rejected successfully.' });
@@ -223,7 +214,7 @@ const rejectTranscriberTest = async (req, res) => {
 
 const getAllUsersForAdmin = async (req, res) => {
     try {
-        const { search } = req.query; // Get search term from query parameters
+        const { search } = req.query;
         let query = supabase.from('users').select('id, full_name, email, user_type, created_at');
 
         if (search) {
@@ -263,7 +254,7 @@ const getUserByIdForAdmin = async (req, res) => {
                     badges
                 ),
                 clients (
-                    client_rating
+                    average_rating // CORRECTED: Changed from 'client_rating' to 'average_rating'
                 )
             `)
             .eq('id', userId)
@@ -278,15 +269,13 @@ const getUserByIdForAdmin = async (req, res) => {
             return res.status(404).json({ error: 'User not found.' });
         }
 
-        // Flatten the data for easier consumption on the frontend
         const formattedUser = {
             ...user,
-            // Safely access array elements for one-to-one relationships
             transcriber_profile: user.transcribers?.[0] || null,
             client_profile: user.clients?.[0] || null,
         };
-        delete formattedUser.transcribers; // Clean up raw nested arrays
-        delete formattedUser.clients; // Clean up raw nested arrays
+        delete formattedUser.transcribers;
+        delete formattedUser.clients;
 
         console.log(`[getUserByIdForAdmin] Successfully fetched and formatted user: ${userId}`);
         res.json({ user: formattedUser });
@@ -322,7 +311,7 @@ const getAdminSettings = async (req, res) => {
             .select('default_price_per_minute, default_deadline_hours')
             .single();
 
-        if (error && error.code === 'PGRST116') { // No rows found, return defaults
+        if (error && error.code === 'PGRST116') {
             return res.json({
                 settings: {
                     default_price_per_minute: 0.00,
@@ -350,7 +339,7 @@ const updateAdminSettings = async (req, res) => {
                 default_deadline_hours: default_deadline_hours,
                 updated_at: new Date().toISOString(),
             })
-            .limit(1) // Ensure only one row is affected
+            .limit(1)
             .select();
 
         if (error) throw error;
@@ -397,11 +386,10 @@ const getAllJobsForAdmin = async (req, res) => {
 
         if (error) throw error;
 
-        // Flatten the client and transcriber names for easier frontend consumption
         const jobs = negotiations.map(n => ({
             ...n,
-            client: n.client || { full_name: 'Unknown Client' }, // Ensure client object exists
-            transcriber: n.transcriber || { full_name: 'Unassigned' } // Ensure transcriber object exists
+            client: n.client || { full_name: 'Unknown Client' },
+            transcriber: n.transcriber || { full_name: 'Unassigned' }
         }));
 
         res.json({ jobs });
@@ -436,7 +424,6 @@ const getAllDisputesForAdmin = async (req, res) => {
 
         if (error) throw error;
 
-        // Flatten client and transcriber names
         const formattedDisputes = disputes.map(d => ({
             ...d,
             client: d.client || { full_name: 'Unknown Client' },
@@ -449,7 +436,6 @@ const getAllDisputesForAdmin = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
-// backend/controllers/adminController.js - Part 2 - UPDATED with getAllDisputesForAdmin (Continue from Part 1)
 
 module.exports = {
     getPendingTranscriberTestsCount,
