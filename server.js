@@ -12,19 +12,16 @@ const transcriberRoutes = require('./routes/transcriberRoutes');
 const generalApiRoutes = require('./routes/generalApiRoutes');
 
 // Import setOnlineStatus from transcriberController
-const { setOnlineStatus } = require('./controllers/transcriberController'); // NEW: Import setOnlineStatus
+const { setOnlineStatus } = require('./controllers/transcriberController');
 
 const app = express();
 // Use Railway's PORT environment variable or fallback to 5000 for local development
 const PORT = process.env.PORT || 5000;
 
 // Define allowed origins for CORS dynamically
-// For local development, it will be 'http://localhost:3000'
-// For Railway/Vercel, these will be set as environment variables
 const ALLOWED_ORIGINS = [
   'http://localhost:3000', // Frontend local development
-  process.env.CLIENT_URL,   // Vercel Frontend URL (e.g., https://your-frontend.vercel.app)
-  process.env.RAILWAY_BACKEND_URL // Railway Backend URL (e.g., https://your-backend.up.railway.app)
+  process.env.CLIENT_URL,   // Vercel Frontend URL (e.g., https://human-transcription-frontend-vercel.vercel.app)
 ].filter(Boolean); // Filter out any undefined/null values
 
 const server = http.createServer(app);
@@ -50,9 +47,6 @@ io.on('connection', (socket) => {
     socket.userId = userId;
 
     // Check if this user is a transcriber and set them online
-    // This assumes `is_online` is false by default in DB for new/logged out users
-    // and `authController.js` sets it to true on login.
-    // We re-confirm here, or ensure they are online if they just connected.
     supabase.from('users').select('user_type').eq('id', userId).single()
       .then(({ data, error }) => {
         if (error) {
@@ -144,7 +138,7 @@ app.get('/', (req, res) => {
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   console.log('Socket.IO is listening for connections.');
-  console.log('Allowed CORS Origins:', ALLOWED_ORIGINS); // Log for debugging
+  console.log('Allowed CORS Origins:', ALLOWED_ORIGINS);
 });
 
 module.exports = { io, server, app };
