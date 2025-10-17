@@ -4,6 +4,7 @@ require('dotenv').config();
 const http = require('http');
 const { Server } = require('socket.io');
 const supabase = require('./database'); // Ensure this path is correct, should be ../database if in root
+const path = require('path'); // NEW: Import path module
 
 const authRoutes = require('./routes/authRoutes');
 const audioRoutes = require('./routes/audioRoutes');
@@ -86,7 +87,6 @@ io.on('connection', (socket) => {
 });
 
 // Configure Express app with dynamic CORS
-// The app.options('*', cors(...)) middleware was removed, as app.use(cors(...)) handles preflights.
 app.use(cors({
   origin: ALLOWED_ORIGINS,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -97,7 +97,14 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// NEW: Debugging middleware to log headers before routes are hit
+// NEW: Serve static files from the 'uploads' directory
+// This will make files under 'backend/uploads' accessible via '/uploads' URL path.
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Example: A file at backend/uploads/negotiation_files/audio.mp3
+// will be accessible at YOUR_RENDER_BACKEND_URL/uploads/negotiation_files/audio.mp3
+
+
+// Debugging middleware to log headers before routes are hit
 app.use((req, res, next) => {
     console.log('--- Incoming Request Debug ---');
     console.log(`Path: ${req.path}`);
