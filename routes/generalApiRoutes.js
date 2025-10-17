@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('../database');
+const supabase = require('../supabaseClient'); // Changed from '../database' to '../supabaseClient' based on previous context
 const authMiddleware = require('../middleware/authMiddleware');
 const fs = require('fs');
 
@@ -50,7 +50,8 @@ const {
     initializePayment,
     verifyPayment,
     getTranscriberPaymentHistory,
-    getClientPaymentHistory
+    getClientPaymentHistory,
+    getAllPaymentHistoryForAdmin // NEW: Import for admin oversight
 } = require('../controllers/paymentController');
 
 // NEW: Import rating controller functions
@@ -59,7 +60,24 @@ const {
     rateClientByAdmin,
     getTranscriberRatings,
     getClientRating
-} = require('../controllers/ratingController'); // NEW: Import rating functions
+} = require('../controllers/ratingController');
+
+// NEW: Import updateTranscriberProfile from transcriberController
+const { updateTranscriberProfile } = require('../controllers/transcriberController');
+// NEW: Import updateClientProfile from authController
+const { updateClientProfile } = require('../controllers/authController');
+
+// NEW: Import functions from directUploadController.js
+const {
+    uploadDirectFiles,
+    createDirectUploadJob,
+    getDirectUploadJobsForClient,
+    getAvailableDirectUploadJobsForTranscriber,
+    takeDirectUploadJob,
+    completeDirectUploadJob,
+    getAllDirectUploadJobsForAdmin // NEW: Import for admin oversight
+} = require('../controllers/directUploadController'); // NEW: Import direct upload job functions
+
 
 module.exports = (io) => {
     // Socket.IO Connection Handling (This listener is primarily for room joining now)
@@ -151,6 +169,26 @@ module.exports = (io) => {
       res.status(500).json({ error: 'Server error updating availability status' });
     }
   });
+
+  // NEW: Transcriber Profile Update Route
+  router.put('/transcriber-profile/:userId', authMiddleware, (req, res, next) => {
+    // Only transcribers (for their own profile) or admins can update transcriber profile
+    if (req.user.userType !== 'transcriber' && req.user.userType !== 'admin') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers or admins can update transcriber profiles.' });
+    }
+    // The controller will handle further authorization (user updating own vs admin updating another)
+    updateTranscriberProfile(req, res, next);
+  });
+
+  // NEW: Client Profile Update Route
+  router.put('/client-profile/:userId', authMiddleware, (req, res, next) => {
+    // Only clients (for their own profile) or admins can update client profile
+    if (req.user.userType !== 'client' && req.user.userType !== 'admin') {
+      return res.status(403).json({ error: 'Access denied. Only clients or admins can update client profiles.' });
+    }
+    // The controller will handle further authorization (user updating own vs admin updating another)
+    updateClientProfile(req, res, next);
+  });
 
   // --- Admin Statistics Routes ---
   router.get('/admin/stats/pending-tests', authMiddleware, (req, res, next) => {
@@ -290,7 +328,6 @@ module.exports = (io) => {
       getAllJobsForAdmin(req, res, next);
   });
 
-  // --- NEW: Admin Disputes Route ---
   router.get('/admin/disputes/all', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can view all disputes.' });
@@ -326,6 +363,14 @@ module.exports = (io) => {
     getClientPaymentHistory(req, res, next);
   });
 
+  // NEW: Admin Payment History Route
+  router.get('/admin/payments', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'admin') {
+      return res.status(403).json({ error: 'Access denied. Only admins can view all payment history.' });
+    }
+    getAllPaymentHistoryForAdmin(req, res, next);
+  });
+
   // --- NEW: Rating Routes ---
   router.post('/ratings/transcriber', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'client') {
@@ -342,16 +387,66 @@ module.exports = (io) => {
   });
 
   router.get('/ratings/transcriber/:transcriberId', authMiddleware, (req, res, next) => {
-    // Both client and admin might view transcriber ratings
-    // The controller will handle fetching based on the :transcriberId
     getTranscriberRatings(req, res, next);
   });
 
   router.get('/ratings/client/:clientId', authMiddleware, (req, res, next) => {
-    // Both transcriber and admin might view client ratings
-    // The controller will handle fetching based on the :clientId
     getClientRating(req, res, next);
   });
+
+  // --- NEW: Direct Upload Job Routes ---
+  router.post('/direct-upload/job', authMiddleware, uploadDirectFiles, async (req, res, next) => {
+    if (req.user.userType !== 'client') {
+      // If client is not authorized, delete any uploaded files
+      if (req.files?.audioVideoFile?.[0]) {
+        await fs.promises.unlink(req.files.audioVideoFile[0].path);
+      }
+      if (req.files?.instructionFiles?.length > 0) {
+        await Promise.all(req.files.instructionFiles.map(file => fs.promises.unlink(file.path)));
+      }
+      return res.status(403).json({ error: 'Access denied. Only clients can create direct upload jobs.' });
+    }
+    createDirectUploadJob(req, res, io); // Pass io for real-time updates
+  });
+
+  router.get('/client/direct-jobs', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+      return res.status(403).json({ error: 'Access denied. Only clients can view their direct upload jobs.' });
+    }
+    getDirectUploadJobsForClient(req, res, next);
+  });
+
+  router.get('/transcriber/direct-jobs/available', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can view available direct upload jobs.' });
+    }
+    // The controller will further filter by rating
+    getAvailableDirectUploadJobsForTranscriber(req, res, next);
+  });
+
+  router.put('/transcriber/direct-jobs/:jobId/take', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can take direct upload jobs.' });
+    }
+    // The controller will further filter by rating and availability
+    takeDirectUploadJob(req, res, io);
+  });
+
+  router.put('/transcriber/direct-jobs/:jobId/complete', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can complete direct upload jobs.' });
+    }
+    completeDirectUploadJob(req, res, io);
+  });
+
+  // NEW: Admin Direct Upload Jobs History Route
+  router.get('/admin/direct-upload-jobs', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'admin') {
+      return res.status(403).json({ error: 'Access denied. Only admins can view all direct upload jobs.' });
+    }
+    getAllDirectUploadJobsForAdmin(req, res, next);
+  });
+
 
   return router;
 };

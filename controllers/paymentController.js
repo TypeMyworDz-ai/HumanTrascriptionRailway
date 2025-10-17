@@ -1,7 +1,7 @@
-// backend/controllers/paymentController.js - UPDATED with getClientPaymentHistory
+// backend/controllers/paymentController.js - UPDATED with getClientPaymentHistory and 80% Transcriber Pay
 
 const axios = require('axios');
-const supabase = require('../database');
+const supabase = require('../supabaseClient'); // Changed from '../database' to '../supabaseClient' based on previous context
 const { syncAvailabilityStatus } = require('./transcriberController'); // Import syncAvailabilityStatus
 const emailService = require('../emailService'); // For sending payment confirmation emails
 
@@ -154,6 +154,9 @@ const verifyPayment = async (req, res, io) => {
             return res.status(200).json({ message: 'Payment already processed and job already hired.' });
         }
 
+        // Calculate transcriber's pay (80% of client's payment)
+        const transcriberPayAmount = parseFloat((transaction.amount / 100 * 0.8).toFixed(2)); // 80%
+
         // Record payment
         const { data: paymentRecord, error: paymentError } = await supabase
             .from('payments')
@@ -161,7 +164,8 @@ const verifyPayment = async (req, res, io) => {
                 negotiation_id: negotiationId,
                 client_id: metadataClientId,
                 transcriber_id: metadataTranscriberId,
-                amount: transaction.amount / 100,
+                amount: transaction.amount / 100, // Full amount paid by client
+                transcriber_earning: transcriberPayAmount, // NEW: Transcriber's 80% share
                 currency: transaction.currency,
                 paystack_reference: transaction.reference,
                 paystack_status: transaction.status,
@@ -246,17 +250,15 @@ const getTranscriberPaymentHistory = async (req, res) => {
             return res.status(500).json({ error: error.message });
         }
 
-        // Calculate totals
-        const totalEarnings = payments.reduce((sum, p) => sum + p.amount, 0);
+        // Calculate totals based on transcriber_earning
+        const totalEarnings = payments.reduce((sum, p) => sum + p.transcriber_earning, 0); // Use transcriber_earning
         const currentMonth = new Date().getMonth();
         const currentYear = new Date().getFullYear();
 
         const monthlyEarnings = payments.filter(p => {
             const date = new Date(p.transaction_date);
             return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
-        }).reduce((sum, p) => sum + p.amount, 0);
-
-        // You can add more complex weekly/yearly calculations here if needed
+        }).reduce((sum, p) => sum + p.transcriber_earning, 0); // Use transcriber_earning
 
         res.status(200).json({
             message: 'Transcriber payment history retrieved successfully.',
@@ -264,7 +266,6 @@ const getTranscriberPaymentHistory = async (req, res) => {
             summary: {
                 totalEarnings: totalEarnings,
                 monthlyEarnings: monthlyEarnings,
-                // Add other summaries here
             }
         });
 
@@ -294,7 +295,7 @@ const getClientPaymentHistory = async (req, res) => {
             return res.status(500).json({ error: error.message });
         }
 
-        // Calculate totals
+        // Calculate totals based on full amount paid by client
         const totalPayments = payments.reduce((sum, p) => sum + p.amount, 0);
         const currentMonth = new Date().getMonth();
         const currentYear = new Date().getFullYear();
@@ -319,10 +320,40 @@ const getClientPaymentHistory = async (req, res) => {
     }
 };
 
+/**
+ * @route GET /api/admin/payments
+ * @desc Admin can view all payment transactions
+ * @access Private (Admin only)
+ */
+const getAllPaymentHistoryForAdmin = async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('payments')
+      .select(`
+        *,
+        client:users!client_id(full_name, email),
+        transcriber:users!transcriber_id(full_name, email),
+        negotiation:negotiations(requirements, deadline_hours)
+      `)
+      .order('transaction_date', { ascending: false });
+
+    if (error) {
+        console.error('Error fetching all payment history for admin:', error);
+        return res.status(500).json({ error: error.message });
+    }
+
+    return res.status(200).json(data);
+  } catch (error) {
+    console.error('Server error fetching all payment history for admin:', error);
+    return res.status(500).json({ error: 'Failed to fetch all payment history for admin.' });
+  }
+};
+
 
 module.exports = {
     initializePayment,
     verifyPayment,
     getTranscriberPaymentHistory,
-    getClientPaymentHistory // NEW: Export client payment history function
+    getClientPaymentHistory,
+    getAllPaymentHistoryForAdmin // Export the new function
 };

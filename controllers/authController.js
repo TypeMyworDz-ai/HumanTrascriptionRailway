@@ -273,7 +273,7 @@ const getUserById = async (req, res) => {
 
   let profileData = {};
   if (user.user_type === 'client') {
-   console.log('getUserById: Fetching client profile for user ID:', user.id);
+   console.log('getUserById: Fetching client profile for user ID: ', user.id);
    const { data: clientProfile, error: clientProfileError } = await supabase
      .from('clients')
      .select('phone, average_rating') // FIXED: Select average_rating
@@ -327,6 +327,70 @@ const getUserById = async (req, res) => {
   console.groupEnd();
  }
 };
+
+// NEW: Function for clients to update their profile (full_name, phone)
+const updateClientProfile = async (req, res) => {
+    const { userId } = req.params;
+    const { full_name, phone } = req.body;
+    const currentUserId = req.user.userId; // User making the request
+
+    // Ensure the user is updating their own profile or is an admin
+    if (userId !== currentUserId && req.user.userType !== 'admin') {
+        return res.status(403).json({ error: 'Unauthorized to update this client profile.' });
+    }
+
+    try {
+        const userUpdateData = { updated_at: new Date().toISOString() };
+        if (full_name !== undefined) userUpdateData.full_name = full_name;
+
+        // Update users table for full_name
+        const { error: userError } = await supabase
+            .from('users')
+            .update(userUpdateData)
+            .eq('id', userId)
+            .eq('user_type', 'client'); // Ensure only clients can be updated this way
+
+        if (userError) throw userError;
+
+        const clientProfileUpdateData = { updated_at: new Date().toISOString() };
+        if (phone !== undefined) clientProfileUpdateData.phone = phone;
+
+        // Update clients table for phone
+        const { data: clientProfile, error: clientProfileError } = await supabase
+            .from('clients')
+            .update(clientProfileUpdateData)
+            .eq('id', userId)
+            .select('id, phone, average_rating') // Select relevant fields to return
+            .single();
+
+        if (clientProfileError) throw clientProfileError;
+        if (!clientProfile) return res.status(404).json({ error: 'Client profile not found.' });
+
+        // Fetch updated user data to combine
+        const { data: updatedUser, error: fetchUpdatedUserError } = await supabase
+            .from('users')
+            .select('id, full_name, email, user_type, last_login, created_at, is_online, is_available')
+            .eq('id', userId)
+            .single();
+
+        if (fetchUpdatedUserError) throw fetchUpdatedUserError;
+        if (!updatedUser) return res.status(404).json({ error: 'User not found after update.' });
+
+        // Combine updated user and client profile data
+        const fullUserObject = { ...updatedUser, ...clientProfile, client_rating: clientProfile.average_rating };
+        delete fullUserObject.average_rating; // Clean up redundant field
+
+        res.status(200).json({
+            message: 'Client profile updated successfully.',
+            user: fullUserObject
+        });
+
+    } catch (error) {
+        console.error('Error updating client profile:', error);
+        res.status(500).json({ error: 'Server error updating client profile.' });
+    }
+};
+
 
 // NEW: Password Reset Request function
 const requestPasswordReset = async (req, res) => {
@@ -448,4 +512,4 @@ const resetPassword = async (req, res) => {
     }
 };
 
-module.exports = { registerUser, loginUser, getUserById, requestPasswordReset, resetPassword };
+module.exports = { registerUser, loginUser, getUserById, requestPasswordReset, resetPassword, updateClientProfile }; // NEW: Export updateClientProfile

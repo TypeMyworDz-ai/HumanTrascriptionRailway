@@ -1,9 +1,10 @@
-// backend/controllers/transcriberController.js - Part 1 - UPDATED for simplified online/availability logic
+// backend/controllers/transcriberController.js - Part 1 - UPDATED for simplified online/availability logic and Transcriber Payment Details Update
 
 const supabase = require('../database');
 const path = require('path');
 const fs = require('fs');
 const emailService = require('../emailService'); // Make sure this path is correct
+const { updateAverageRating } = require('./ratingController'); // NEW: Import updateAverageRating (if not already)
 
 // Utility function to sync availability status between tables
 const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) => {
@@ -124,7 +125,7 @@ const checkTestStatus = async (req, res) => {
     // IMPORTANT FIX: Fetch status and user_level from the 'transcribers' table
     const { data: transcriberProfile, error: profileError } = await supabase
       .from('transcribers') // Query 'transcribers' table
-      .select('status, user_level')
+      .select('status, user_level, mpesa_number, paypal_email') // NEW: Select mpesa_number and paypal_email
       .eq('id', userId) // The 'id' in transcribers table is the user's ID
       .single();
 
@@ -146,6 +147,8 @@ const checkTestStatus = async (req, res) => {
     res.json({
       user_status: transcriberProfile.status, // Get from transcriber profile
       user_level: transcriberProfile.user_level, // Get from transcriber profile
+      mpesa_number: transcriberProfile.mpesa_number, // NEW: Include in response
+      paypal_email: transcriberProfile.paypal_email, // NEW: Include in response
       test_submission: testSubmission || null, // CRITICAL FIX: Ensure it's null if not found
       has_submitted_test: !!testSubmission
     });
@@ -516,6 +519,44 @@ const completeJob = async (req, res, next, io) => {
     }
 };
 
+// NEW: Function for transcribers to update their profile (including payment details)
+const updateTranscriberProfile = async (req, res) => {
+    const { userId } = req.params;
+    const { mpesa_number, paypal_email } = req.body;
+    const currentUserId = req.user.userId; // User making the request
+
+    // Ensure the user is updating their own profile or is an admin
+    if (userId !== currentUserId && req.user.userType !== 'admin') {
+        return res.status(403).json({ error: 'Unauthorized to update this transcriber profile.' });
+    }
+
+    try {
+        const updateData = { updated_at: new Date().toISOString() };
+        if (mpesa_number !== undefined) updateData.mpesa_number = mpesa_number;
+        if (paypal_email !== undefined) updateData.paypal_email = paypal_email;
+
+        const { data, error } = await supabase
+            .from('transcribers')
+            .update(updateData)
+            .eq('id', userId)
+            .select('id, mpesa_number, paypal_email, average_rating, completed_jobs, badges, user_level, status') // Select relevant fields to return
+            .single();
+
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Transcriber profile not found.' });
+
+        res.status(200).json({
+            message: 'Transcriber profile updated successfully.',
+            profile: data
+        });
+
+    } catch (error) {
+        console.error('Error updating transcriber profile:', error);
+        res.status(500).json({ error: 'Server error updating transcriber profile.' });
+    }
+};
+
+
 module.exports = {
   submitTest,
   checkTestStatus,
@@ -526,5 +567,6 @@ module.exports = {
   counterNegotiation,
   completeJob, // NEW: Added completeJob function
   syncAvailabilityStatus, // NEW: Export utility function for other controllers to use
-  setOnlineStatus // NEW: Export the setOnlineStatus function
+  setOnlineStatus, // NEW: Export the setOnlineStatus function
+  updateTranscriberProfile // NEW: Export updateTranscriberProfile
 };
