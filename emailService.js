@@ -1,4 +1,4 @@
-// backend/emailService.js - UPDATED for Resend SMTP with fallback (using environment variables)
+// backend/emailService.js - UPDATED for Resend SMTP TLS version fix
 
 const nodemailer = require('nodemailer');
 
@@ -13,30 +13,56 @@ const createTransporter = () => {
     // --- Prioritize Resend SMTP (using environment variables) ---
     if (process.env.RESEND_API_KEY && process.env.RESEND_SMTP_HOST) {
         console.log('Using Resend SMTP for email service.');
-        return nodemailer.createTransport({
+        const isSecure = process.env.RESEND_SMTP_SECURE === 'true' || (parseInt(process.env.RESEND_SMTP_PORT, 10) === 465);
+        
+        const transporterOptions = {
             host: process.env.RESEND_SMTP_HOST,
             port: parseInt(process.env.RESEND_SMTP_PORT || '587', 10),
-            secure: process.env.RESEND_SMTP_SECURE === 'true' || (parseInt(process.env.RESEND_SMTP_PORT, 10) === 465),
+            secure: isSecure,
             auth: {
-                user: process.env.RESEND_SMTP_USER || 'resend', // Resend often uses 'resend' or 'apikey' as the username
-                pass: process.env.RESEND_API_KEY // Your Resend API Key
+                user: process.env.RESEND_SMTP_USER || 'resend',
+                pass: process.env.RESEND_API_KEY
             },
             ...commonOptions
-        });
+        };
+
+        // NEW: Add SSL options if secure connection is used
+        if (isSecure) {
+            // Explicitly set minimum TLS version to 1.2
+            // This can resolve 'wrong version number' errors with some SMTP servers.
+            transporterOptions.tls = {
+                minVersion: 'TLSv1.2', 
+                // Alternatively, you might try 'TLSv1.3' if 1.2 still fails and the server is modern.
+                // You can also try rejectUnauthorized: false in development if you suspect certificate issues, 
+                // but DO NOT use in production.
+            };
+        }
+
+        return nodemailer.createTransport(transporterOptions);
     } 
     // --- Fallback to Generic Production SMTP (e.g., Mailtrap Transactional - using environment variables) ---
     else if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
         console.log('Resend credentials not found. Falling back to Generic Production SMTP.');
-        return nodemailer.createTransport({
+        const isSecure = process.env.SMTP_SECURE === 'true' || (parseInt(process.env.SMTP_PORT, 10) === 465);
+        
+        const transporterOptions = {
             host: process.env.SMTP_HOST,
             port: parseInt(process.env.SMTP_PORT || '587', 10),
-            secure: process.env.SMTP_SECURE === 'true' || (parseInt(process.env.SMTP_PORT, 10) === 465),
+            secure: isSecure,
             auth: {
                 user: process.env.SMTP_USER,
                 pass: process.env.SMTP_PASS
             },
             ...commonOptions
-        });
+        };
+
+        if (isSecure) {
+            transporterOptions.tls = {
+                minVersion: 'TLSv1.2',
+            };
+        }
+
+        return nodemailer.createTransport(transporterOptions);
     } 
     // --- Fallback to Mailtrap Sandbox (for local development/testing) ---
     else {
@@ -44,7 +70,7 @@ const createTransporter = () => {
         return nodemailer.createTransport({
             host: 'sandbox.smtp.mailtrap.io',
             port: 2525,
-            secure: false,
+            secure: false, // Mailtrap sandbox typically uses STARTTLS, so secure: false is correct here
             auth: {
                 user: '2bb9f1220f44a7', // *** REPLACE with your Mailtrap Username ***
                 pass: '5f05229824205f'  // *** REPLACE with your Mailtrap Password ***
