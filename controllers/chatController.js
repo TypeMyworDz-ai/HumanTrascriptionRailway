@@ -32,6 +32,7 @@ const chatAttachmentFilter = (req, file, cb) => {
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
+    // Pass an error to Multer's callback
     cb(new Error('Only text, PDF, DOC, DOCX, and image files are allowed as chat attachments!'), false);
   }
 };
@@ -46,9 +47,14 @@ const uploadChatAttachment = multer({
 
 const handleChatAttachmentUpload = async (req, res) => {
     try {
+        // Multer errors (like fileFilter or fileSize limit) are usually caught by the route handler.
+        // However, if the middleware chain somehow bypasses it or you want a fallback,
+        // this check is still good.
         if (!req.file) {
-            // If multer failed due to fileFilter or limits, the error will be in req.file.
-            // If no file was selected at all, req.file will be undefined.
+            // Check if Multer already set an error on the request
+            if (req.fileValidationError) {
+                return res.status(400).json({ error: req.fileValidationError });
+            }
             return res.status(400).json({ error: 'No file uploaded or file type/size is invalid.' });
         }
 
@@ -66,6 +72,7 @@ const handleChatAttachmentUpload = async (req, res) => {
         if (req.file && req.file.path && fs.existsSync(req.file.path)) {
             fs.unlinkSync(req.file.path);
         }
+        // CRITICAL: Ensure JSON error response
         res.status(500).json({ error: error.message || 'Failed to upload attachment.' });
     }
 };
@@ -153,6 +160,13 @@ const sendAdminDirectMessage = async (req, res, io) => {
                 ...newMessage,
                 sender_name: senderFullName,
             };
+
+            // --- ADD THESE CONSOLE LOGS ---
+            console.log(`[sendNegotiationMessage] Attempting to emit 'receiveMessage' for negotiation ${negotiationId}`);
+            console.log(`[sendNegotiationMessage] Sender ID: ${senderId}, Receiver ID: ${receiverId}`);
+            console.log(`[sendNegotiationMessage] Emitting payload:`, messagePayload);
+            // --- END ADDED LOGS ---
+
             // Emit to both sender (admin) and receiver
             io.to(receiverId).emit('receiveMessage', messagePayload);
             io.to(senderId).emit('receiveMessage', messagePayload);
