@@ -29,7 +29,9 @@ const io = new Server(server, {
     allowedHeaders: ["Authorization", "Content-Type", "X-Requested-With", "X-HTTP-Method-Override"],
     credentials: true
   },
-  allowEIO3: true
+  allowEIO3: true,
+  pingInterval: 25000, // Added: Default ping interval
+  pingTimeout: 60000,  // Added: Default ping timeout
 });
 
 io.on('connection', (socket) => {

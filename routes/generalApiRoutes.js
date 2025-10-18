@@ -3,15 +3,16 @@ const router = express.Router();
 const supabase = require('../database');
 const authMiddleware = require('../middleware/authMiddleware');
 const fs = require('fs');
+const path = require('path'); // Added: Import path module for file operations
 
 // IMPORTANT: Import functions from negotiationController.js
 const {
-  uploadNegotiationFiles,
-  getAvailableTranscribers,
-  createNegotiation,
-  getClientNegotiations,
-  deleteNegotiation,
-  syncAvailabilityStatus,
+  uploadNegotiationFiles,
+  getAvailableTranscribers,
+  createNegotiation,
+  getClientNegotiations,
+  deleteNegotiation,
+  syncAvailabilityStatus,
   acceptNegotiation,
   counterNegotiation,
   rejectNegotiation,
@@ -22,33 +23,33 @@ const {
 
 // Import admin controller functions
 const {
-    getPendingTranscriberTestsCount,
-    getActiveJobsCount,
-    getOpenDisputesCount,
-    getTotalUsersCount,
-    getAllTranscriberTestSubmissions,
-    getTranscriberTestSubmissionById,
-    getAllUsersForAdmin,
-    getUserByIdForAdmin,
-    getAnyUserById,
-    approveTranscriberTest,
-    rejectTranscriberTest,
-    getAdminSettings,
-    updateAdminSettings,
-    getAllJobsForAdmin,
-    getAllDisputesForAdmin,
+    getPendingTranscriberTestsCount,
+    getActiveJobsCount,
+    getOpenDisputesCount,
+    getTotalUsersCount,
+    getAllTranscriberTestSubmissions,
+    getTranscriberTestSubmissionById,
+    getAllUsersForAdmin,
+    getUserByIdForAdmin,
+    getAnyUserById,
+    approveTranscriberTest,
+    rejectTranscriberTest,
+    getAdminSettings,
+    updateAdminSettings,
+    getAllJobsForAdmin,
+    getAllDisputesForAdmin,
 } = require('../controllers/adminController');
 
 // Import chat controller functions
 const {
-    getAdminDirectMessages,
-    sendAdminDirectMessage,
-    getUserDirectMessages,
-    sendUserDirectMessage,
-    getUnreadMessageCount,
-    getAdminChatList,
-    getNegotiationMessages,
-    sendNegotiationMessage,
+    getAdminDirectMessages,
+    sendAdminDirectMessage,
+    getUserDirectMessages,
+    sendUserDirectMessage,
+    getUnreadMessageCount,
+    getAdminChatList,
+    getNegotiationMessages,
+    sendNegotiationMessage,
     uploadChatAttachment,
     handleChatAttachmentUpload
 } = require('../controllers/chatController');
@@ -88,52 +89,72 @@ const {
 
 
 module.exports = (io) => {
-    // REMOVED: The io.on('connection', (socket) => { ... }) block
-    // This listener should only be in server.js where the Socket.IO server is initialized.
+  // --- CLIENT-SIDE NEGOTIATIONS ---
+  router.get('/negotiations/client', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+      return res.status(403).json({ error: 'Access denied. Only clients can view client negotiations.' });
+    }
+    getClientNegotiations(req, res, next);
+  });
 
-  // --- CLIENT-SIDE NEGOTIATIONS ---
-  router.get('/negotiations/client', authMiddleware, (req, res, next) => {
-    if (req.user.userType !== 'client') {
-      return res.status(403).json({ error: 'Access denied. Only clients can view client negotiations.' });
-    }
-    getClientNegotiations(req, res, next);
-  });
+  router.delete('/negotiations/:negotiationId', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+      return res.status(403).json({ error: 'Access denied. Only clients can cancel negotiations.' });
+    }
+    deleteNegotiation(req, res, io);
+  });
 
-  router.delete('/negotiations/:negotiationId', authMiddleware, (req, res, next) => {
-    if (req.user.userType !== 'client') {
-      return res.status(403).json({ error: 'Access denied. Only clients can cancel negotiations.' });
-    }
-    deleteNegotiation(req, res, io);
-  });
+  // --- MESSAGING ROUTES (General) ---
+  router.get('/messages/:negotiationId', authMiddleware, (req, res, next) => {
+    getNegotiationMessages(req, res, io);
+  });
 
-  // --- MESSAGING ROUTES (General) ---
-  router.get('/messages/:negotiationId', authMiddleware, (req, res, next) => {
-    getNegotiationMessages(req, res, io);
-  });
-
-  router.post('/messages/negotiation/send', authMiddleware, (req, res, next) => {
-    sendNegotiationMessage(req, res, io);
-  });
+  router.post('/messages/negotiation/send', authMiddleware, (req, res, next) => {
+    sendNegotiationMessage(req, res, io);
+  });
 
   // NEW: Chat Attachment Upload Route
-  router.post('/chat/upload-attachment', authMiddleware, uploadChatAttachment, handleChatAttachmentUpload);
+  // Use multer for file upload handling
+  const multer = require('multer');
+  const uploadChat = multer({ dest: path.join(__dirname, '../uploads/chat_attachments') }); // Configure storage for chat attachments
+
+  router.post('/chat/upload-attachment', authMiddleware, uploadChat.single('attachment'), handleChatAttachmentUpload);
 
 
-  // --- TRANSCRIBER POOL ---
-  router.get('/transcribers/available', authMiddleware, (req, res, next) => {
-    if (req.user.userType !== 'client') {
-      return res.status(403).json({ error: 'Access denied. Only clients can browse transcribers.' });
-    }
-    getAvailableTranscribers(req, res, next);
-  });
+  // --- TRANSCRIBER POOL ---
+  router.get('/transcribers/available', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+      return res.status(403).json({ error: 'Access denied. Only clients can browse transcribers.' });
+    }
+    getAvailableTranscribers(req, res, next);
+  });
 
-  router.post('/negotiations/create', authMiddleware, uploadNegotiationFiles, async (req, res, next) => {
-    if (req.user.userType !== 'client') {
-      if (req.file) fs.unlinkSync(req.file.path);
-      return res.status(403).json({ error: 'Access denied. Only clients can create negotiations.' });
-    }
-    createNegotiation(req, res, next, io);
-  });
+  // Configure multer for negotiation file uploads
+  const uploadNegotiation = multer({
+    storage: multer.diskStorage({
+      destination: function (req, file, cb) {
+        cb(null, path.join(__dirname, '../uploads/negotiation_files'));
+      },
+      filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+      }
+    }),
+    limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit
+  });
+
+  router.post('/negotiations/create', authMiddleware, uploadNegotiation.single('audioVideoFile'), async (req, res, next) => {
+    if (req.user.userType !== 'client') {
+      // Clean up uploaded file if an error occurs or access is denied
+      if (req.file) {
+        fs.unlink(req.file.path, (err) => {
+          if (err) console.error("Error deleting temp file:", err);
+        });
+      }
+      return res.status(403).json({ error: 'Access denied. Only clients can create negotiations.' });
+    }
+    createNegotiation(req, res, next, io);
+  });
 
   // NEW: Transcriber Negotiation Actions
   router.put('/negotiations/:negotiationId/accept', authMiddleware, (req, res, next) => {
@@ -180,19 +201,19 @@ module.exports = (io) => {
   });
 
 
-  router.put('/users/:userId/availability-status', authMiddleware, async (req, res) => {
-    if (req.user.userType !== 'transcriber' && req.user.userType !== 'admin') {
-      return res.status(403).json({ error: 'Access denied. Only transcribers or admins can update availability status.' });
-    }
-    const { userId } = req.params;
-    const { is_available } = req.body;
-    const currentUserId = req.user.userId;
+  router.put('/users/:userId/availability-status', authMiddleware, async (req, res) => {
+    if (req.user.userType !== 'transcriber' && req.user.userType !== 'admin') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers or admins can update availability status.' });
+    }
+    const { userId } = req.params;
+    const { is_available } = req.body;
+    const currentUserId = req.user.userId;
 
-    if (userId !== currentUserId && req.user.userType !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized to update this user\'s status.' });
-    }
+    if (userId !== currentUserId && req.user.userType !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized to update this user\'s status.' });
+    }
 
-    try {
+    try {
         await syncAvailabilityStatus(userId, is_available, null);
 
         const { data, error } = await supabase
@@ -208,12 +229,12 @@ module.exports = (io) => {
         if (!data) {
             return res.status(404).json({ error: 'User not found.' });
         }
-      res.json({ message: 'Availability status updated successfully', user: data });
-    } catch (err) {
-      console.error("Server error updating availability status:", err);
-      res.status(500).json({ error: 'Server error updating availability status' });
-    }
-  });
+        res.json({ message: 'Availability status updated successfully', user: data });
+    } catch (err) {
+      console.error("Server error updating availability status:", err);
+      res.status(500).json({ error: 'Server error updating availability status' });
+    }
+  });
 
   router.put('/transcriber-profile/:userId', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'transcriber' && req.user.userType !== 'admin') {
@@ -229,150 +250,150 @@ module.exports = (io) => {
     updateClientProfile(req, res, next);
   });
 
-  // --- Admin Statistics Routes ---
-  router.get('/admin/stats/pending-tests', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can view this statistic.' });
-      }
-      getPendingTranscriberTestsCount(req, res, next);
-  });
+  // --- Admin Statistics Routes ---
+  router.get('/admin/stats/pending-tests', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view this statistic.' });
+      }
+      getPendingTranscriberTestsCount(req, res, next);
+  });
 
-  router.get('/admin/stats/active-jobs', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can view this statistic.' });
-      }
-      getActiveJobsCount(req, res, next);
-  });
+  router.get('/admin/stats/active-jobs', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view this statistic.' });
+      }
+      getActiveJobsCount(req, res, next);
+  });
 
-  router.get('/admin/stats/disputes', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can view this statistic.' });
-      }
-      getOpenDisputesCount(req, res, next);
-  });
+  router.get('/admin/stats/disputes', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view this statistic.' });
+      }
+      getOpenDisputesCount(req, res, next);
+  });
 
-  router.get('/admin/stats/total-users', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can view this statistic.' });
-      }
-      getTotalUsersCount(req, res, next);
-  });
+  router.get('/admin/stats/total-users', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view this statistic.' });
+      }
+      getTotalUsersCount(req, res, next);
+  });
 
-  // --- Admin Transcriber Test Management Routes ---
-  router.get('/admin/transcriber-tests', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can view transcriber tests.' });
-      }
-      getAllTranscriberTestSubmissions(req, res, next);
-  });
+  // --- Admin Transcriber Test Management Routes ---
+  router.get('/admin/transcriber-tests', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view transcriber tests.' });
+      }
+      getAllTranscriberTestSubmissions(req, res, next);
+  });
 
-  router.get('/admin/transcriber-tests/:submissionId', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can view transcriber test details.' });
-      }
-      getTranscriberTestSubmissionById(req, res, next);
-  });
+  router.get('/admin/transcriber-tests/:submissionId', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view transcriber test details.' });
+      }
+      getTranscriberTestSubmissionById(req, res, next);
+  });
 
-  router.put('/admin/transcriber-tests/:submissionId/approve', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can approve transcriber tests.' });
-      }
-      approveTranscriberTest(req, res, next);
-  });
+  router.put('/admin/transcriber-tests/:submissionId/approve', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can approve transcriber tests.' });
+      }
+      approveTranscriberTest(req, res, next);
+  });
 
-  router.put('/admin/transcriber-tests/:submissionId/reject', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can reject transcriber tests.' });
-      }
-      rejectTranscriberTest(req, res, next);
-  });
+  router.put('/admin/transcriber-tests/:submissionId/reject', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can reject transcriber tests.' });
+      }
+      rejectTranscriberTest(req, res, next);
+  });
 
-  // --- Admin User Management Routes ---
-  router.get('/admin/users', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can manage users.' });
-      }
-      getAllUsersForAdmin(req, res, next);
-  });
+  // --- Admin User Management Routes ---
+  router.get('/admin/users', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can manage users.' });
+      }
+      getAllUsersForAdmin(req, res, next);
+  });
 
-  router.get('/admin/users/:userId', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can view user details.' });
-      }
-      getUserByIdForAdmin(req, res, next);
-  });
+  router.get('/admin/users/:userId', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view user details.' });
+      }
+      getUserByIdForAdmin(req, res, next);
+  });
 
-  router.get('/users/:userId', authMiddleware, (req, res, next) => {
-      getAnyUserById(req, res, next);
-  });
+  router.get('/users/:userId', authMiddleware, (req, res, next) => {
+      getAnyUserById(req, res, next);
+  });
 
-  // --- Admin Direct Chat Routes ---
-  router.get('/admin/chat/messages/:userId', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can view chat history.' });
-      }
-      getAdminDirectMessages(req, res, io);
-  });
+  // --- Admin Direct Chat Routes ---
+  router.get('/admin/chat/messages/:userId', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view chat history.' });
+      }
+      getAdminDirectMessages(req, res, io);
+  });
 
-  router.post('/admin/chat/send-message', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can send messages.' });
-      }
-      sendAdminDirectMessage(req, res, io);
-  });
+  router.post('/admin/chat/send-message', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can send messages.' });
+      }
+      sendAdminDirectMessage(req, res, io);
+  });
 
-  // --- User Direct Chat Routes ---
-  router.get('/user/chat/messages/:chatId', authMiddleware, (req, res, next) => {
-      getUserDirectMessages(req, res, io);
-  });
+  // --- User Direct Chat Routes ---
+  router.get('/user/chat/messages/:chatId', authMiddleware, (req, res, next) => {
+      getUserDirectMessages(req, res, io);
+  });
 
-  router.post('/user/chat/send-message', authMiddleware, (req, res, next) => {
-      if (req.user.userType === 'admin') {
-          return res.status(403).json({ error: 'Admins should use their dedicated message sending route.' });
-      }
-      sendUserDirectMessage(req, res, io);
-  });
+  router.post('/user/chat/send-message', authMiddleware, (req, res, next) => {
+      if (req.user.userType === 'admin') {
+          return res.status(403).json({ error: 'Admins should use their dedicated message sending route.' });
+      }
+      sendUserDirectMessage(req, res, io);
+  });
 
-  router.get('/user/chat/unread-count', authMiddleware, (req, res, next) => {
-      getUnreadMessageCount(req, res, next);
-  });
+  router.get('/user/chat/unread-count', authMiddleware, (req, res, next) => {
+      getUnreadMessageCount(req, res, next);
+  });
 
-  router.get('/admin/chat/list', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can view the chat list.' });
-      }
-      getAdminChatList(req, res, next);
-  });
+  router.get('/admin/chat/list', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view the chat list.' });
+      }
+      getAdminChatList(req, res, next);
+  });
 
-  // --- NEW: Admin Global Settings Routes ---
-  router.get('/admin/settings', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can view settings.' });
-      }
-      getAdminSettings(req, res, next);
-  });
+  // --- NEW: Admin Global Settings Routes ---
+  router.get('/admin/settings', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view settings.' });
+      }
+      getAdminSettings(req, res, next);
+  });
 
-  router.put('/admin/settings', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can update settings.' });
-      }
-      updateAdminSettings(req, res, next);
-  });
+  router.put('/admin/settings', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can update settings.' });
+      }
+      updateAdminSettings(req, res, next);
+  });
 
-  // --- NEW: Admin Jobs Route ---
-  router.get('/admin/jobs', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can view all jobs.' });
-      }
-      getAllJobsForAdmin(req, res, next);
-  });
+  // --- NEW: Admin Jobs Route ---
+  router.get('/admin/jobs', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view all jobs.' });
+      }
+      getAllJobsForAdmin(req, res, next);
+  });
 
-  router.get('/admin/disputes/all', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can view all disputes.' });
-      }
-      getAllDisputesForAdmin(req, res, next);
-  });
+  router.get('/admin/disputes/all', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view all disputes.' });
+      }
+      getAllDisputesForAdmin(req, res, next);
+  });
 
   // --- NEW: Paystack Payment Routes ---
   router.post('/payment/initialize', authMiddleware, (req, res, next) => {
@@ -434,13 +455,32 @@ module.exports = (io) => {
   });
 
   // --- NEW: Direct Upload Job Routes ---
-  router.post('/direct-upload/job', authMiddleware, uploadDirectFiles, async (req, res, next) => {
+  const uploadDirect = multer({
+    storage: multer.diskStorage({
+      destination: function (req, file, cb) {
+        cb(null, path.join(__dirname, '../uploads/direct_uploads'));
+      },
+      filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+      }
+    }),
+    // Add file filter or limits if needed
+  });
+
+  router.post('/direct-upload/job', authMiddleware, uploadDirect.fields([
+    { name: 'audioVideoFile', maxCount: 1 },
+    { name: 'instructionFiles', maxCount: 5 } // Assuming max 5 instruction files
+  ]), async (req, res, next) => {
     if (req.user.userType !== 'client') {
+      // Clean up uploaded files if access is denied
       if (req.files?.audioVideoFile?.[0]) {
-        await fs.promises.unlink(req.files.audioVideoFile[0].path);
+        fs.unlink(req.files.audioVideoFile[0].path, (err) => { if (err) console.error("Error deleting temp audioVideoFile:", err); });
       }
       if (req.files?.instructionFiles?.length > 0) {
-        await Promise.all(req.files.instructionFiles.map(file => fs.promises.unlink(file.path)));
+        req.files.instructionFiles.forEach(file => {
+          fs.unlink(file.path, (err) => { if (err) console.error("Error deleting temp instructionFile:", err); });
+        });
       }
       return res.status(403).json({ error: 'Access denied. Only clients can create direct upload jobs.' });
     }
@@ -477,5 +517,5 @@ module.exports = (io) => {
   });
 
 
-  return router;
+  return router;
 };
