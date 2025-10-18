@@ -1,15 +1,14 @@
-// backend/controllers/directUploadController.js - CONFIRMED AND UPDATED for 4-star and 5-star transcribers
+// backend/controllers/directUploadController.js - Reviewed and updated for robust error handling
 
-const supabase = require('../database'); // CORRECTED: Changed from '../supabaseClient' to '../database'
+const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { syncAvailabilityStatus } = require('./transcriberController'); // For marking transcriber busy/available
-const emailService = require('../emailService'); // For sending job notifications
-const util = require('util'); // For promisify fs.unlink
-const { getAudioDurationInSeconds } = require('get-audio-duration'); // Need to install this package
+const { syncAvailabilityStatus } = require('./transcriberController');
+const emailService = require('../emailService');
+const util = require('util');
+const { getAudioDurationInSeconds } = require('get-audio-duration');
 
-// Promisify fs.unlink for async/await use
 const unlinkAsync = util.promisify(fs.unlink);
 
 // --- Multer Configuration for Direct Upload Files ---
@@ -38,7 +37,7 @@ const directUploadFileFilter = (req, file, cb) => {
     'image/jpeg',
     'image/jpg',
     'image/png',
-    'image/png'
+    'image/gif'
   ];
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
@@ -51,17 +50,16 @@ const uploadDirectFiles = multer({
   storage: directUploadFileStorage,
   fileFilter: directUploadFileFilter,
   limits: {
-    fileSize: 200 * 1024 * 1024 // 200MB limit for direct upload files
+    fileSize: 200 * 1024 * 1024
   }
 }).fields([
     { name: 'audioVideoFile', maxCount: 1 },
-    { name: 'instructionFiles', maxCount: 5 } // For additional instruction files
+    { name: 'instructionFiles', maxCount: 5 }
 ]);
 
 
 // --- Quote Calculation Helper ---
 const calculateQuote = async (audioLengthMinutes, qualityParam, deadlineParam, specialRequirements) => {
-    // Fetch base pricing from admin settings
     const { data: adminSettings, error: settingsError } = await supabase
         .from('admin_settings')
         .select('default_price_per_minute, default_deadline_hours')
@@ -73,25 +71,22 @@ const calculateQuote = async (audioLengthMinutes, qualityParam, deadlineParam, s
     }
 
     let pricePerMinute = adminSettings.default_price_per_minute;
-    let deadlineMultiplier = 1; // Default
-    let qualityMultiplier = 1; // Default
-    let specialReqMultiplier = 1; // Default
+    let deadlineMultiplier = 1;
+    let qualityMultiplier = 1;
+    let specialReqMultiplier = 1;
 
-    // Adjust based on quality
     if (qualityParam === 'premium') {
-        qualityMultiplier = 1.5; // 50% more for premium
+        qualityMultiplier = 1.5;
     } else if (qualityParam === 'basic') {
-        qualityMultiplier = 0.8; // 20% less for basic
+        qualityMultiplier = 0.8;
     }
 
-    // Adjust based on deadline (e.g., rush delivery costs more)
     if (deadlineParam === 'rush') {
-        deadlineMultiplier = 1.5; // 50% more for rush
+        deadlineMultiplier = 1.5;
     } else if (deadlineParam === 'extended') {
-        deadlineMultiplier = 0.8; // 20% less for extended
+        deadlineMultiplier = 0.8;
     }
 
-    // Adjust for special requirements (example: 10% per special req)
     if (specialRequirements && specialRequirements.length > 0) {
         specialReqMultiplier = 1 + (specialRequirements.length * 0.1);
     }
@@ -99,17 +94,15 @@ const calculateQuote = async (audioLengthMinutes, qualityParam, deadlineParam, s
     const finalPricePerMinute = pricePerMinute * qualityMultiplier * deadlineMultiplier * specialReqMultiplier;
     const quote = parseFloat((audioLengthMinutes * finalPricePerMinute).toFixed(2));
 
-    // Determine suggested deadline based on audio length and chosen deadline parameter
     let suggestedDeadlineHours = adminSettings.default_deadline_hours;
     if (deadlineParam === 'rush') {
-        suggestedDeadlineHours = Math.max(2, Math.round(audioLengthMinutes / 30)); // e.g., 30 min audio = 1 hr, min 2 hrs
+        suggestedDeadlineHours = Math.max(2, Math.round(audioLengthMinutes / 30));
     } else if (deadlineParam === 'normal') {
-        suggestedDeadlineHours = Math.max(6, Math.round(audioLengthMinutes / 15)); // e.g., 30 min audio = 2 hr, min 6 hrs
+        suggestedDeadlineHours = Math.max(6, Math.round(audioLengthMinutes / 15));
     } else if (deadlineParam === 'extended') {
-        suggestedDeadlineHours = Math.min(168, Math.max(24, Math.round(audioLengthMinutes / 5))); // e.g., 30 min audio = 6 hr, min 24 hrs, max 1 week
+        suggestedDeadlineHours = Math.min(168, Math.max(24, Math.round(audioLengthMinutes / 5)));
     }
-    // Cap suggested deadline to a reasonable max if needed
-    suggestedDeadlineHours = Math.min(suggestedDeadlineHours, 168); // Max 1 week
+    suggestedDeadlineHours = Math.min(suggestedDeadlineHours, 168);
 
     return { quote, agreed_deadline_hours: suggestedDeadlineHours };
 };
@@ -124,23 +117,50 @@ const createDirectUploadJob = async (req, res, io) => {
         clientInstructions,
         qualityParam,
         deadlineParam,
-        specialRequirements // This will be an array of strings
+        specialRequirements
     } = req.body;
 
     let audioVideoFile = req.files?.audioVideoFile?.[0];
     let instructionFiles = req.files?.instructionFiles || [];
 
+    // Store file paths temporarily for cleanup in case of error
+    const uploadedFilePaths = [];
+    if (audioVideoFile) uploadedFilePaths.push(audioVideoFile.path);
+    instructionFiles.forEach(file => uploadedFilePaths.push(file.path));
+
+    const cleanupFiles = async () => {
+        await Promise.all(uploadedFilePaths.map(async (filePath) => {
+            if (fs.existsSync(filePath)) {
+                try {
+                    await unlinkAsync(filePath);
+                    console.log(`Cleaned up uploaded file: ${filePath}`);
+                } catch (unlinkError) {
+                    console.error(`Error deleting uploaded file during cleanup: ${unlinkError}`);
+                }
+            }
+        }));
+    };
+
     if (!audioVideoFile) {
-        // If main file is missing, delete any attached instruction files
+        // If main file is missing, clean up any instruction files that might have been uploaded
         if (instructionFiles.length > 0) {
-            await Promise.all(instructionFiles.map(file => unlinkAsync(file.path)));
+            await cleanupFiles();
         }
         return res.status(400).json({ error: 'Main audio/video file is required.' });
     }
 
     try {
+        // VERIFY: Check if main audio/video file exists on disk after multer upload
+        const audioVideoFilePath = audioVideoFile.path;
+        if (!fs.existsSync(audioVideoFilePath)) {
+            console.error(`createDirectUploadJob: !!! CRITICAL WARNING !!! Audio/Video file NOT found at expected path: ${audioVideoFilePath}`);
+            await cleanupFiles(); // Clean up all files if main file is missing
+            return res.status(500).json({ error: 'Uploaded audio/video file not found on server after processing.' });
+        } else {
+            console.log(`createDirectUploadJob: Confirmed Audio/Video file exists at: ${audioVideoFilePath}`);
+        }
+
         // 1. Get audio/video duration
-        const audioVideoFilePath = path.join(__dirname, '..', '..', audioVideoFile.path);
         const audioLengthSeconds = await getAudioDurationInSeconds(audioVideoFilePath);
         const audioLengthMinutes = audioLengthSeconds / 60;
 
@@ -161,7 +181,7 @@ const createDirectUploadJob = async (req, res, io) => {
             .insert({
                 client_id: clientId,
                 file_name: audioVideoFile.filename,
-                file_url: `/uploads/direct_upload_files/${audioVideoFile.filename}`, // Store local path for now, consider S3/CDN later
+                file_url: `/uploads/direct_upload_files/${audioVideoFile.filename}`,
                 file_size_mb: audioVideoFile.size / (1024 * 1024),
                 audio_length_minutes: audioLengthMinutes,
                 client_instructions: clientInstructions,
@@ -176,17 +196,23 @@ const createDirectUploadJob = async (req, res, io) => {
             .select()
             .single();
 
-        if (jobError) throw jobError;
+        if (jobError) {
+            console.error('createDirectUploadJob: Supabase error inserting new direct upload job:', jobError);
+            await cleanupFiles(); // Clean up files on DB error
+            throw jobError;
+        }
+
+        // If job is successfully created in DB, files are now linked. No need to unlink.
+        const newJob = job;
 
         // 5. Notify 4-star and 5-star transcribers (via Socket.IO)
-        // Fetch all 4-star and 5-star transcribers who are online and available
         const { data: transcribers, error: transcriberFetchError } = await supabase
             .from('users')
             .select('id, full_name, email, transcribers(average_rating)')
             .eq('user_type', 'transcriber')
             .eq('is_online', true)
             .eq('is_available', true)
-            .gte('transcribers.average_rating', 4); // 4-star and 5-star transcribers
+            .gte('transcribers.average_rating', 4);
 
         if (transcriberFetchError) console.error("Error fetching transcribers for direct job notification:", transcriberFetchError);
 
@@ -194,10 +220,11 @@ const createDirectUploadJob = async (req, res, io) => {
             const qualifiedTranscribers = transcribers.filter(t => t.transcribers?.[0]?.average_rating >= 4);
             qualifiedTranscribers.forEach(transcriber => {
                 io.to(transcriber.id).emit('new_direct_job_available', {
-                    jobId: job.id,
+                    jobId: newJob.id,
                     clientName: req.user.full_name,
-                    quote: job.quote_amount,
-                    message: `A new direct upload job from ${req.user.full_name} is available for KES ${job.quote_amount}!`
+                    quote: newJob.quote_amount,
+                    message: `A new direct upload job from ${req.user.full_name} is available for KES ${newJob.quote_amount}!`,
+                    newStatus: 'pending_review'
                 });
             });
             console.log(`Emitted 'new_direct_job_available' to ${qualifiedTranscribers.length} transcribers.`);
@@ -205,17 +232,13 @@ const createDirectUploadJob = async (req, res, io) => {
 
         res.status(201).json({
             message: 'Direct upload job created successfully. Awaiting transcriber.',
-            job: job
+            job: newJob
         });
 
     } catch (error) {
-        console.error('Error creating direct upload job:', error);
-        // Clean up uploaded files if an error occurred
-        if (audioVideoFile) await unlinkAsync(audioVideoFile.path);
-        if (instructionFiles.length > 0) {
-            await Promise.all(instructionFiles.map(file => unlinkAsync(file.path)));
-        }
-        res.status(500).json({ error: 'Server error creating direct upload job.' });
+        console.error('createDirectUploadJob: UNCAUGHT EXCEPTION:', error);
+        await cleanupFiles(); // Ensure cleanup even for unexpected errors
+        res.status(500).json({ error: error.message || 'Failed to create direct upload job due to server error.' });
     }
 };
 
@@ -259,7 +282,7 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
             .eq('id', transcriberId)
             .single();
 
-        if (profileError || !transcriberProfile || transcriberProfile.average_rating < 4) { // 4-star and 5-star only
+        if (profileError || !transcriberProfile || transcriberProfile.average_rating < 4) {
             return res.status(403).json({ error: 'Access denied. Only 4-star and 5-star transcribers can view these jobs.' });
         }
 
@@ -285,8 +308,8 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
                 client:users!client_id(full_name, email)
             `)
             .eq('status', 'pending_review')
-            .is('transcriber_id', null) // Ensure it's not taken by anyone
-            .order('created_at', { ascending: true }); // Oldest jobs first
+            .is('transcriber_id', null)
+            .order('created_at', { ascending: true });
 
         if (error) throw error;
 
@@ -335,8 +358,8 @@ const takeDirectUploadJob = async (req, res, io) => {
                 updated_at: new Date().toISOString()
             })
             .eq('id', jobId)
-            .eq('status', 'pending_review') // Ensure it's still pending
-            .is('transcriber_id', null) // Ensure it's not already taken
+            .eq('status', 'pending_review')
+            .is('transcriber_id', null)
             .select()
             .single();
 
@@ -350,13 +373,12 @@ const takeDirectUploadJob = async (req, res, io) => {
 
         // 4. Notify client and potentially other transcribers (real-time)
         if (io) {
-            // Notify the client that their job has been taken
             io.to(updatedJob.client_id).emit('direct_job_taken', {
                 jobId: updatedJob.id,
                 transcriberName: req.user.full_name,
-                message: `Your direct upload job has been taken by ${req.user.full_name}!`
+                message: `Your direct upload job has been taken by ${req.user.full_name}!`,
+                newStatus: 'in_progress'
             });
-            // Optionally, notify other transcribers that the job is no longer available
             io.emit('direct_job_status_update', {
                 jobId: updatedJob.id,
                 newStatus: 'in_progress'
@@ -418,7 +440,8 @@ const completeDirectUploadJob = async (req, res, io) => {
             io.to(job.client_id).emit('direct_job_completed', {
                 jobId: job.id,
                 transcriberName: req.user.full_name,
-                message: `Your direct upload job has been completed by ${req.user.full_name}!`
+                message: `Your direct upload job has been completed by ${req.user.full_name}!`,
+                newStatus: 'completed'
             });
             console.log(`Emitted 'direct_job_completed' to client ${job.client_id}`);
         }
@@ -468,12 +491,12 @@ const getAllDirectUploadJobsForAdmin = async (req, res) => {
 
 
 module.exports = {
-    uploadDirectFiles, // Multer middleware
+    uploadDirectFiles,
     calculateQuote,
     createDirectUploadJob,
     getDirectUploadJobsForClient,
     getAvailableDirectUploadJobsForTranscriber,
     takeDirectUploadJob,
     completeDirectUploadJob,
-    getAllDirectUploadJobsForAdmin // Export the new function for admin
+    getAllDirectUploadJobsForAdmin
 };

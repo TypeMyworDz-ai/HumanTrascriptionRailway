@@ -1,13 +1,12 @@
-// backend/controllers/negotiationController.js - UPDATED for client's counter-offer responses
+// backend/controllers/negotiationController.js - UPDATED for robust error handling in createNegotiation
 
 const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const emailService = require('../emailService');
-const { updateAverageRating } = require('./ratingController'); // NEW: Import updateAverageRating
+const { updateAverageRating } = require('./ratingController');
 
-// Utility function to sync availability status between tables
 const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) => {
     const updateData = {
         is_available: isAvailable,
@@ -15,13 +14,11 @@ const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) 
         updated_at: new Date().toISOString()
     };
 
-    // Update users table (primary source)
     const { error: userError } = await supabase
         .from('users')
         .update(updateData)
         .eq('id', userId);
 
-    // Update transcribers table (backup for compatibility)
     const { error: transcriberError } = await supabase
         .from('transcribers')
         .update(updateData)
@@ -36,7 +33,6 @@ const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) 
     }
 };
 
-// Configure multer for negotiation files
 const negotiationFileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = 'uploads/negotiation_files';
@@ -75,11 +71,10 @@ const uploadNegotiationFiles = multer({
   storage: negotiationFileStorage,
   fileFilter: negotiationFileFilter,
   limits: {
-    fileSize: 100 * 1024 * 1024 // 100MB limit for negotiation files
+    fileSize: 100 * 1024 * 1024
   }
 }).single('negotiationFile');
 
-// Get all available transcribers (for clients to browse)
 const getAvailableTranscribers = async (req, res) => {
   try {
     console.log('Fetching available transcribers...');
@@ -246,30 +241,31 @@ const getAvailableTranscribers = async (req, res) => {
   }
 };
 
-// Create negotiation request (for clients)
 const createNegotiation = async (req, res, next, io) => {
+  let negotiationFile = req.file;
   try {
     const { transcriber_id, requirements, proposed_price_kes, deadline_hours } = req.body;
     const clientId = req.user.userId;
 
-    const negotiationFile = req.file;
     let negotiationFileName = '';
     if (negotiationFile) {
       negotiationFileName = negotiationFile.filename;
-      console.log(`createNegotiation: File uploaded. Filename: ${negotiationFileName}, Path: ${negotiationFile.path}`);
-      // VERIFY: Check if this file path exists on the server after upload
-      if (!fs.existsSync(negotiationFile.path)) {
-          console.error(`createNegotiation: !!! WARNING !!! Uploaded file NOT found at expected path: ${negotiationFile.path}`);
-          // You might want to return an error here if the file is genuinely missing
+      const filePath = negotiationFile.path;
+      console.log(`createNegotiation: File uploaded. Filename: ${negotiationFileName}, Server Path: ${filePath}`);
+      
+      if (!fs.existsSync(filePath)) {
+          console.error(`createNegotiation: !!! CRITICAL WARNING !!! Uploaded file NOT found at expected path: ${filePath}`);
+          // If the file isn't on disk, we should not proceed.
+          return res.status(500).json({ error: 'Uploaded file not found on server after processing.' });
       } else {
-          console.log(`createNegotiation: Confirmed file exists at: ${negotiationFile.path}`);
+          console.log(`createNegotiation: Confirmed file exists at: ${filePath}`);
       }
     } else {
       return res.status(400).json({ error: 'Audio/video file is required for negotiation' });
     }
 
     if (!transcriber_id || !requirements || !proposed_price_kes || !deadline_hours) {
-      if (negotiationFile) fs.unlinkSync(negotiationFile.path);
+      if (negotiationFile && fs.existsSync(negotiationFile.path)) fs.unlinkSync(negotiationFile.path);
       return res.status(400).json({ error: 'All fields are required' });
     }
 
@@ -297,21 +293,22 @@ const createNegotiation = async (req, res, next, io) => {
       .single();
 
     if (transcriberError || !transcriberUser) {
-      if (negotiationFile) fs.unlinkSync(negotiationFile.path);
+      if (negotiationFile && fs.existsSync(negotiationFile.path)) fs.unlinkSync(negotiationFile.path);
+      console.error('createNegotiation: Transcriber not found or not available. Supabase Error:', transcriberError);
       return res.status(404).json({ error: 'Transcriber not found or not available' });
     }
 
     if (!transcriberUser.is_available) {
-      if (negotiationFile) fs.unlinkSync(negotiationFile.path);
+      if (negotiationFile && fs.existsSync(negotiationFile.path)) fs.unlinkSync(negotiationFile.path);
       return res.status(400).json({ error: 'Transcriber is currently busy with another job or manually set to busy' });
     }
     if (transcriberUser.current_job_id) {
-        if (negotiationFile) fs.unlinkSync(negotiationFile.path);
+        if (negotiationFile && fs.existsSync(negotiationFile.path)) fs.unlinkSync(negotiationFile.path);
         return res.status(400).json({ error: 'Transcriber is currently busy with an active job' });
     }
 
 
-    const { data: existingNegotiation } = await supabase
+    const { data: existingNegotiation, error: existingNegError } = await supabase
       .from('negotiations')
       .select('id')
       .eq('client_id', clientId)
@@ -319,12 +316,17 @@ const createNegotiation = async (req, res, next, io) => {
       .eq('status', 'pending')
       .single();
 
+    if (existingNegError && existingNegError.code !== 'PGRST116') { // PGRST116 means no rows found, which is fine
+        console.error('createNegotiation: Supabase error checking existing negotiation:', existingNegError);
+        if (negotiationFile && fs.existsSync(negotiationFile.path)) fs.unlinkSync(negotiationFile.path);
+        return res.status(500).json({ error: existingNegError.message });
+    }
     if (existingNegotiation) {
-      if (negotiationFile) fs.unlinkSync(negotiationFile.path);
+      if (negotiationFile && fs.existsSync(negotiationFile.path)) fs.unlinkSync(negotiationFile.path);
       return res.status(400).json({ error: 'You already have a pending negotiation with this transcriber' });
     }
 
-    const { data, error } = await supabase
+    const { data, error: insertError } = await supabase
       .from('negotiations')
       .insert([
         {
@@ -335,14 +337,16 @@ const createNegotiation = async (req, res, next, io) => {
           deadline_hours: deadline_hours,
           client_message: `Budget: KES ${proposed_price_kes}, Deadline: ${deadline_hours} hours`,
           negotiation_files: negotiationFileName,
-          status: 'pending' // Initial status: pending
+          status: 'pending'
         }
       ])
-      .select();
+      .select()
+      .single();
 
-    if (error) {
-      if (negotiationFile) fs.unlinkSync(negotiationFile.path);
-      throw error;
+    if (insertError) {
+      console.error('createNegotiation: Supabase error inserting new negotiation:', insertError);
+      if (negotiationFile && fs.existsSync(negotiationFile.path)) fs.unlinkSync(negotiationFile.path);
+      throw insertError; // Re-throw to be caught by outer catch block for general 500
     }
 
     const newNegotiation = data[0];
@@ -377,8 +381,17 @@ const createNegotiation = async (req, res, next, io) => {
     });
 
   } catch (error) {
-    console.error('Create negotiation error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Create negotiation error: UNCAUGHT EXCEPTION:', error);
+    // Ensure file is deleted if any error occurs after upload but before DB insert
+    if (negotiationFile && fs.existsSync(negotiationFile.path)) {
+        try {
+            fs.unlinkSync(negotiationFile.path);
+            console.log(`Cleaned up uploaded file due to error: ${negotiationFile.path}`);
+        } catch (unlinkError) {
+            console.error(`Error deleting uploaded file after failed negotiation creation: ${unlinkError}`);
+        }
+    }
+    res.status(500).json({ error: error.message || 'Failed to create negotiation due to server error.' });
   }
 };
 
@@ -696,7 +709,6 @@ const rejectNegotiation = async (req, res, io) => {
     }
 };
 
-// NEW: Client accepts a transcriber's counter-offer
 const clientAcceptCounter = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
@@ -720,7 +732,6 @@ const clientAcceptCounter = async (req, res, io) => {
             return res.status(400).json({ error: 'Negotiation is not in a state to accept a counter-offer.' });
         }
 
-        // Update negotiation status to 'accepted_awaiting_payment'
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
             .update({ status: 'accepted_awaiting_payment', updated_at: new Date().toISOString() })
@@ -730,7 +741,6 @@ const clientAcceptCounter = async (req, res, io) => {
 
         if (updateError) throw updateError;
 
-        // Notify transcriber (real-time)
         if (io) {
             io.to(negotiation.transcriber_id).emit('negotiation_accepted', {
                 negotiationId: updatedNegotiation.id,
@@ -740,7 +750,6 @@ const clientAcceptCounter = async (req, res, io) => {
             console.log(`Emitted 'negotiation_accepted' to transcriber ${negotiation.transcriber_id}`);
         }
 
-        // Send email to transcriber
         const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
         if (transcriberError) console.error('Error fetching transcriber for client accept counter email:', transcriberError);
 
@@ -756,11 +765,10 @@ const clientAcceptCounter = async (req, res, io) => {
     }
 };
 
-// NEW: Client rejects a transcriber's counter-offer
 const clientRejectCounter = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
-        const { client_response } = req.body; // Client's reason for rejection
+        const { client_response } = req.body;
         const clientId = req.user.userId;
 
         const { data: negotiation, error: fetchError } = await supabase
@@ -790,7 +798,6 @@ const clientRejectCounter = async (req, res, io) => {
 
         if (updateError) throw updateError;
 
-        // Notify transcriber (real-time)
         if (io) {
             io.to(negotiation.transcriber_id).emit('negotiation_rejected', {
                 negotiationId: updatedNegotiation.id,
@@ -800,7 +807,6 @@ const clientRejectCounter = async (req, res, io) => {
             console.log(`Emitted 'negotiation_rejected' to transcriber ${negotiation.transcriber_id}`);
         }
 
-        // Send email to transcriber
         const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
         if (transcriberError) console.error('Error fetching transcriber for client reject counter email:', transcriberError);
 
@@ -816,7 +822,6 @@ const clientRejectCounter = async (req, res, io) => {
     }
 };
 
-// NEW: Client counters back to a transcriber's counter-offer
 const clientCounterBack = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
@@ -848,10 +853,10 @@ const clientCounterBack = async (req, res, io) => {
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
             .update({
-                status: 'client_counter', // Status changes to client_counter
+                status: 'client_counter',
                 agreed_price_kes: proposed_price_kes,
                 deadline_hours: deadline_hours,
-                client_message: client_response, // Store client's new message
+                client_message: client_response,
                 updated_at: new Date().toISOString()
             })
             .eq('id', negotiationId)
@@ -860,9 +865,8 @@ const clientCounterBack = async (req, res, io) => {
 
         if (updateError) throw updateError;
 
-        // Notify transcriber (real-time)
         if (io) {
-            io.to(negotiation.transcriber_id).emit('negotiation_countered', { // Use 'negotiation_countered' event
+            io.to(negotiation.transcriber_id).emit('negotiation_countered', {
                 negotiationId: updatedNegotiation.id,
                 message: `Client ${req.user.full_name} sent a counter-offer back!`,
                 newStatus: 'client_counter'
@@ -870,12 +874,10 @@ const clientCounterBack = async (req, res, io) => {
             console.log(`Emitted 'negotiation_countered' to transcriber ${negotiation.transcriber_id}`);
         }
 
-        // Send email to transcriber
         const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
         if (transcriberError) console.error('Error fetching transcriber for client counter back email:', transcriberError);
 
         if (transcriberUser) {
-            // Re-use sendCounterOfferEmail, but with client as sender and transcriber as receiver
             await emailService.sendCounterOfferEmail(transcriberUser, req.user, updatedNegotiation);
         }
 
@@ -898,7 +900,7 @@ module.exports = {
   acceptNegotiation,
   counterNegotiation,
   rejectNegotiation,
-  clientAcceptCounter, // NEW: Export client-side counter-offer actions
-  clientRejectCounter, // NEW: Export client-side counter-offer actions
-  clientCounterBack // NEW: Export client-side counter-offer actions
+  clientAcceptCounter,
+  clientRejectCounter,
+  clientCounterBack
 };
