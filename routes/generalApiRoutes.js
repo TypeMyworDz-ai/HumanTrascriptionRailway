@@ -12,9 +12,12 @@ const {
   getClientNegotiations,
   deleteNegotiation,
   syncAvailabilityStatus,
+  acceptNegotiation,
+  counterNegotiation,
+  rejectNegotiation
 } = require('../controllers/negotiationController');
 
-// Import admin controller functions - NEW: Import settings, jobs, and disputes functions
+// Import admin controller functions
 const {
     getPendingTranscriberTestsCount,
     getActiveJobsCount,
@@ -33,7 +36,7 @@ const {
     getAllDisputesForAdmin,
 } = require('../controllers/adminController');
 
-// Import chat controller functions (including the new ones)
+// Import chat controller functions
 const {
     getAdminDirectMessages,
     sendAdminDirectMessage,
@@ -42,7 +45,9 @@ const {
     getUnreadMessageCount,
     getAdminChatList,
     getNegotiationMessages,
-    sendNegotiationMessage
+    sendNegotiationMessage,
+    uploadChatAttachment, // NEW: Import multer middleware for chat attachments
+    handleChatAttachmentUpload // NEW: Import the handler for chat attachment upload
 } = require('../controllers/chatController');
 
 // NEW: Import payment controller functions
@@ -51,7 +56,7 @@ const {
     verifyPayment,
     getTranscriberPaymentHistory,
     getClientPaymentHistory,
-    getAllPaymentHistoryForAdmin // NEW: Import for admin oversight
+    getAllPaymentHistoryForAdmin
 } = require('../controllers/paymentController');
 
 // NEW: Import rating controller functions
@@ -75,12 +80,11 @@ const {
     getAvailableDirectUploadJobsForTranscriber,
     takeDirectUploadJob,
     completeDirectUploadJob,
-    getAllDirectUploadJobsForAdmin // NEW: Import for admin oversight
+    getAllDirectUploadJobsForAdmin
 } = require('../controllers/directUploadController');
 
 
 module.exports = (io) => {
-    // Socket.IO Connection Handling (This listener is primarily for room joining now)
     io.on('connection', (socket) => {
         socket.on('joinUserRoom', (userId) => {
             if (userId) {
@@ -105,7 +109,7 @@ module.exports = (io) => {
     if (req.user.userType !== 'client') {
       return res.status(403).json({ error: 'Access denied. Only clients can cancel negotiations.' });
     }
-    deleteNegotiation(req, res, next, io);
+    deleteNegotiation(req, res, io);
   });
 
   // --- MESSAGING ROUTES (General) ---
@@ -116,6 +120,9 @@ module.exports = (io) => {
   router.post('/messages/negotiation/send', authMiddleware, (req, res, next) => {
     sendNegotiationMessage(req, res, io);
   });
+
+  // NEW: Chat Attachment Upload Route
+  router.post('/chat/upload-attachment', authMiddleware, uploadChatAttachment, handleChatAttachmentUpload);
 
 
   // --- TRANSCRIBER POOL ---
@@ -134,7 +141,29 @@ module.exports = (io) => {
     createNegotiation(req, res, next, io);
   });
 
-  // Update user's availability status (still needed for manual toggle)
+  // NEW: Transcriber Negotiation Actions
+  router.put('/negotiations/:negotiationId/accept', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can accept negotiations.' });
+    }
+    acceptNegotiation(req, res, io);
+  });
+
+  router.put('/negotiations/:negotiationId/counter', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can counter negotiations.' });
+    }
+    counterNegotiation(req, res, io);
+  });
+
+  router.put('/negotiations/:negotiationId/reject', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can reject negotiations.' });
+    }
+    rejectNegotiation(req, res, io);
+  });
+
+
   router.put('/users/:userId/availability-status', authMiddleware, async (req, res) => {
     if (req.user.userType !== 'transcriber' && req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only transcribers or admins can update availability status.' });
@@ -170,23 +199,17 @@ module.exports = (io) => {
     }
   });
 
-  // NEW: Transcriber Profile Update Route
   router.put('/transcriber-profile/:userId', authMiddleware, (req, res, next) => {
-    // Only transcribers (for their own profile) or admins can update transcriber profile
     if (req.user.userType !== 'transcriber' && req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only transcribers or admins can update transcriber profiles.' });
     }
-    // The controller will handle further authorization (user updating own vs admin updating another)
     updateTranscriberProfile(req, res, next);
   });
 
-  // NEW: Client Profile Update Route
   router.put('/client-profile/:userId', authMiddleware, (req, res, next) => {
-    // Only clients (for their own profile) or admins can update client profile
     if (req.user.userType !== 'client' && req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only clients or admins can update client profiles.' });
     }
-    // The controller will handle further authorization (user updating own vs admin updating another)
     updateClientProfile(req, res, next);
   });
 
@@ -397,7 +420,6 @@ module.exports = (io) => {
   // --- NEW: Direct Upload Job Routes ---
   router.post('/direct-upload/job', authMiddleware, uploadDirectFiles, async (req, res, next) => {
     if (req.user.userType !== 'client') {
-      // If client is not authorized, delete any uploaded files
       if (req.files?.audioVideoFile?.[0]) {
         await fs.promises.unlink(req.files.audioVideoFile[0].path);
       }
@@ -420,7 +442,6 @@ module.exports = (io) => {
     if (req.user.userType !== 'transcriber') {
       return res.status(403).json({ error: 'Access denied. Only transcribers can view available direct upload jobs.' });
     }
-    // The controller will further filter by rating
     getAvailableDirectUploadJobsForTranscriber(req, res, next);
   });
 
@@ -428,7 +449,6 @@ module.exports = (io) => {
     if (req.user.userType !== 'transcriber') {
       return res.status(403).json({ error: 'Access denied. Only transcribers can take direct upload jobs.' });
     }
-    // The controller will further filter by rating and availability
     takeDirectUploadJob(req, res, io);
   });
 

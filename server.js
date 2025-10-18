@@ -3,7 +3,7 @@ const cors = require('cors');
 require('dotenv').config();
 const http = require('http');
 const { Server } = require('socket.io');
-const supabase = require('./database'); // Ensure this path is correct, should be ../database if in root
+const supabase = require('./database');
 const path = require('path'); // NEW: Import path module
 
 const authRoutes = require('./routes/authRoutes');
@@ -13,7 +13,7 @@ const generalApiRoutes = require('./routes/generalApiRoutes');
 const { setOnlineStatus } = require('./controllers/transcriberController');
 
 const app = express();
-const PORT = process.env.PORT || 10000; // Explicitly setting 10000 as Render's expected port
+const PORT = process.env.PORT || 10000;
 
 const ALLOWED_ORIGINS = [
   'http://localhost:3000',
@@ -100,9 +100,6 @@ app.use(express.urlencoded({ extended: true }));
 // NEW: Serve static files from the 'uploads' directory
 // This will make files under 'backend/uploads' accessible via '/uploads' URL path.
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-// Example: A file at backend/uploads/negotiation_files/audio.mp3
-// will be accessible at YOUR_RENDER_BACKEND_URL/uploads/negotiation_files/audio.mp3
-
 
 // Debugging middleware to log headers before routes are hit
 app.use((req, res, next) => {

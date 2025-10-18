@@ -1,21 +1,87 @@
-const supabase = require('..//database');
+const supabase = require('../database');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
-// Function to get direct messages between an admin and a user
+// Configure multer for chat attachment files (text, PDF, images)
+const chatAttachmentStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = 'uploads/chat_attachments'; // Dedicated directory for chat attachments
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const chatAttachmentFilter = (req, file, cb) => {
+  const allowedTypes = [
+    'application/pdf',
+    'application/msword', // .doc
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+    'text/plain',
+    'image/jpeg',
+    'image/jpg',
+    'image/png',
+    'image/gif'
+  ];
+  if (allowedTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only text, PDF, DOC, DOCX, and image files are allowed as chat attachments!'), false);
+  }
+};
+
+const uploadChatAttachment = multer({
+  storage: chatAttachmentStorage,
+  fileFilter: chatAttachmentFilter,
+  limits: {
+    fileSize: 20 * 1024 * 1024 // 20MB limit for chat attachments
+  }
+}).single('chatAttachment'); // 'chatAttachment' is the field name expected from the frontend
+
+const handleChatAttachmentUpload = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded for chat attachment.' });
+        }
+
+        const fileUrl = `/uploads/chat_attachments/${req.file.filename}`;
+        
+        res.status(200).json({ 
+            message: 'Attachment uploaded successfully', 
+            file_url: fileUrl,
+            file_name: req.file.originalname
+        });
+
+    } catch (error) {
+        console.error('Error handling chat attachment upload:', error);
+        if (req.file && fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
+        res.status(500).json({ error: error.message || 'Failed to upload attachment.' });
+    }
+};
+
+
 const getAdminDirectMessages = async (req, res, io) => {
     try {
-        const { userId } = req.params; // The user the admin is chatting with
-        const adminId = req.user.userId; // The logged-in admin's ID
+        const { userId } = req.params;
+        const adminId = req.user.userId;
 
         console.log(`[getAdminDirectMessages] Admin ID: ${adminId}, Target User ID: ${userId}`);
 
-        // FIX: Ensure UUIDs are correctly quoted in the OR filter string to prevent Supabase error
         const orFilter = `and(sender_id.eq."${adminId}",receiver_id.eq."${userId}"),and(sender_id.eq."${userId}",receiver_id.eq."${adminId}")`;
 
         const { data: messages, error } = await supabase
             .from('messages')
-            .select('id, sender_id, receiver_id, content, timestamp, is_read')
-            .or(orFilter) // Using the corrected filter string
-            .is('negotiation_id', null) // Only fetch direct messages
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name')
+            .or(orFilter)
+            .is('negotiation_id', null)
             .order('timestamp', { ascending: true });
 
         if (error) {
@@ -24,7 +90,6 @@ const getAdminDirectMessages = async (req, res, io) => {
         }
         console.log(`[getAdminDirectMessages] Fetched ${messages?.length || 0} messages.`);
 
-        // Mark messages as read when fetched by the admin
         if (messages && messages.length > 0 && io) {
             const unreadMessagesForAdmin = messages.filter(msg => msg.receiver_id === adminId && !msg.is_read);
             if (unreadMessagesForAdmin.length > 0) {
@@ -51,15 +116,14 @@ const getAdminDirectMessages = async (req, res, io) => {
     }
 };
 
-// Function to send a direct message from admin to a user
 const sendAdminDirectMessage = async (req, res, io) => {
     try {
-        const { receiverId, messageText } = req.body;
-        const senderId = req.user.userId; // The logged-in admin's ID
+        const { receiverId, messageText, file_url, file_name } = req.body;
+        const senderId = req.user.userId;
         const senderFullName = req.user.full_name || 'Admin';
 
-        if (!receiverId || !messageText) {
-            return res.status(400).json({ error: 'Receiver ID and message text are required.' });
+        if (!receiverId || (!messageText && !file_url)) {
+            return res.status(400).json({ error: 'Receiver ID and either message text or a file are required.' });
         }
 
         const { data: newMessage, error } = await supabase
@@ -68,10 +132,12 @@ const sendAdminDirectMessage = async (req, res, io) => {
                 sender_id: senderId,
                 receiver_id: receiverId,
                 content: messageText,
-                negotiation_id: null, // Mark as a direct admin-user chat
-                is_read: false // Mark new messages as unread by default
+                negotiation_id: null,
+                is_read: false,
+                file_url: file_url,
+                file_name: file_name
             })
-            .select('id, sender_id, receiver_id, content, timestamp, is_read')
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name')
             .single();
 
         if (error) throw error;
@@ -80,10 +146,9 @@ const sendAdminDirectMessage = async (req, res, io) => {
             const messagePayload = {
                 ...newMessage,
                 sender_name: senderFullName,
-                timestamp: new Date(newMessage.timestamp).toLocaleString()
             };
-            io.to(receiverId).emit('newChatMessage', messagePayload);
-            io.to(senderId).emit('newChatMessage', messagePayload);
+            io.to(receiverId).emit('receiveMessage', messagePayload);
+            io.to(senderId).emit('receiveMessage', messagePayload);
             io.to(receiverId).emit('unreadMessageCountUpdate', { userId: receiverId, change: 1 });
         }
 
@@ -94,25 +159,22 @@ const sendAdminDirectMessage = async (req, res, io) => {
     }
 };
 
-// Function to get direct messages for a regular user (client/transcriber)
 const getUserDirectMessages = async (req, res, io) => {
     try {
-        const { chatId } = req.params; // This will be the ID of the other user (e.g., Admin's ID)
-        const userId = req.user.userId; // The logged-in user's ID
+        const { chatId } = req.params;
+        const userId = req.user.userId;
         
-        // FIX: Ensure UUIDs are correctly quoted in the OR filter string to prevent Supabase error
         const orFilter = `and(sender_id.eq."${userId}",receiver_id.eq."${chatId}"),and(sender_id.eq."${chatId}",receiver_id.eq."${userId}")`;
 
         const { data: messages, error } = await supabase
             .from('messages')
-            .select('id, sender_id, receiver_id, content, timestamp, is_read')
-            .or(orFilter) // Using the corrected filter string
-            .is('negotiation_id', null) // Only fetch direct messages
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name')
+            .or(orFilter)
+            .is('negotiation_id', null)
             .order('timestamp', { ascending: true });
 
         if (error) throw error;
 
-        // Mark messages as read when fetched by the user
         if (messages && messages.length > 0 && io) {
             const unreadMessagesForUser = messages.filter(msg => msg.receiver_id === userId && !msg.is_read);
             if (unreadMessagesForUser.length > 0) {
@@ -138,15 +200,14 @@ const getUserDirectMessages = async (req, res, io) => {
     }
 };
 
-// Function for a regular user to send a direct message
 const sendUserDirectMessage = async (req, res, io) => {
     try {
-        const { receiverId, messageText } = req.body;
-        const senderId = req.user.userId; // The logged-in user's ID
+        const { receiverId, messageText, file_url, file_name } = req.body;
+        const senderId = req.user.userId;
         const senderFullName = req.user.full_name || 'User';
 
-        if (!receiverId || !messageText) {
-            return res.status(400).json({ error: 'Receiver ID and message text are required.' });
+        if (!receiverId || (!messageText && !file_url)) {
+            return res.status(400).json({ error: 'Receiver ID and either message text or a file are required.' });
         }
 
         const { data: newMessage, error } = await supabase
@@ -155,10 +216,12 @@ const sendUserDirectMessage = async (req, res, io) => {
                 sender_id: senderId,
                 receiver_id: receiverId,
                 content: messageText,
-                negotiation_id: null, // Mark as a direct chat
-                is_read: false // Mark new messages as unread by default
+                negotiation_id: null,
+                is_read: false,
+                file_url: file_url,
+                file_name: file_name
             })
-            .select('id, sender_id, receiver_id, content, timestamp, is_read')
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name')
             .single();
 
         if (error) throw error;
@@ -167,10 +230,9 @@ const sendUserDirectMessage = async (req, res, io) => {
             const messagePayload = {
                 ...newMessage,
                 sender_name: senderFullName,
-                timestamp: new Date(newMessage.timestamp).toLocaleString()
             };
-            io.to(receiverId).emit('newChatMessage', messagePayload);
-            io.to(senderId).emit('newChatMessage', messagePayload);
+            io.to(receiverId).emit('receiveMessage', messagePayload);
+            io.to(senderId).emit('receiveMessage', messagePayload);
             io.to(receiverId).emit('unreadMessageCountUpdate', { userId: receiverId, change: 1 });
         }
 
@@ -181,17 +243,16 @@ const sendUserDirectMessage = async (req, res, io) => {
     }
 };
 
-// Function to get unread message count for a user
 const getUnreadMessageCount = async (req, res) => {
     try {
-        const userId = req.user.userId; // The logged-in user's ID
+        const userId = req.user.userId;
 
         const { count, error } = await supabase
             .from('messages')
             .select('*', { count: 'exact', head: true })
             .eq('receiver_id', userId)
             .eq('is_read', false)
-            .is('negotiation_id', null); // Only count direct messages
+            .is('negotiation_id', null);
 
         if (error) throw error;
 
@@ -202,13 +263,11 @@ const getUnreadMessageCount = async (req, res) => {
     }
 };
 
-// NEW: Function to get messages for a specific negotiation
 const getNegotiationMessages = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
-        const userId = req.user.userId; // The logged-in user's ID
+        const userId = req.user.userId;
 
-        // First, verify that the user is a participant in this negotiation
         const { data: negotiation, error: negotiationError } = await supabase
             .from('negotiations')
             .select('client_id, transcriber_id')
@@ -227,13 +286,12 @@ const getNegotiationMessages = async (req, res, io) => {
 
         const { data: messages, error } = await supabase
             .from('messages')
-            .select('id, sender_id, receiver_id, content, timestamp, is_read')
-            .eq('negotiation_id', negotiationId) // Filter by negotiation_id
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name')
+            .eq('negotiation_id', negotiationId)
             .order('timestamp', { ascending: true });
 
         if (error) throw error;
 
-        // Mark messages as read when fetched by the user
         if (messages && messages.length > 0 && io) {
             const unreadMessagesForUser = messages.filter(msg => msg.receiver_id === userId && !msg.is_read);
             if (unreadMessagesForUser.length > 0) {
@@ -247,9 +305,8 @@ const getNegotiationMessages = async (req, res, io) => {
                     console.error('Error marking negotiation messages as read:', updateError);
                 } else {
                     io.to(userId).emit('unreadMessageCountUpdate', { userId: userId, change: -unreadIds.length });
-                    // Determine sender for these messages
                     const senderOfUnreadMessages = unreadMessagesForUser[0].sender_id;
-                    if (senderOfUnreadMessages !== userId) { // Don't emit to self
+                    if (senderOfUnreadMessages !== userId) {
                         io.to(senderOfUnreadMessages).emit('messageRead', {
                             senderId: userId,
                             receiverId: senderOfUnreadMessages,
@@ -268,18 +325,16 @@ const getNegotiationMessages = async (req, res, io) => {
     }
 };
 
-// NEW: Function to send a message within a negotiation
 const sendNegotiationMessage = async (req, res, io) => {
     try {
-        const { receiverId, negotiationId, messageText } = req.body;
+        const { receiverId, negotiationId, messageText, file_url, file_name } = req.body;
         const senderId = req.user.userId;
         const senderFullName = req.user.full_name || 'User';
 
-        if (!receiverId || !negotiationId || !messageText) {
-            return res.status(400).json({ error: 'Receiver ID, negotiation ID, and message text are required.' });
+        if (!receiverId || !negotiationId || (!messageText && !file_url)) {
+            return res.status(400).json({ error: 'Receiver ID, negotiation ID, and either message text or a file are required.' });
         }
 
-        // Verify that sender is a participant in this negotiation
         const { data: negotiation, error: negotiationError } = await supabase
             .from('negotiations')
             .select('client_id, transcriber_id')
@@ -301,11 +356,13 @@ const sendNegotiationMessage = async (req, res, io) => {
             .insert({
                 sender_id: senderId,
                 receiver_id: receiverId,
-                negotiation_id: negotiationId, // Link to the negotiation
+                negotiation_id: negotiationId,
                 content: messageText,
-                is_read: false
+                is_read: false,
+                file_url: file_url,
+                file_name: file_name
             })
-            .select('id, sender_id, receiver_id, negotiation_id, content, timestamp, is_read')
+            .select('id, sender_id, receiver_id, negotiation_id, content, timestamp, is_read, file_url, file_name')
             .single();
 
         if (error) throw error;
@@ -314,12 +371,9 @@ const sendNegotiationMessage = async (req, res, io) => {
             const messagePayload = {
                 ...newMessage,
                 sender_name: senderFullName,
-                timestamp: new Date(newMessage.timestamp).toLocaleString()
             };
-            // Emit to both sender and receiver rooms
             io.to(receiverId).emit('receiveMessage', messagePayload);
-            io.to(senderId).emit('receiveMessage', messagePayload); // Also emit to sender so their chat updates
-            // Increment unread count for the receiver
+            io.to(senderId).emit('receiveMessage', messagePayload);
             io.to(receiverId).emit('unreadMessageCountUpdate', { userId: receiverId, change: 1 });
         }
 
@@ -330,26 +384,20 @@ const sendNegotiationMessage = async (req, res, io) => {
     }
 };
 
-
-// NEW: Function to get a list of users the admin has chatted with, with latest message and unread count
 const getAdminChatList = async (req, res) => {
     try {
         const adminId = req.user.userId;
 
-        // Use a SQL function to get the latest messages for each chat partner
-        // This RPC call needs to be defined in your Supabase SQL Editor
         const { data: latestMessages, error: latestMessagesError } = await supabase.rpc('get_latest_direct_messages', { p_user_id: adminId });
 
         if (latestMessagesError) {
             console.error('Error in RPC get_latest_direct_messages:', latestMessagesError);
-            // This is a common point of failure for 500 errors if the RPC is missing
             return res.status(500).json({ error: 'Database function get_latest_direct_messages not found or failed.' });
         }
 
         const chatList = await Promise.all(latestMessages.map(async (msg) => {
             const partnerId = msg.sender_id === adminId ? msg.receiver_id : msg.sender_id;
             
-            // Fetch partner details
             const { data: partner, error: partnerError } = await supabase
                 .from('users')
                 .select('id, full_name, email, user_type')
@@ -358,12 +406,11 @@ const getAdminChatList = async (req, res) => {
 
             if (partnerError) console.error(`Error fetching partner ${partnerId}:`, partnerError);
 
-            // Fetch unread count for messages *from* this partner *to* the admin
             const { count: unreadCount, error: unreadError } = await supabase
                 .from('messages')
                 .select('*', { count: 'exact', head: true })
-                .eq('sender_id', partnerId) // Messages FROM this partner
-                .eq('receiver_id', adminId) // TO the admin
+                .eq('sender_id', partnerId)
+                .eq('receiver_id', adminId)
                 .eq('is_read', false)
                 .is('negotiation_id', null);
             
@@ -394,6 +441,8 @@ module.exports = {
     sendUserDirectMessage,
     getUnreadMessageCount,
     getAdminChatList,
-    getNegotiationMessages, // NEW: Export the negotiation message getter
-    sendNegotiationMessage // NEW: Export the negotiation message sender
+    getNegotiationMessages,
+    sendNegotiationMessage,
+    uploadChatAttachment,
+    handleChatAttachmentUpload
 };

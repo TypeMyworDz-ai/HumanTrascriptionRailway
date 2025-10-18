@@ -382,11 +382,10 @@ const createNegotiation = async (req, res, next, io) => {
   }
 };
 
-// UPDATED: Get client's negotiations - FIXED FOR NEW DATA MODEL AND SUPABASE BEHAVIOR
 const getClientNegotiations = async (req, res) => {
   try {
     const clientId = req.user.userId;
-    console.log(`Fetching client negotiations for client ID: \${clientId}`);
+    console.log(`Fetching client negotiations for client ID: ${clientId}`);
 
     const { data: negotiations, error: negotiationsError } = await supabase
       .from('negotiations')
@@ -461,8 +460,7 @@ const getClientNegotiations = async (req, res) => {
   }
 };
 
-// Client deletes a pending negotiation
-const deleteNegotiation = async (req, res, io) => { // Added io to parameters
+const deleteNegotiation = async (req, res, io) => {
   try {
     const { negotiationId } = req.params;
     const clientId = req.user.userId;
@@ -481,7 +479,7 @@ const deleteNegotiation = async (req, res, io) => { // Added io to parameters
       return res.status(403).json({ error: 'You are not authorized to delete this negotiation' });
     }
 
-    if (negotiation.status !== 'pending' && negotiation.status !== 'accepted_awaiting_payment') { // Allow deletion if awaiting payment
+    if (negotiation.status !== 'pending' && negotiation.status !== 'accepted_awaiting_payment') {
       return res.status(400).json({ error: 'Only pending or awaiting payment negotiations can be deleted' });
     }
 
@@ -502,7 +500,6 @@ const deleteNegotiation = async (req, res, io) => { // Added io to parameters
 
     if (deleteError) throw deleteError;
 
-    // Emit real-time notification to the transcriber that the negotiation was deleted
     if (io && negotiation.transcriber_id) {
       io.to(negotiation.transcriber_id).emit('negotiation_cancelled', {
         negotiationId: negotiation.id,
@@ -519,7 +516,6 @@ const deleteNegotiation = async (req, res, io) => { // Added io to parameters
   }
 };
 
-// NEW: Transcriber accepts a negotiation
 const acceptNegotiation = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
@@ -543,7 +539,6 @@ const acceptNegotiation = async (req, res, io) => {
             return res.status(400).json({ error: 'Negotiation is not in a state to be accepted.' });
         }
 
-        // Update negotiation status to 'accepted_awaiting_payment'
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
             .update({ status: 'accepted_awaiting_payment', updated_at: new Date().toISOString() })
@@ -553,7 +548,6 @@ const acceptNegotiation = async (req, res, io) => {
 
         if (updateError) throw updateError;
 
-        // Notify client (real-time)
         if (io) {
             io.to(negotiation.client_id).emit('negotiation_accepted', {
                 negotiationId: updatedNegotiation.id,
@@ -563,7 +557,6 @@ const acceptNegotiation = async (req, res, io) => {
             console.log(`Emitted 'negotiation_accepted' to client ${negotiation.client_id}`);
         }
 
-        // Send email to client
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.client_id).single();
         if (clientError) console.error('Error fetching client for negotiation accepted email:', clientError);
 
@@ -579,7 +572,6 @@ const acceptNegotiation = async (req, res, io) => {
     }
 };
 
-// NEW: Transcriber counters a negotiation
 const counterNegotiation = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
@@ -623,7 +615,6 @@ const counterNegotiation = async (req, res, io) => {
 
         if (updateError) throw updateError;
 
-        // Notify client (real-time)
         if (io) {
             io.to(negotiation.client_id).emit('negotiation_countered', {
                 negotiationId: updatedNegotiation.id,
@@ -633,7 +624,6 @@ const counterNegotiation = async (req, res, io) => {
             console.log(`Emitted 'negotiation_countered' to client ${negotiation.client_id}`);
         }
 
-        // Send email to client
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.client_id).single();
         if (clientError) console.error('Error fetching client for counter offer email:', clientError);
 
@@ -649,7 +639,6 @@ const counterNegotiation = async (req, res, io) => {
     }
 };
 
-// NEW: Transcriber rejects a negotiation
 const rejectNegotiation = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
@@ -683,7 +672,6 @@ const rejectNegotiation = async (req, res, io) => {
 
         if (updateError) throw updateError;
 
-        // Notify client (real-time)
         if (io) {
             io.to(negotiation.client_id).emit('negotiation_rejected', {
                 negotiationId: updatedNegotiation.id,
@@ -693,7 +681,6 @@ const rejectNegotiation = async (req, res, io) => {
             console.log(`Emitted 'negotiation_rejected' to client ${negotiation.client_id}`);
         }
 
-        // Send email to client
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.client_id).single();
         if (clientError) console.error('Error fetching client for negotiation rejected email:', clientError);
 
@@ -717,7 +704,7 @@ module.exports = {
   getClientNegotiations,
   deleteNegotiation,
   syncAvailabilityStatus,
-  acceptNegotiation, // NEW: Export
-  counterNegotiation, // NEW: Export
-  rejectNegotiation // NEW: Export
+  acceptNegotiation,
+  counterNegotiation,
+  rejectNegotiation
 };
