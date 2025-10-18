@@ -1,9 +1,11 @@
-const supabase = require('../database');
+const supabase = require('..//database');
 const multer = require('multer');
-const path = require('path'); // Corrected: Ensure 'path' is correctly required
+const path = require('path');
 const fs = require('fs');
-const emailService = require('../emailService');
-const { updateAverageRating } = require('./ratingController');
+const emailService = require('..//emailService');
+const { updateAverageRating } = require('./ratingController'); // Import updateAverageRating
+
+const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB limit
 
 const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) => {
     const updateData = {
@@ -34,7 +36,7 @@ const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) 
     }
 };
 
-// Multer configuration for negotiation files
+// Multer configuration for negotiation files (used by clientCounterBack)
 const negotiationFileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = 'uploads/negotiation_files';
@@ -63,8 +65,8 @@ const negotiationFileFilter = (req, file, cb) => {
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true); // Accept the file
   } else {
-    // Reject the file and provide an error message
-    cb(new Error('Only audio, video, PDF, DOC, DOCX, TXT, and image files are allowed for negotiation attachments!'), false);
+    // Reject the file and provide a MulterError for consistent handling in the route
+    cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'Only audio, video, PDF, DOC, DOCX, TXT, and image files are allowed for negotiation attachments!'), false);
   }
 };
 
@@ -72,9 +74,33 @@ const uploadNegotiationFiles = multer({
   storage: negotiationFileStorage,
   fileFilter: negotiationFileFilter,
   limits: {
-    fileSize: 100 * 1024 * 1024 // 100MB limit
+    fileSize: MAX_FILE_SIZE // 500MB limit
   }
 }).single('negotiationFile'); // Expecting a single file with the field name 'negotiationFile'
+
+// Multer configuration for temporary file uploads (used by /api/negotiations/temp-upload)
+const tempNegotiationFileStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = 'uploads/temp_negotiation_files'; // Separate directory for temporary files
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const uploadTempNegotiationFile = multer({
+  storage: tempNegotiationFileStorage,
+  fileFilter: negotiationFileFilter, // Reuse the same file filter
+  limits: {
+    fileSize: MAX_FILE_SIZE // 500MB limit
+  }
+}).single('negotiationFile'); // Expecting a single file with the field name 'negotiationFile'
+
 
 const getAvailableTranscribers = async (req, res) => {
   try {
@@ -211,37 +237,34 @@ const getAvailableTranscribers = async (req, res) => {
   }
 };
 
+// NEW: Endpoint for temporary file upload
+const tempUploadNegotiationFile = async (req, res) => {
+    // This function will be called by the `uploadTempNegotiationFile` multer middleware
+    // The file will be available in req.file if upload is successful
+    if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded or file type not allowed.' });
+    }
+
+    // Return the URL or filename of the temporarily stored file
+    const fileUrl = `/uploads/temp_negotiation_files/${req.file.filename}`; // Construct a URL for the frontend
+    res.status(200).json({ message: 'File uploaded temporarily.', fileUrl: req.file.filename }); // Send back filename, frontend will construct full path
+};
+
+
 const createNegotiation = async (req, res, next, io) => {
-  let negotiationFile = req.file; // The file uploaded via multer
   try {
-    const { transcriber_id, requirements, proposed_price_kes, deadline_hours } = req.body;
+    const { transcriber_id, requirements, proposed_price_kes, deadline_hours, negotiation_file_url } = req.body;
     const clientId = req.user.userId;
 
     // Basic validation for required fields
-    if (!transcriber_id || !requirements || !proposed_price_kes || !deadline_hours) {
-      // Clean up the uploaded file if any required field is missing
-      if (negotiationFile && fs.existsSync(negotiationFile.path)) {
-        fs.unlinkSync(negotiationFile.path);
-      }
-      return res.status(400).json({ error: 'All fields (transcriber_id, requirements, proposed_price_kes, deadline_hours) are required.' });
+    if (!transcriber_id || !requirements || !proposed_price_kes || !deadline_hours || !negotiation_file_url) {
+      return res.status(400).json({ error: 'All fields (transcriber_id, requirements, proposed_price_kes, deadline_hours, and negotiation_file_url) are required.' });
     }
 
-    // Check if a file was actually uploaded
-    if (!negotiationFile) {
-      return res.status(400).json({ error: 'Audio/video file is required for negotiation.' });
-    }
-
-    const negotiationFileName = negotiationFile.filename;
-    const filePath = negotiationFile.path;
-
-    // Verify that the uploaded file exists on the server after multer processing
-    if (!fs.existsSync(filePath)) {
-      console.error(`CRITICAL WARNING: Uploaded file NOT found at expected path: ${filePath}`);
-      // Attempt to clean up if the file reference still exists but the file doesn't
-      if (negotiationFile && fs.existsSync(negotiationFile.path)) {
-        fs.unlinkSync(negotiationFile.path);
-      }
-      return res.status(500).json({ error: 'Uploaded file not found on server after processing. Please try again.' });
+    // Check if the temporary file exists on the server
+    const tempFilePath = path.join('uploads/temp_negotiation_files', negotiation_file_url);
+    if (!fs.existsSync(tempFilePath)) {
+        return res.status(400).json({ error: 'Uploaded file not found on server. Please re-upload the file.' });
     }
 
     // Check if the target transcriber is available and active
@@ -269,20 +292,20 @@ const createNegotiation = async (req, res, next, io) => {
       .single();
 
     if (transcriberError || !transcriberUser) {
-      // Clean up the uploaded file if the transcriber is not found or not available
-      if (negotiationFile && fs.existsSync(negotiationFile.path)) {
-        fs.unlinkSync(negotiationFile.path);
+      // Clean up the temporary file if the transcriber is not found or not available
+      if (fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
       }
       console.error('createNegotiation: Transcriber not found or not available. Supabase Error:', transcriberError);
       return res.status(404).json({ error: 'Transcriber not found, not online, or not available for new jobs.' });
     }
     // Additional checks based on transcriber status
     if (!transcriberUser.is_available) {
-      if (negotiationFile && fs.existsSync(negotiationFile.path)) fs.unlinkSync(negotiationFile.path);
+      if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
       return res.status(400).json({ error: 'Transcriber is currently busy with another job or manually set to unavailable.' });
     }
     if (transcriberUser.current_job_id) {
-        if (negotiationFile && fs.existsSync(negotiationFile.path)) fs.unlinkSync(negotiationFile.path);
+        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
         return res.status(400).json({ error: 'Transcriber is currently busy with an active job.' });
     }
 
@@ -297,14 +320,22 @@ const createNegotiation = async (req, res, next, io) => {
 
     if (existingNegError && existingNegError.code !== 'PGRST116') { // PGRST116 means "No rows found"
         console.error('createNegotiation: Supabase error checking existing negotiation:', existingNegError);
-        if (negotiationFile && fs.existsSync(negotiationFile.path)) fs.unlinkSync(negotiationFile.path);
+        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
         return res.status(500).json({ error: existingNegError.message });
     }
     if (existingNegotiation) {
       // Clean up file if a pending negotiation already exists
-      if (negotiationFile && fs.existsSync(negotiationFile.path)) fs.unlinkSync(negotiationFile.path);
+      if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
       return res.status(400).json({ error: 'You already have a pending negotiation with this transcriber. Please wait for their response or cancel the existing one.' });
     }
+
+    // Move the temporary file to its permanent location
+    const permanentUploadDir = 'uploads/negotiation_files';
+    if (!fs.existsSync(permanentUploadDir)) {
+      fs.mkdirSync(permanentUploadDir, { recursive: true });
+    }
+    const permanentFilePath = path.join(permanentUploadDir, negotiation_file_url);
+    fs.renameSync(tempFilePath, permanentFilePath); // Atomically move the file
 
     // Insert the new negotiation request
     const { data, error: insertError } = await supabase
@@ -317,7 +348,7 @@ const createNegotiation = async (req, res, next, io) => {
           agreed_price_kes: proposed_price_kes,
           deadline_hours: deadline_hours,
           client_message: `Budget: KES ${proposed_price_kes}, Deadline: ${deadline_hours} hours`,
-          negotiation_files: negotiationFileName, // Store only the filename
+          negotiation_files: negotiation_file_url, // Store the filename (which is now the permanent name)
           status: 'pending'
         }
       ])
@@ -326,14 +357,14 @@ const createNegotiation = async (req, res, next, io) => {
 
     if (insertError) {
       console.error('createNegotiation: Supabase error inserting new negotiation:', insertError);
-      // Clean up file on insertion error
-      if (negotiationFile && fs.existsSync(negotiationFile.path)) {
-        fs.unlinkSync(negotiationFile.path);
+      // Clean up the moved file if insertion fails
+      if (fs.existsSync(permanentFilePath)) {
+        fs.unlinkSync(permanentFilePath);
       }
       throw insertError;
     }
 
-    const newNegotiation = data[0];
+    const newNegotiation = data; // Supabase .single() returns the object directly, not an array
 
     // Emit a real-time event to the transcriber
     if (io) {
@@ -369,15 +400,7 @@ const createNegotiation = async (req, res, next, io) => {
 
   } catch (error) {
     console.error('createNegotiation: UNCAUGHT EXCEPTION:', error);
-    // Ensure file cleanup occurs if an error happens at any stage
-    if (negotiationFile && fs.existsSync(negotiationFile.path)) {
-        try {
-            fs.unlinkSync(negotiationFile.path);
-            console.log(`Cleaned up uploaded file due to error: ${negotiationFile.path}`);
-        } catch (unlinkError) {
-            console.error(`Error deleting uploaded file after failed negotiation creation: ${unlinkError}`);
-        }
-    }
+    // No local file cleanup needed here for `req.file` as it's handled by temp upload
     res.status(500).json({ error: error.message || 'Failed to create negotiation due to server error.' });
   }
 };
@@ -484,9 +507,12 @@ const getTranscriberNegotiations = async (req, res) => {
         client:users!client_id (
             id,
             full_name,
-            email
+            email,
+            clients ( -- Fetch client profile to get average_rating
+                average_rating
+            )
         )
-      `) // Removed the embedded comment here
+      `)
       .eq('transcriber_id', transcriberId)
       .order('created_at', { ascending: false });
 
@@ -505,12 +531,14 @@ const getTranscriberNegotiations = async (req, res) => {
     // Process negotiations to format client data cleanly
     const negotiationsWithClients = negotiations.map(negotiation => {
         const { client, ...rest } = negotiation;
+        // Safely access nested client profile data
+        const clientProfileData = client?.clients?.[0] || {};
         return {
             ...rest,
             client_info: client ? {
                 id: client.id,
                 full_name: client.full_name,
-                client_rating: 5.0, // Default rating since we don't have this in users table here
+                client_rating: clientProfileData.average_rating || 5.0, // Use fetched average_rating, default to 5.0
                 email: client.email,
             } : {
                 id: negotiation.client_id,
@@ -554,7 +582,7 @@ const deleteNegotiation = async (req, res, io) => {
     }
 
     // Define allowed statuses for deletion (updated based on previous feedback)
-    const deletableStatuses = ['pending', 'accepted_awaiting_payment', 'rejected', 'cancelled'];
+    const deletableStatuses = ['pending', 'accepted_awaiting_payment', 'rejected', 'cancelled', 'transcriber_counter', 'client_counter']; // Added counter statuses
     if (!deletableStatuses.includes(negotiation.status)) {
       return res.status(400).json({ error: `Negotiations with status '${negotiation.status}' cannot be deleted. Only ${deletableStatuses.join(', ')} can be deleted.` });
     }
@@ -619,7 +647,7 @@ const acceptNegotiation = async (req, res, io) => {
 
         // Check if the negotiation is in an acceptable state (pending or client countered)
         if (negotiation.status !== 'pending' && negotiation.status !== 'client_counter') {
-            return res.status(400).json({ error: 'Negotiation is not in a state that can be accepted.' });
+            return res.status(400).json({ error: 'Negotiation is not in a state that can be accepted. Current status: ' + negotiation.status });
         }
 
         // Update the negotiation status to 'accepted_awaiting_payment'
@@ -687,7 +715,7 @@ const counterNegotiation = async (req, res, io) => {
 
         // Check if the negotiation is in an acceptable state (pending or client countered)
         if (negotiation.status !== 'pending' && negotiation.status !== 'client_counter') {
-            return res.status(400).json({ error: 'Negotiation is not in a state that allows for a counter-offer.' });
+            return res.status(400).json({ error: 'Negotiation is not in a state that allows for a counter-offer. Current status: ' + negotiation.status });
         }
 
         // Update negotiation with counter-offer details
@@ -756,7 +784,7 @@ const rejectNegotiation = async (req, res, io) => {
 
         // Check if the negotiation is in an acceptable state (pending or client countered)
         if (negotiation.status !== 'pending' && negotiation.status !== 'client_counter') {
-            return res.status(400).json({ error: 'Negotiation is not in a state that can be rejected.' });
+            return res.status(400).json({ error: 'Negotiation is not in a state that can be rejected. Current status: ' + negotiation.status });
         }
 
         // Update negotiation status to 'rejected' and store the rejection reason
@@ -818,7 +846,7 @@ const clientAcceptCounter = async (req, res, io) => {
 
         // Check if the negotiation is in the 'transcriber_counter' state
         if (negotiation.status !== 'transcriber_counter') {
-            return res.status(400).json({ error: 'Negotiation is not in a state to accept a counter-offer.' });
+            return res.status(400).json({ error: 'Negotiation is not in a state to accept a counter-offer. Current status: ' + negotiation.status });
         }
 
         // Update negotiation status to 'accepted_awaiting_payment'
@@ -882,7 +910,7 @@ const clientRejectCounter = async (req, res, io) => {
 
         // Check if the negotiation is in the 'transcriber_counter' state
         if (negotiation.status !== 'transcriber_counter') {
-            return res.status(400).json({ error: 'Negotiation is not in a state to reject a counter-offer.' });
+            return res.status(400).json({ error: 'Negotiation is not in a state to reject a counter-offer. Current status: ' + negotiation.status });
         }
 
         // Update negotiation status to 'rejected' and store the client's response
@@ -893,7 +921,7 @@ const clientRejectCounter = async (req, res, io) => {
             .select()
             .single();
 
-        if (updateError) throw updateError;
+        if (updateError) throw error;
 
         // Emit a real-time event to the transcriber
         if (io) {
@@ -922,15 +950,35 @@ const clientRejectCounter = async (req, res, io) => {
 };
 
 const clientCounterBack = async (req, res, io) => {
+    let negotiationFile = req.file; // Get the uploaded file from Multer
     try {
         const { negotiationId } = req.params;
         const { proposed_price_kes, deadline_hours, client_response } = req.body;
         const clientId = req.user.userId;
 
-        // Validate input fields
+        // Basic validation for required fields
         if (!proposed_price_kes || !deadline_hours || !client_response) {
+            // Clean up the uploaded file if any required field is missing
+            if (negotiationFile && fs.existsSync(negotiationFile.path)) {
+                fs.unlinkSync(negotiationFile.path);
+            }
             return res.status(400).json({ error: 'Proposed price, deadline, and message are required for a counter-offer back.' });
         }
+
+        let negotiationFileName = null;
+        if (negotiationFile) {
+            negotiationFileName = negotiationFile.filename;
+            const filePath = negotiationFile.path;
+            // Verify that the uploaded file exists on the server after multer processing
+            if (!fs.existsSync(filePath)) {
+                console.error(`CRITICAL WARNING: Uploaded file NOT found at expected path: ${filePath}`);
+                if (negotiationFile && fs.existsSync(negotiationFile.path)) {
+                    fs.unlinkSync(negotiationFile.path);
+                }
+                return res.status(500).json({ error: 'Uploaded file not found on server after processing. Please try again.' });
+            }
+        }
+
 
         // Fetch negotiation details to verify status and authorization
         const { data: negotiation, error: fetchError } = await supabase
@@ -940,17 +988,29 @@ const clientCounterBack = async (req, res, io) => {
             .single();
 
         if (fetchError || !negotiation) {
+            // Clean up file if negotiation not found
+            if (negotiationFile && fs.existsSync(negotiationFile.path)) {
+                fs.unlinkSync(negotiationFile.path);
+            }
             return res.status(404).json({ error: 'Negotiation not found.' });
         }
 
         // Authorize the user (must be the client)
         if (negotiation.client_id !== clientId) {
+            // Clean up file if unauthorized
+            if (negotiationFile && fs.existsSync(negotiationFile.path)) {
+                fs.unlinkSync(negotiationFile.path);
+            }
             return res.status(403).json({ error: 'You are not authorized to counter back on this negotiation.' });
         }
 
         // Check if the negotiation is in the 'transcriber_counter' state
         if (negotiation.status !== 'transcriber_counter') {
-            return res.status(400).json({ error: 'Negotiation is not in a state that allows for a counter-offer back.' });
+            // Clean up file if status is incorrect
+            if (negotiationFile && fs.existsSync(negotiationFile.path)) {
+                fs.unlinkSync(negotiationFile.path);
+            }
+            return res.status(400).json({ error: 'Negotiation is not in a state that allows for a counter-offer back. Current status: ' + negotiation.status });
         }
 
         // Update negotiation with the client's counter-offer
@@ -961,13 +1021,21 @@ const clientCounterBack = async (req, res, io) => {
                 agreed_price_kes: proposed_price_kes,
                 deadline_hours: deadline_hours,
                 client_message: client_response, // Store the client's message/response
+                negotiation_files: negotiationFileName, // Store the new file name if uploaded
                 updated_at: new Date().toISOString()
             })
             .eq('id', negotiationId)
             .select()
             .single();
 
-        if (updateError) throw updateError;
+        if (updateError) {
+            console.error('Client counter back: Supabase error updating negotiation:', updateError);
+            // Clean up file on DB error
+            if (negotiationFile && fs.existsSync(negotiationFile.path)) {
+                fs.unlinkSync(negotiationFile.path);
+            }
+            throw updateError;
+        }
 
         // Emit a real-time event to the transcriber
         if (io) {
@@ -991,14 +1059,25 @@ const clientCounterBack = async (req, res, io) => {
         res.json({ message: 'Counter-offer sent successfully.', negotiation: updatedNegotiation });
 
     } catch (error) {
-        console.error('Client counter back error:', error);
-        res.status(500).json({ error: error.message });
+        console.error('Client counter back error: UNCAUGHT EXCEPTION:', error);
+        // Ensure file cleanup occurs if an unexpected error happens
+        if (negotiationFile && fs.existsSync(negotiationFile.path)) {
+            try {
+                fs.unlinkSync(negotiationFile.path);
+                console.log(`Cleaned up uploaded file due to UNCAUGHT EXCEPTION: ${negotiationFile.path}`);
+            } catch (unlinkError) {
+                console.error(`Error deleting uploaded file after UNCAUGHT EXCEPTION in clientCounterBack: ${unlinkError}`);
+            }
+        }
+        res.status(500).json({ error: error.message || 'Failed to send counter-offer due to server error.' });
     }
 };
 
 
 module.exports = {
   uploadNegotiationFiles,
+  uploadTempNegotiationFile, // Export the new temp upload middleware
+  tempUploadNegotiationFile, // Export the new temp upload handler
   getAvailableTranscribers,
   createNegotiation,
   getClientNegotiations,

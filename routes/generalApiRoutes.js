@@ -1,13 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('../database');
-const authMiddleware = require('../middleware/authMiddleware');
+const supabase = require('..//database');
+const authMiddleware = require('..//middleware/authMiddleware');
 const fs = require('fs');
 const path = require('path');
 
 // IMPORTANT: Import functions from negotiationController.js
 const {
-  uploadNegotiationFiles,
+  uploadNegotiationFiles, // This is the Multer middleware for negotiation files (still used for clientCounterBack)
+  uploadTempNegotiationFile, // NEW: Multer middleware for temporary negotiation file upload
+  tempUploadNegotiationFile, // NEW: Controller for temporary negotiation file upload
   getAvailableTranscribers,
   createNegotiation,
   getClientNegotiations,
@@ -19,7 +21,7 @@ const {
   clientAcceptCounter,
   clientRejectCounter,
   clientCounterBack
-} = require('../controllers/negotiationController');
+} = require('..//controllers/negotiationController');
 
 // Import admin controller functions
 const {
@@ -38,7 +40,7 @@ const {
     updateAdminSettings,
     getAllJobsForAdmin,
     getAllDisputesForAdmin,
-} = require('../controllers/adminController');
+} = require('..//controllers/adminController');
 
 // Import chat controller functions
 const {
@@ -50,9 +52,9 @@ const {
     getAdminChatList,
     getNegotiationMessages,
     sendNegotiationMessage,
-    uploadChatAttachment, // Import the Multer middleware
-    handleChatAttachmentUpload // Import the controller function
-} = require('../controllers/chatController');
+    uploadChatAttachment, // This is the Multer middleware for chat attachments
+    handleChatAttachmentUpload // This is the controller function for chat attachments
+} = require('..//controllers/chatController');
 
 // NEW: Import payment controller functions
 const {
@@ -61,7 +63,7 @@ const {
     getTranscriberPaymentHistory,
     getClientPaymentHistory,
     getAllPaymentHistoryForAdmin
-} = require('../controllers/paymentController');
+} = require('..//controllers/paymentController');
 
 // NEW: Import rating controller functions
 const {
@@ -69,26 +71,75 @@ const {
     rateClientByAdmin,
     getTranscriberRatings,
     getClientRating
-} = require('../controllers/ratingController');
+} = require('..//controllers/ratingController');
 
 // NEW: Import updateTranscriberProfile from transcriberController
-const { updateTranscriberProfile } = require('../controllers/transcriberController');
+const { updateTranscriberProfile } = require('..//controllers/transcriberController');
 // NEW: Import updateClientProfile from authController
-const { updateClientProfile } = require('../controllers/authController');
+const { updateClientProfile } = require('..//controllers/authController');
 
 // NEW: Import functions from directUploadController.js
 const {
-    uploadDirectFiles,
+    uploadDirectFiles, // Multer middleware for direct uploads
     createDirectUploadJob,
     getDirectUploadJobsForClient,
     getAvailableDirectUploadJobsForTranscriber,
     takeDirectUploadJob,
     completeDirectUploadJob,
     getAllDirectUploadJobsForAdmin
-} = require('../controllers/directUploadController');
+} = require('..//controllers/directUploadController');
 
 // Import multer for direct use in this file for error handling
 const multer = require('multer');
+
+// --- Multer Error Handling Middleware ---
+// This middleware will catch errors specifically thrown by Multer
+const multerErrorHandler = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    // Multer-specific errors (e.g., file size limit, unexpected field)
+    console.error('Multer Error Caught in Route Handler:', err.message, 'Code:', err.code);
+    // Clean up any partially uploaded files
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlink(req.file.path, (unlinkErr) => {
+        if (unlinkErr) console.error("Error deleting Multer error temp file (req.file):", unlinkErr);
+      });
+    }
+    if (req.files && typeof req.files === 'object') {
+      for (const key in req.files) {
+        req.files[key].forEach(file => {
+          if (fs.existsSync(file.path)) {
+            fs.unlink(file.path, (unlinkErr) => {
+              if (unlinkErr) console.error("Error deleting Multer error temp file (req.files):", unlinkErr);
+            });
+          }
+        });
+      }
+    }
+    return res.status(400).json({ error: err.message });
+  } else if (err) {
+    // General file upload errors (e.g., from a custom fileFilter that throws a non-MulterError)
+    console.error('General File Upload Error Caught in Route Handler:', err.message);
+    // Clean up any partially uploaded files
+    if (req.file && fs.existsSync(req.file.path)) {
+        fs.unlink(req.file.path, (unlinkErr) => {
+          if (unlinkErr) console.error("Error deleting general file error temp file (req.file):", unlinkErr);
+        });
+      }
+      if (req.files && typeof req.files === 'object') {
+        for (const key in req.files) {
+          req.files[key].forEach(file => {
+            if (fs.existsSync(file.path)) {
+              fs.unlink(file.path, (unlinkErr) => {
+                if (unlinkErr) console.error("Error deleting general file error temp file (req.files):", unlinkErr);
+              });
+            }
+          });
+        }
+      }
+    return res.status(400).json({ error: err.message });
+  }
+  next(err); // Pass other errors (not related to Multer/file upload) to the next error handler
+};
 
 module.exports = (io) => {
   // --- CLIENT-SIDE NEGOTIATIONS ---
@@ -116,22 +167,8 @@ module.exports = (io) => {
   });
 
   // NEW: Chat Attachment Upload Route
-  // Use uploadChatAttachment middleware from chatController, then handleChatAttachmentUpload
-  router.post('/chat/upload-attachment', authMiddleware, uploadChatAttachment, handleChatAttachmentUpload);
-
-  // CRITICAL FIX: Multer error handling middleware for file uploads
-  router.use((err, req, res, next) => {
-    if (err instanceof multer.MulterError) {
-      // Multer-specific errors
-      console.error('Multer Error:', err.message);
-      return res.status(400).json({ error: err.message });
-    } else if (err) {
-      // General file upload errors (e.g., from fileFilter)
-      console.error('File Upload Error:', err.message);
-      return res.status(400).json({ error: err.message });
-    }
-    next(err); // Pass other errors to the next error handler
-  });
+  // Apply Multer middleware and then the controller function
+  router.post('/chat/upload-attachment', authMiddleware, uploadChatAttachment, handleChatAttachmentUpload, multerErrorHandler);
 
 
   // --- TRANSCRIBER POOL ---
@@ -142,32 +179,14 @@ module.exports = (io) => {
     getAvailableTranscribers(req, res, next);
   });
 
-  // Configure multer for negotiation file uploads
-  const uploadNegotiation = multer({
-    storage: multer.diskStorage({
-      destination: function (req, file, cb) {
-        cb(null, path.join(__dirname, '../uploads/negotiation_files'));
-      },
-      filename: function (req, file, cb) {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-      }
-    }),
-    limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit
-  });
+  // NEW: Temporary file upload route for negotiations
+  router.post('/negotiations/temp-upload', authMiddleware, uploadTempNegotiationFile, tempUploadNegotiationFile, multerErrorHandler);
 
-  router.post('/negotiations/create', authMiddleware, uploadNegotiation.single('audioVideoFile'), async (req, res, next) => {
-    if (req.user.userType !== 'client') {
-      // Clean up uploaded file if an error occurs or access is denied
-      if (req.file) {
-        fs.unlink(req.file.path, (err) => {
-          if (err) console.error("Error deleting temp file:", err);
-        });
-      }
-      return res.status(403).json({ error: 'Access denied. Only clients can create negotiations.' });
-    }
+  // CRITICAL CHANGE: Negotiation creation no longer uses Multer middleware here, as file is pre-uploaded
+  router.post('/negotiations/create', authMiddleware, (req, res, next) => {
     createNegotiation(req, res, next, io);
   });
+
 
   // NEW: Transcriber Negotiation Actions
   router.put('/negotiations/:negotiationId/accept', authMiddleware, (req, res, next) => {
@@ -210,7 +229,16 @@ module.exports = (io) => {
     if (req.user.userType !== 'client') {
         return res.status(403).json({ error: 'Access denied. Only clients can counter back.' });
     }
-    clientCounterBack(req, res, io);
+    // CRITICAL CHANGE: Add Multer middleware for file upload here
+    // Use uploadNegotiationFiles (from negotiationController) for file handling
+    uploadNegotiationFiles(req, res, (multerErr) => {
+      if (multerErr) {
+        // If Multer error occurs, pass it to the multerErrorHandler
+        return multerErrorHandler(multerErr, req, res, next);
+      }
+      // If no Multer error, proceed to the controller function
+      clientCounterBack(req, res, io);
+    });
   });
 
 
@@ -398,14 +426,14 @@ module.exports = (io) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can view all jobs.' });
       }
-      getAllJobsForAdmin(req, res, next);
+      getAllJobsForAdmin(req, res, io);
   });
 
   router.get('/admin/disputes/all', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can view all disputes.' });
       }
-      getAllDisputesForAdmin(req, res, next);
+      getAllDisputesForAdmin(req, res, io);
   });
 
   // --- NEW: Paystack Payment Routes ---
@@ -471,7 +499,7 @@ module.exports = (io) => {
   const uploadDirect = multer({
     storage: multer.diskStorage({
       destination: function (req, file, cb) {
-        cb(null, path.join(__dirname, '../uploads/direct_uploads'));
+        cb(null, path.join(__dirname, '..//uploads/direct_uploads'));
       },
       filename: function (req, file, cb) {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);

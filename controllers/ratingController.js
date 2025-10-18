@@ -1,4 +1,4 @@
-const supabase = require('../database');
+const supabase = require('..//database');
 
 // Helper function to calculate and update the average rating for a user (transcriber or client)
 const updateAverageRating = async (userId, userType) => {
@@ -14,12 +14,13 @@ const updateAverageRating = async (userId, userType) => {
 
         // If no ratings exist, set the average rating to a default (e.g., 0 or 5)
         if (ratings.length === 0) {
+            const defaultRating = 5.0; // Default to 5.0 for new/unrated users
             const { error: updateError } = await supabase
                 .from(userType === 'transcriber' ? 'transcribers' : 'clients') // Target the correct profile table
-                .update({ average_rating: 0 }) // Default to 0 if no ratings
+                .update({ average_rating: defaultRating }) // Default to 5.0 if no ratings
                 .eq('id', userId);
             if (updateError) throw updateError;
-            return 0; // Return the default average
+            return defaultRating; // Return the default average
         }
 
         // Calculate the new average rating
@@ -197,7 +198,7 @@ const rateClientByAdmin = async (req, res) => {
 
     } catch (error) {
         console.error('Server error rating client by admin:', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Server error rating client by admin.' });
+        res.status(500).json({ error: 'Server error rating client by admin.!' });
     }
 };
 
@@ -268,7 +269,12 @@ const getClientRating = async (req, res) => {
             .single();
 
         if (profileError || !clientProfile) {
-            return res.status(404).json({ error: 'Client not found.' });
+            // Return default 5.0 if client not found or no profile, so it doesn't break UI
+            return res.status(200).json({
+                message: 'Client not found or no rating available, defaulting to 5.0.',
+                averageRating: 5.0,
+                ratings: []
+            });
         }
 
         // 2. Fetch detailed ratings for the client (e.g., from admin ratings)
@@ -311,6 +317,7 @@ const getClientRating = async (req, res) => {
 
 
 module.exports = {
+    updateAverageRating, // Export the helper function for use in other controllers
     rateTranscriber,
     rateClientByAdmin,
     getTranscriberRatings,

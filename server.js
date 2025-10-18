@@ -5,6 +5,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const supabase = require('./database');
 const path = require('path');
+const fs = require('fs'); // Import fs for file system operations
 
 const authRoutes = require('./routes/authRoutes');
 const audioRoutes = require('./routes/audioRoutes');
@@ -105,7 +106,11 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Serve static files from the 'uploads' directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// NEW: Serve static files from the 'uploads/temp_negotiation_files' directory for temporary uploads
+app.use('/uploads/temp_negotiation_files', express.static(path.join(__dirname, 'uploads', 'temp_negotiation_files')));
+
 
 // Debugging middleware to log headers before routes are hit
 app.use((req, res, next) => {
@@ -138,7 +143,7 @@ const transcriberRouter = transcriberRoutes(io);
 const generalApiRouter = generalApiRoutes(io);
 
 // --- ROUTES ---
-app.use('/api/transcriber', transcriberRouter); // Corrected typo here
+app.use('/api/transcriber', transcriberRouter);
 app.use('/api/auth', authRoutes);
 app.use('/api/audio', audioRoutes);
 app.use('/api', generalApiRouter);
