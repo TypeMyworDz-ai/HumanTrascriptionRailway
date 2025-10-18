@@ -587,6 +587,19 @@ const deleteNegotiation = async (req, res, io) => {
       return res.status(400).json({ error: `Negotiations with status '${negotiation.status}' cannot be deleted. Only ${deletableStatuses.join(', ')} can be deleted.` });
     }
 
+    // CRITICAL FIX: Delete associated messages first
+    const { error: deleteMessagesError } = await supabase
+        .from('messages')
+        .delete()
+        .eq('negotiation_id', negotiationId);
+
+    if (deleteMessagesError) {
+        console.error(`Error deleting messages for negotiation ${negotiationId}:`, deleteMessagesError);
+        throw deleteMessagesError;
+    }
+    console.log(`Deleted messages for negotiation ${negotiationId}.`);
+
+
     // Delete the associated file from the server if it exists
     if (negotiation.negotiation_files) {
       const filePath = path.join('uploads/negotiation_files', negotiation.negotiation_files);
