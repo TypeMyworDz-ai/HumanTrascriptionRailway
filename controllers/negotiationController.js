@@ -1,5 +1,3 @@
-// backend/controllers/negotiationController.js - UPDATED for robust error handling in createNegotiation
-
 const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
@@ -255,7 +253,9 @@ const createNegotiation = async (req, res, next, io) => {
       
       if (!fs.existsSync(filePath)) {
           console.error(`createNegotiation: !!! CRITICAL WARNING !!! Uploaded file NOT found at expected path: ${filePath}`);
-          // If the file isn't on disk, we should not proceed.
+          if (negotiationFile && fs.existsSync(negotiationFile.path)) {
+            fs.unlinkSync(negotiationFile.path);
+          }
           return res.status(500).json({ error: 'Uploaded file not found on server after processing.' });
       } else {
           console.log(`createNegotiation: Confirmed file exists at: ${filePath}`);
@@ -316,7 +316,7 @@ const createNegotiation = async (req, res, next, io) => {
       .eq('status', 'pending')
       .single();
 
-    if (existingNegError && existingNegError.code !== 'PGRST116') { // PGRST116 means no rows found, which is fine
+    if (existingNegError && existingNegError.code !== 'PGRST116') {
         console.error('createNegotiation: Supabase error checking existing negotiation:', existingNegError);
         if (negotiationFile && fs.existsSync(negotiationFile.path)) fs.unlinkSync(negotiationFile.path);
         return res.status(500).json({ error: existingNegError.message });
@@ -346,7 +346,7 @@ const createNegotiation = async (req, res, next, io) => {
     if (insertError) {
       console.error('createNegotiation: Supabase error inserting new negotiation:', insertError);
       if (negotiationFile && fs.existsSync(negotiationFile.path)) fs.unlinkSync(negotiationFile.path);
-      throw insertError; // Re-throw to be caught by outer catch block for general 500
+      throw insertError;
     }
 
     const newNegotiation = data[0];
@@ -356,7 +356,8 @@ const createNegotiation = async (req, res, next, io) => {
         negotiationId: newNegotiation.id,
         clientId: clientId,
         clientName: req.user.full_name,
-        message: `You have a new negotiation request from ${req.user.full_name}.`
+        message: `You have a new negotiation request from ${req.user.full_name}.`,
+        newStatus: 'pending' // Added newStatus for frontend clarity
       });
       console.log(`Emitted 'new_negotiation_request' to transcriber ${transcriber_id}`);
     }
@@ -381,8 +382,7 @@ const createNegotiation = async (req, res, next, io) => {
     });
 
   } catch (error) {
-    console.error('Create negotiation error: UNCAUGHT EXCEPTION:', error);
-    // Ensure file is deleted if any error occurs after upload but before DB insert
+    console.error('createNegotiation: UNCAUGHT EXCEPTION:', error);
     if (negotiationFile && fs.existsSync(negotiationFile.path)) {
         try {
             fs.unlinkSync(negotiationFile.path);
@@ -492,8 +492,10 @@ const deleteNegotiation = async (req, res, io) => {
       return res.status(403).json({ error: 'You are not authorized to delete this negotiation' });
     }
 
-    if (negotiation.status !== 'pending' && negotiation.status !== 'accepted_awaiting_payment') {
-      return res.status(400).json({ error: 'Only pending or awaiting payment negotiations can be deleted' });
+    // UPDATED: Allow deletion for pending, accepted_awaiting_payment, rejected, and cancelled statuses
+    const deletableStatuses = ['pending', 'accepted_awaiting_payment', 'rejected', 'cancelled'];
+    if (!deletableStatuses.includes(negotiation.status)) {
+      return res.status(400).json({ error: `Negotiations with status '${negotiation.status}' cannot be deleted. Only ${deletableStatuses.join(', ')} can.` });
     }
 
     if (negotiation.negotiation_files) {
@@ -516,7 +518,8 @@ const deleteNegotiation = async (req, res, io) => {
     if (io && negotiation.transcriber_id) {
       io.to(negotiation.transcriber_id).emit('negotiation_cancelled', {
         negotiationId: negotiation.id,
-        message: `A negotiation request from ${req.user.full_name} was cancelled.`
+        message: `A negotiation request from ${req.user.full_name} was cancelled.`,
+        newStatus: 'cancelled' // Added newStatus for frontend clarity
       });
       console.log(`Emitted 'negotiation_cancelled' to transcriber ${negotiation.transcriber_id}`);
     }

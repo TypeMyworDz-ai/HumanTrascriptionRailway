@@ -8,8 +8,8 @@ const path = require('path');
 
 const authRoutes = require('./routes/authRoutes');
 const audioRoutes = require('./routes/audioRoutes');
-const transcriberRoutes = require('./routes/transcriberRoutes'); // CORRECTED: 'rurales' to 'routes'
-const generalApiRoutes = require = require('./routes/generalApiRoutes');
+const transcriberRoutes = require('./routes/transcriberRoutes');
+const generalApiRoutes = require('./routes/generalApiRoutes'); // CORRECTED: Removed ' = require' typo
 const { setOnlineStatus } = require('./controllers/transcriberController');
 
 const app = express();
