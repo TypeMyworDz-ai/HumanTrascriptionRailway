@@ -32,8 +32,8 @@ const chatAttachmentFilter = (req, file, cb) => {
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    // Pass an error to Multer's callback
-    cb(new Error('Only text, PDF, DOC, DOCX, and image files are allowed as chat attachments!'), false);
+    // Pass a MulterError with a specific code for easier handling in the route
+    cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'Only text, PDF, DOC, DOCX, and image files are allowed as chat attachments!'), false);
   }
 };
 
@@ -47,15 +47,12 @@ const uploadChatAttachment = multer({
 
 const handleChatAttachmentUpload = async (req, res) => {
     try {
-        // Multer errors (like fileFilter or fileSize limit) are usually caught by the route handler.
-        // However, if the middleware chain somehow bypasses it or you want a fallback,
-        // this check is still good.
+        // This function is reached if Multer successfully processed the file.
+        // If Multer itself caught an error (e.g., file size/type), it would be handled
+        // by the error-handling middleware in routes/generalApiRoutes.js
         if (!req.file) {
-            // Check if Multer already set an error on the request
-            if (req.fileValidationError) {
-                return res.status(400).json({ error: req.fileValidationError });
-            }
-            return res.status(400).json({ error: 'No file uploaded or file type/size is invalid.' });
+            console.warn('[handleChatAttachmentUpload] No file received, but no Multer error caught upstream. This should not happen.');
+            return res.status(400).json({ error: 'No file uploaded, or an unexpected file processing error occurred.' });
         }
 
         const fileUrl = `/uploads/chat_attachments/${req.file.filename}`;
@@ -67,13 +64,12 @@ const handleChatAttachmentUpload = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error handling chat attachment upload:', error);
+        console.error('[handleChatAttachmentUpload] Unexpected error in controller:', error);
         // Clean up the partially uploaded file if an error occurs
         if (req.file && req.file.path && fs.existsSync(req.file.path)) {
             fs.unlinkSync(req.file.path);
         }
-        // CRITICAL: Ensure JSON error response
-        res.status(500).json({ error: error.message || 'Failed to upload attachment.' });
+        res.status(500).json({ error: error.message || 'Failed to upload attachment due to server error.' });
     }
 };
 
@@ -162,9 +158,8 @@ const sendAdminDirectMessage = async (req, res, io) => {
             };
 
             // --- ADD THESE CONSOLE LOGS ---
-            console.log(`[sendNegotiationMessage] Attempting to emit 'receiveMessage' for negotiation ${negotiationId}`);
-            console.log(`[sendNegotiationMessage] Sender ID: ${senderId}, Receiver ID: ${receiverId}`);
-            console.log(`[sendNegotiationMessage] Emitting payload:`, messagePayload);
+            // Removed console logs here as they were for sendNegotiationMessage and confusing.
+            // Keeping them in sendNegotiationMessage only.
             // --- END ADDED LOGS ---
 
             // Emit to both sender (admin) and receiver

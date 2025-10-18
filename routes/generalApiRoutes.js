@@ -3,7 +3,7 @@ const router = express.Router();
 const supabase = require('../database');
 const authMiddleware = require('../middleware/authMiddleware');
 const fs = require('fs');
-const path = require('path'); // Added: Import path module for file operations
+const path = require('path');
 
 // IMPORTANT: Import functions from negotiationController.js
 const {
@@ -50,8 +50,8 @@ const {
     getAdminChatList,
     getNegotiationMessages,
     sendNegotiationMessage,
-    uploadChatAttachment,
-    handleChatAttachmentUpload
+    uploadChatAttachment, // Import the Multer middleware
+    handleChatAttachmentUpload // Import the controller function
 } = require('../controllers/chatController');
 
 // NEW: Import payment controller functions
@@ -87,6 +87,8 @@ const {
     getAllDirectUploadJobsForAdmin
 } = require('../controllers/directUploadController');
 
+// Import multer for direct use in this file for error handling
+const multer = require('multer');
 
 module.exports = (io) => {
   // --- CLIENT-SIDE NEGOTIATIONS ---
@@ -114,11 +116,22 @@ module.exports = (io) => {
   });
 
   // NEW: Chat Attachment Upload Route
-  // Use multer for file upload handling
-  const multer = require('multer');
-  const uploadChat = multer({ dest: path.join(__dirname, '../uploads/chat_attachments') }); // Configure storage for chat attachments
+  // Use uploadChatAttachment middleware from chatController, then handleChatAttachmentUpload
+  router.post('/chat/upload-attachment', authMiddleware, uploadChatAttachment, handleChatAttachmentUpload);
 
-  router.post('/chat/upload-attachment', authMiddleware, uploadChat.single('attachment'), handleChatAttachmentUpload);
+  // CRITICAL FIX: Multer error handling middleware for file uploads
+  router.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+      // Multer-specific errors
+      console.error('Multer Error:', err.message);
+      return res.status(400).json({ error: err.message });
+    } else if (err) {
+      // General file upload errors (e.g., from fileFilter)
+      console.error('File Upload Error:', err.message);
+      return res.status(400).json({ error: err.message });
+    }
+    next(err); // Pass other errors to the next error handler
+  });
 
 
   // --- TRANSCRIBER POOL ---
@@ -362,7 +375,7 @@ module.exports = (io) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can view the chat list.' });
       }
-      getAdminChatList(req, res, next);
+      getAdminChatList(req, res, io);
   });
 
   // --- NEW: Admin Global Settings Routes ---
@@ -420,7 +433,7 @@ module.exports = (io) => {
     if (req.user.userType !== 'client') {
       return res.status(403).json({ error: 'Access denied. Only clients can view their payment history.' });
     }
-    getClientPaymentHistory(req, res, next);
+    getClientPaymentHistory(req, res, io);
   });
 
   // NEW: Admin Payment History Route
@@ -428,7 +441,7 @@ module.exports = (io) => {
     if (req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only admins can view all payment history.' });
     }
-    getAllPaymentHistoryForAdmin(req, res, next);
+    getAllPaymentHistoryForAdmin(req, res, io);
   });
 
   // --- NEW: Rating Routes ---
@@ -491,7 +504,7 @@ module.exports = (io) => {
     if (req.user.userType !== 'client') {
       return res.status(403).json({ error: 'Access denied. Only clients can view their direct upload jobs.' });
     }
-    getDirectUploadJobsForClient(req, res, next);
+    getDirectUploadJobsForClient(req, res, io);
   });
 
   router.put('/transcriber/direct-jobs/:jobId/take', authMiddleware, (req, res, next) => {
@@ -513,7 +526,7 @@ module.exports = (io) => {
     if (req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only admins can view all direct upload jobs.' });
     }
-    getAllDirectUploadJobsForAdmin(req, res, next);
+    getAllDirectUploadJobsForAdmin(req, res, io);
   });
 
 
