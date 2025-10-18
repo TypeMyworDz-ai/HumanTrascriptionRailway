@@ -1,6 +1,6 @@
 const supabase = require('../database');
 const multer = require('multer');
-const path = require('require');
+const path = require('path'); // CORRECTED: Changed 'require' to 'path'
 const fs = require('fs');
 const emailService = require('../emailService');
 const { updateAverageRating } = require('./ratingController');
