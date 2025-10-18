@@ -9,7 +9,7 @@ const path = require('path');
 const authRoutes = require('./routes/authRoutes');
 const audioRoutes = require('./routes/audioRoutes');
 const transcriberRoutes = require('./routes/transcriberRoutes');
-const generalApiRoutes = require('./routes/generalApiRoutes'); // CORRECTED: Removed ' = require' typo
+const generalApiRoutes = require('./routes/generalApiRoutes');
 const { setOnlineStatus } = require('./controllers/transcriberController');
 
 const app = express();
@@ -30,8 +30,8 @@ const io = new Server(server, {
     credentials: true
   },
   allowEIO3: true,
-  pingInterval: 25000, // Added: Default ping interval
-  pingTimeout: 60000,  // Added: Default ping timeout
+  pingInterval: 25000,
+  pingTimeout: 60000,
 });
 
 io.on('connection', (socket) => {
@@ -40,6 +40,10 @@ io.on('connection', (socket) => {
 
   if (userId) {
     socket.userId = userId;
+    // CRITICAL FIX: Automatically join the user's room upon connection if userId is provided in handshake
+    socket.join(userId);
+    console.log(`Socket ${socket.id} automatically joined room for user ${userId} from handshake query.`);
+
     supabase.from('users').select('user_type').eq('id', userId).single()
       .then(({ data, error }) => {
         if (error) {
@@ -53,10 +57,11 @@ io.on('connection', (socket) => {
         }
       });
 
+    // This 'joinUserRoom' listener is now redundant for initial connect, but kept for explicit calls if any
     socket.on('joinUserRoom', (roomUserId) => {
       if (roomUserId === userId) {
         socket.join(roomUserId);
-        console.log(`Socket ${socket.id} joined room for user ${roomUserId}`);
+        console.log(`Socket ${socket.id} joined room for user ${roomUserId} (explicit event).`);
       } else {
         console.warn(`Attempted to join incorrect room. Socket ID: ${socket.id}, Query User ID: ${userId}, Requested Room User ID: ${roomUserId}`);
       }
@@ -68,6 +73,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', (reason) => {
     console.log(`User disconnected from WebSocket: ${socket.id} (Reason: ${reason})`);
     if (socket.userId) {
+      // Logic to set transcriber offline
       supabase.from('users').select('user_type').eq('id', socket.userId).single()
         .then(({ data, error }) => {
           if (error) {
@@ -132,7 +138,7 @@ const transcriberRouter = transcriberRoutes(io);
 const generalApiRouter = generalApiRoutes(io);
 
 // --- ROUTES ---
-app.use('/api/transcriber', transcriberRouter);
+app.use('/api/transcriber', transcriscriberRouter);
 app.use('/api/auth', authRoutes);
 app.use('/api/audio', audioRoutes);
 app.use('/api', generalApiRouter);
