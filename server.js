@@ -4,12 +4,12 @@ require('dotenv').config();
 const http = require('http');
 const { Server } = require('socket.io');
 const supabase = require('./database');
-const path = require('path'); // NEW: Import path module
+const path = require('path');
 
 const authRoutes = require('./routes/authRoutes');
 const audioRoutes = require('./routes/audioRoutes');
-const transcriberRoutes = require('./ rurales/transcriberRoutes');
-const generalApiRoutes = require('./routes/generalApiRoutes');
+const transcriberRoutes = require('./routes/transcriberRoutes'); // CORRECTED: 'rurales' to 'routes'
+const generalApiRoutes = require = require('./routes/generalApiRoutes');
 const { setOnlineStatus } = require('./controllers/transcriberController');
 
 const app = express();
@@ -97,8 +97,6 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Re-ADDED: Serve static files from the 'uploads' directory
-// This will make files under 'backend/uploads' accessible via '/uploads' URL path.
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Debugging middleware to log headers before routes are hit
@@ -111,7 +109,6 @@ app.use((req, res, next) => {
     console.log(`Access-Control-Request-Headers: ${req.headers['access-control-request-headers']}`);
     console.log('--- End Incoming Request Debug ---');
 
-    // Add a listener to log response headers before they are sent
     const originalEnd = res.end;
     res.end = function (...args) {
         console.log('--- Outgoing Response Debug ---');
