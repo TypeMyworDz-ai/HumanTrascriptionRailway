@@ -81,11 +81,11 @@ const getAllTranscriberTestSubmissions = async (req, res) => {
                 status,
                 created_at,
                 rejection_reason,
-                users ( -- Join with users table to get user's full name and email
+                users (
                     full_name,
                     email
                 )
-            `)
+            `) // Corrected: Removed embedded comment
             .order('created_at', { ascending: false }); // Order by creation date, newest first
 
         if (error) throw error;
@@ -110,11 +110,11 @@ const getTranscriberTestSubmissionById = async (req, res) => {
                 status,
                 created_at,
                 rejection_reason,
-                users ( -- Join with users table
+                users (
                     full_name,
                     email
                 )
-            `)
+            `) // Corrected: Removed embedded comment
             .eq('id', submissionId) // Filter by the submission ID
             .single();
 
@@ -396,10 +396,10 @@ const getAllJobsForAdmin = async (req, res) => {
                 requirements,
                 deadline_hours,
                 created_at,
-                client:users!client_id ( -- Join to get client's full name
+                client:users!client_id (
                     full_name
                 ),
-                transcriber:users!transcriber_id ( -- Join to get transcriber's full name
+                transcriber:users!transcriber_id (
                     full_name
                 )
             `)
@@ -435,10 +435,10 @@ const getAllDisputesForAdmin = async (req, res) => {
                 opened_at,
                 resolved_at,
                 resolution_notes,
-                client:users!client_id ( -- Join to get client's full name
+                client:users!client_id (
                     full_name
                 ),
-                transcriber:users!transcriber_id ( -- Join to get transcriber's full name
+                transcriber:users!transcriber_id (
                     full_name
                 )
             `)
