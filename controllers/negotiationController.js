@@ -1,6 +1,6 @@
 const supabase = require('../database');
 const multer = require('multer');
-const path = require('path'); // CORRECTED: Changed 'require' to 'path'
+const path = require('path'); // CORRECTED: Changed 'require' to 'path' in previous fix, ensuring it's correct
 const fs = require('fs');
 const emailService = require('../emailService');
 const { updateAverageRating } = require('./ratingController');
@@ -457,6 +457,77 @@ const getClientNegotiations = async (req, res) => {
 
   } catch (error) {
     console.error('Get client negotiations error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const getTranscriberNegotiations = async (req, res) => {
+  try {
+    const transcriberId = req.user.userId;
+
+    console.log('Get transcriber negotiations for:', transcriberId);
+
+    // Fetch negotiations for the transcriber, joining with client details
+    const { data: negotiations, error: negotiationsError } = await supabase
+      .from('negotiations')
+      .select(`
+        id,
+        status,
+        agreed_price_kes,
+        requirements,
+        deadline_hours,
+        client_message,
+        transcriber_response,
+        negotiation_files,
+        created_at,
+        client_id,
+        client:users!client_id(
+            id,
+            full_name,
+            email
+        )
+      `)
+      .eq('transcriber_id', transcriberId)
+      .order('created_at', { ascending: false });
+
+    if (negotiationsError) {
+      console.error('Transcriber negotiations query error:', negotiationsError);
+      throw negotiationsError;
+    }
+
+    if (!negotiations || negotiations.length === 0) {
+      return res.json({
+        message: 'No negotiations found',
+        negotiations: []
+      });
+    }
+
+    // Process negotiations to format client data cleanly
+    const negotiationsWithClients = negotiations.map(negotiation => {
+        const { client, ...rest } = negotiation;
+        return {
+            ...rest,
+            client_info: client ? {
+                id: client.id,
+                full_name: client.full_name,
+                client_rating: 5.0, // Default rating since we don't have this in users table here
+                email: client.email,
+            } : {
+                id: negotiation.client_id,
+                full_name: 'Unknown Client',
+                client_rating: 5.0,
+                email: 'unknown@example.com',
+            }
+        };
+    });
+
+    res.json({
+      message: 'Transcriber negotiations retrieved successfully',
+      negotiations: negotiationsWithClients
+    });
+
+  } catch (error) {
+    console.error('Get transcriber negotiations error:', error);
     res.status(500).json({ error: error.message });
   }
 };
