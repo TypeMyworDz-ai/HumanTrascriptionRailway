@@ -15,9 +15,9 @@ const {
   acceptNegotiation,
   counterNegotiation,
   rejectNegotiation,
-  clientAcceptCounter, // NEW: Import client-side counter-offer actions
-  clientRejectCounter, // NEW: Import client-side counter-offer actions
-  clientCounterBack // NEW: Import client-side counter-offer actions
+  clientAcceptCounter,
+  clientRejectCounter,
+  clientCounterBack
 } = require('../controllers/negotiationController');
 
 // Import admin controller functions
@@ -88,17 +88,8 @@ const {
 
 
 module.exports = (io) => {
-    io.on('connection', (socket) => {
-        socket.on('joinUserRoom', (userId) => {
-            if (userId) {
-                socket.join(userId);
-                console.log(`Socket ${socket.id} joined room for user ${userId}`);
-            } else {
-                console.warn(`Attempted to join user room without a userId from socket ${socket.id}`);
-            }
-        });
-    });
-
+    // REMOVED: The io.on('connection', (socket) => { ... }) block
+    // This listener should only be in server.js where the Socket.IO server is initialized.
 
   // --- CLIENT-SIDE NEGOTIATIONS ---
   router.get('/negotiations/client', authMiddleware, (req, res, next) => {
