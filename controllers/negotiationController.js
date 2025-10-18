@@ -401,11 +401,11 @@ const getClientNegotiations = async (req, res) => {
         negotiation_files,
         created_at,
         transcriber_id,
-        transcriber:users!transcriber_id ( -- Join with users table to get transcriber details
+        transcriber:users!transcriber_id (
             id,
             full_name,
             email,
-            transcribers ( -- Join with transcribers table for profile info
+            transcribers (
                 average_rating,
                 completed_jobs
             )
