@@ -1,6 +1,6 @@
 const supabase = require('../database');
 const multer = require('multer');
-const path = require('path'); // CORRECTED: Changed 'require' to 'path' in previous fix, ensuring it's correct
+const path = require('path'); // Corrected: Ensure 'path' is correctly required
 const fs = require('fs');
 const emailService = require('../emailService');
 const { updateAverageRating } = require('./ratingController');
@@ -467,7 +467,7 @@ const getTranscriberNegotiations = async (req, res) => {
 
     console.log('Get transcriber negotiations for:', transcriberId);
 
-    // Fetch negotiations for the transcriber, joining with client details
+    // Fetch negotiations associated with the transcriber, joining with client details
     const { data: negotiations, error: negotiationsError } = await supabase
       .from('negotiations')
       .select(`
@@ -481,12 +481,12 @@ const getTranscriberNegotiations = async (req, res) => {
         negotiation_files,
         created_at,
         client_id,
-        client:users!client_id(
+        client:users!client_id (
             id,
             full_name,
             email
         )
-      `)
+      `) // Removed the embedded comment here
       .eq('transcriber_id', transcriberId)
       .order('created_at', { ascending: false });
 

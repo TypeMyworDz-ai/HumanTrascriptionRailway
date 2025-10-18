@@ -1,5 +1,5 @@
 const supabase = require('../database');
-const path = require('path');
+const path = require('path'); // Corrected: Ensure 'path' is correctly required
 const fs = require('fs');
 const emailService = require('../emailService'); // Make sure this path is correct
 const { updateAverageRating } = require('./ratingController'); // NEW: Import updateAverageRating (if not already)
@@ -190,12 +190,12 @@ const getTranscriberNegotiations = async (req, res) => {
         negotiation_files,
         created_at,
         client_id,
-        client:users!client_id ( -- Join with users table on client_id to get client details
+        client:users!client_id (
             id,
             full_name,
             email
         )
-      `)
+      `) // Removed the embedded comment here
       .eq('transcriber_id', transcriberId)
       .order('created_at', { ascending: false }); // Order by creation date, newest first
 
@@ -220,7 +220,7 @@ const getTranscriberNegotiations = async (req, res) => {
             client_info: client ? { // Nest client details under 'client_info'
                 id: client.id,
                 full_name: client.full_name,
-                client_rating: 5.0, // Default rating as it's not directly available here
+                client_rating: 5.0, // Default rating since we don't have this in users table here
                 email: client.email,
             } : { // Fallback if client data is missing
                 id: negotiation.client_id,
