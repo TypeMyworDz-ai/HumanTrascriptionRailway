@@ -1,8 +1,8 @@
 const axios = require('axios');
-const supabase = require('../database'); // CORRECTED: Changed from '../supabaseClient' to '../database'
-const { syncAvailabilityStatus } = require('./transcriberController'); // Import syncAvailabilityStatus
-const emailService = require('../emailService'); // For sending payment confirmation emails
-const { calculateTranscriberEarning } = require('../utils/paymentUtils'); // Now imports from the new file
+const supabase = require('..//database'); // CORRECTED: Changed from '..//supabaseClient' to '..//database'
+const { syncAvailabilityStatus } = require('.//transcriberController'); // Import syncAvailabilityStatus
+const emailService = require('..//emailService'); // For sending payment confirmation emails
+const { calculateTranscriberEarning } = require('..//utils/paymentUtils'); // Now imports from the new file
 
 // Paystack Secret Key from environment variables
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
@@ -39,9 +39,9 @@ const initializePayment = async (req, res, io) => {
             return res.status(404).json({ error: 'Negotiation not found or not accessible.' });
         }
 
-        // Ensure the negotiation is in a state where payment can be initiated (e.g., 'accepted')
-        if (negotiation.status !== 'accepted') {
-            return res.status(400).json({ error: 'Payment can only be initiated for accepted negotiations.' });
+        // Ensure the negotiation is in a state where payment can be initiated (e.g., 'accepted_awaiting_payment')
+        if (negotiation.status !== 'accepted_awaiting_payment') { // CORRECTED: Changed status check
+            return res.status(400).json({ error: `Payment can only be initiated for accepted negotiations (status: accepted_awaiting_payment). Current status: ${negotiation.status}` });
         }
 
         // Validate that the provided amount matches the agreed price in the negotiation
