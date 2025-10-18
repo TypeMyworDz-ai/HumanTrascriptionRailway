@@ -1,4 +1,4 @@
-// backend/controllers/negotiationController.js - UPDATED for negotiation workflow logic
+// backend/controllers/negotiationController.js - UPDATED for client's counter-offer responses
 
 const supabase = require('../database');
 const multer = require('multer');
@@ -696,6 +696,197 @@ const rejectNegotiation = async (req, res, io) => {
     }
 };
 
+// NEW: Client accepts a transcriber's counter-offer
+const clientAcceptCounter = async (req, res, io) => {
+    try {
+        const { negotiationId } = req.params;
+        const clientId = req.user.userId;
+
+        const { data: negotiation, error: fetchError } = await supabase
+            .from('negotiations')
+            .select('status, transcriber_id, client_id, agreed_price_kes, deadline_hours')
+            .eq('id', negotiationId)
+            .single();
+
+        if (fetchError || !negotiation) {
+            return res.status(404).json({ error: 'Negotiation not found.' });
+        }
+
+        if (negotiation.client_id !== clientId) {
+            return res.status(403).json({ error: 'You are not authorized to accept this counter-offer.' });
+        }
+
+        if (negotiation.status !== 'transcriber_counter') {
+            return res.status(400).json({ error: 'Negotiation is not in a state to accept a counter-offer.' });
+        }
+
+        // Update negotiation status to 'accepted_awaiting_payment'
+        const { data: updatedNegotiation, error: updateError } = await supabase
+            .from('negotiations')
+            .update({ status: 'accepted_awaiting_payment', updated_at: new Date().toISOString() })
+            .eq('id', negotiationId)
+            .select()
+            .single();
+
+        if (updateError) throw updateError;
+
+        // Notify transcriber (real-time)
+        if (io) {
+            io.to(negotiation.transcriber_id).emit('negotiation_accepted', {
+                negotiationId: updatedNegotiation.id,
+                message: `Client ${req.user.full_name} accepted your counter-offer!`,
+                newStatus: 'accepted_awaiting_payment'
+            });
+            console.log(`Emitted 'negotiation_accepted' to transcriber ${negotiation.transcriber_id}`);
+        }
+
+        // Send email to transcriber
+        const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
+        if (transcriberError) console.error('Error fetching transcriber for client accept counter email:', transcriberError);
+
+        if (transcriberUser) {
+            await emailService.sendNegotiationAcceptedEmail(req.user, transcriberUser, updatedNegotiation);
+        }
+
+        res.json({ message: 'Counter-offer accepted. Proceed to payment.', negotiation: updatedNegotiation });
+
+    } catch (error) {
+        console.error('Client accept counter-offer error:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// NEW: Client rejects a transcriber's counter-offer
+const clientRejectCounter = async (req, res, io) => {
+    try {
+        const { negotiationId } = req.params;
+        const { client_response } = req.body; // Client's reason for rejection
+        const clientId = req.user.userId;
+
+        const { data: negotiation, error: fetchError } = await supabase
+            .from('negotiations')
+            .select('status, transcriber_id, client_id')
+            .eq('id', negotiationId)
+            .single();
+
+        if (fetchError || !negotiation) {
+            return res.status(404).json({ error: 'Negotiation not found.' });
+        }
+
+        if (negotiation.client_id !== clientId) {
+            return res.status(403).json({ error: 'You are not authorized to reject this counter-offer.' });
+        }
+
+        if (negotiation.status !== 'transcriber_counter') {
+            return res.status(400).json({ error: 'Negotiation is not in a state to reject a counter-offer.' });
+        }
+
+        const { data: updatedNegotiation, error: updateError } = await supabase
+            .from('negotiations')
+            .update({ status: 'rejected', client_response: client_response, updated_at: new Date().toISOString() })
+            .eq('id', negotiationId)
+            .select()
+            .single();
+
+        if (updateError) throw updateError;
+
+        // Notify transcriber (real-time)
+        if (io) {
+            io.to(negotiation.transcriber_id).emit('negotiation_rejected', {
+                negotiationId: updatedNegotiation.id,
+                message: `Client ${req.user.full_name} rejected your counter-offer.`,
+                newStatus: 'rejected'
+            });
+            console.log(`Emitted 'negotiation_rejected' to transcriber ${negotiation.transcriber_id}`);
+        }
+
+        // Send email to transcriber
+        const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
+        if (transcriberError) console.error('Error fetching transcriber for client reject counter email:', transcriberError);
+
+        if (transcriberUser) {
+            await emailService.sendNegotiationRejectedEmail(transcriberUser, updatedNegotiation, client_response);
+        }
+
+        res.json({ message: 'Counter-offer rejected successfully.', negotiation: updatedNegotiation });
+
+    } catch (error) {
+        console.error('Client reject counter-offer error:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// NEW: Client counters back to a transcriber's counter-offer
+const clientCounterBack = async (req, res, io) => {
+    try {
+        const { negotiationId } = req.params;
+        const { proposed_price_kes, deadline_hours, client_response } = req.body;
+        const clientId = req.user.userId;
+
+        if (!proposed_price_kes || !deadline_hours || !client_response) {
+            return res.status(400).json({ error: 'Proposed price, deadline, and message are required.' });
+        }
+
+        const { data: negotiation, error: fetchError } = await supabase
+            .from('negotiations')
+            .select('status, transcriber_id, client_id')
+            .eq('id', negotiationId)
+            .single();
+
+        if (fetchError || !negotiation) {
+            return res.status(404).json({ error: 'Negotiation not found.' });
+        }
+
+        if (negotiation.client_id !== clientId) {
+            return res.status(403).json({ error: 'You are not authorized to counter back on this negotiation.' });
+        }
+
+        if (negotiation.status !== 'transcriber_counter') {
+            return res.status(400).json({ error: 'Negotiation is not in a state to counter back.' });
+        }
+
+        const { data: updatedNegotiation, error: updateError } = await supabase
+            .from('negotiations')
+            .update({
+                status: 'client_counter', // Status changes to client_counter
+                agreed_price_kes: proposed_price_kes,
+                deadline_hours: deadline_hours,
+                client_message: client_response, // Store client's new message
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', negotiationId)
+            .select()
+            .single();
+
+        if (updateError) throw updateError;
+
+        // Notify transcriber (real-time)
+        if (io) {
+            io.to(negotiation.transcriber_id).emit('negotiation_countered', { // Use 'negotiation_countered' event
+                negotiationId: updatedNegotiation.id,
+                message: `Client ${req.user.full_name} sent a counter-offer back!`,
+                newStatus: 'client_counter'
+            });
+            console.log(`Emitted 'negotiation_countered' to transcriber ${negotiation.transcriber_id}`);
+        }
+
+        // Send email to transcriber
+        const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
+        if (transcriberError) console.error('Error fetching transcriber for client counter back email:', transcriberError);
+
+        if (transcriberUser) {
+            // Re-use sendCounterOfferEmail, but with client as sender and transcriber as receiver
+            await emailService.sendCounterOfferEmail(transcriberUser, req.user, updatedNegotiation);
+        }
+
+        res.json({ message: 'Counter-offer sent successfully.', negotiation: updatedNegotiation });
+
+    } catch (error) {
+        console.error('Client counter back error:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
 
 module.exports = {
   uploadNegotiationFiles,
@@ -706,5 +897,8 @@ module.exports = {
   syncAvailabilityStatus,
   acceptNegotiation,
   counterNegotiation,
-  rejectNegotiation
+  rejectNegotiation,
+  clientAcceptCounter, // NEW: Export client-side counter-offer actions
+  clientRejectCounter, // NEW: Export client-side counter-offer actions
+  clientCounterBack // NEW: Export client-side counter-offer actions
 };

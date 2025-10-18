@@ -14,7 +14,10 @@ const {
   syncAvailabilityStatus,
   acceptNegotiation,
   counterNegotiation,
-  rejectNegotiation
+  rejectNegotiation,
+  clientAcceptCounter, // NEW: Import client-side counter-offer actions
+  clientRejectCounter, // NEW: Import client-side counter-offer actions
+  clientCounterBack // NEW: Import client-side counter-offer actions
 } = require('../controllers/negotiationController');
 
 // Import admin controller functions
@@ -46,8 +49,8 @@ const {
     getAdminChatList,
     getNegotiationMessages,
     sendNegotiationMessage,
-    uploadChatAttachment, // NEW: Import multer middleware for chat attachments
-    handleChatAttachmentUpload // NEW: Import the handler for chat attachment upload
+    uploadChatAttachment,
+    handleChatAttachmentUpload
 } = require('../controllers/chatController');
 
 // NEW: Import payment controller functions
@@ -161,6 +164,28 @@ module.exports = (io) => {
       return res.status(403).json({ error: 'Access denied. Only transcribers can reject negotiations.' });
     }
     rejectNegotiation(req, res, io);
+  });
+
+  // NEW: Client Negotiation Counter-Offer Responses
+  router.put('/negotiations/:negotiationId/client/accept-counter', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+        return res.status(403).json({ error: 'Access denied. Only clients can accept a counter-offer.' });
+    }
+    clientAcceptCounter(req, res, io);
+  });
+
+  router.put('/negotiations/:negotiationId/client/reject-counter', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+        return res.status(403).json({ error: 'Access denied. Only clients can reject a counter-offer.' });
+    }
+    clientRejectCounter(req, res, io);
+  });
+
+  router.put('/negotiations/:negotiationId/client/counter-back', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+        return res.status(403).json({ error: 'Access denied. Only clients can counter back.' });
+    }
+    clientCounterBack(req, res, io);
   });
 
 
@@ -436,13 +461,6 @@ module.exports = (io) => {
       return res.status(403).json({ error: 'Access denied. Only clients can view their direct upload jobs.' });
     }
     getDirectUploadJobsForClient(req, res, next);
-  });
-
-  router.get('/transcriber/direct-jobs/available', authMiddleware, (req, res, next) => {
-    if (req.user.userType !== 'transcriber') {
-      return res.status(403).json({ error: 'Access denied. Only transcribers can view available direct upload jobs.' });
-    }
-    getAvailableDirectUploadJobsForTranscriber(req, res, next);
   });
 
   router.put('/transcriber/direct-jobs/:jobId/take', authMiddleware, (req, res, next) => {
