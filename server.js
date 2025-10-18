@@ -138,7 +138,7 @@ const transcriberRouter = transcriberRoutes(io);
 const generalApiRouter = generalApiRoutes(io);
 
 // --- ROUTES ---
-app.use('/api/transcriber', transcriscriberRouter);
+app.use('/api/transcriber', transcriberRouter); // Corrected typo here
 app.use('/api/auth', authRoutes);
 app.use('/api/audio', audioRoutes);
 app.use('/api', generalApiRouter);
