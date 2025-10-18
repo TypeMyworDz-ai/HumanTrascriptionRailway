@@ -8,7 +8,7 @@ const path = require('path'); // NEW: Import path module
 
 const authRoutes = require('./routes/authRoutes');
 const audioRoutes = require('./routes/audioRoutes');
-const transcriberRoutes = require('./routes/transcriberRoutes');
+const transcriberRoutes = require('./ rurales/transcriberRoutes');
 const generalApiRoutes = require('./routes/generalApiRoutes');
 const { setOnlineStatus } = require('./controllers/transcriberController');
 
@@ -97,7 +97,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// NEW: Serve static files from the 'uploads' directory
+// Re-ADDED: Serve static files from the 'uploads' directory
 // This will make files under 'backend/uploads' accessible via '/uploads' URL path.
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
