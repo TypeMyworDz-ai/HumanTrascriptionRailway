@@ -300,7 +300,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
             .from('payments')
             .select(`
                 *,
-                negotiation:negotiations(requirements, deadline_hours, agreed_price_usd), // Changed to agreed_price_usd
+                negotiation:negotiations(requirements, deadline_hours, agreed_price_usd),
                 client:users!client_id(full_name, email)
             `)
             .eq('transcriber_id', transcriberId)
@@ -347,7 +347,7 @@ const getClientPaymentHistory = async (req, res) => {
             .from('payments')
             .select(`
                 *,
-                negotiation:negotiations(requirements, deadline_hours, agreed_price_usd), // Changed to agreed_price_usd
+                negotiation:negotiations(requirements, deadline_hours, agreed_price_usd),
                 transcriber:users!transcriber_id(full_name, email)
             `)
             .eq('client_id', clientId)
@@ -398,12 +398,12 @@ const getAllPaymentHistoryForAdmin = async (req, res) => {
         *,
         client:users!client_id(full_name, email),
         transcriber:users!transcriber_id(full_name, email),
-        negotiation:negotiations(requirements, deadline_hours, agreed_price_usd) // Changed to agreed_price_usd
+        negotiation:negotiations(requirements, deadline_hours, agreed_price_usd)
       `)
       .order('transaction_date', { ascending: false }); // Order by transaction date
 
     if (error) {
-        console.error('Error fetching all payment history for admin:2', error);
+        console.error('Error fetching all payment history for admin:', error);
         return res.status(500).json({ error: error.message });
     }
 

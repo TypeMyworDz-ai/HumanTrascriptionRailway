@@ -331,7 +331,9 @@ const createNegotiation = async (req, res, next, io) => {
 
     if (existingNegError && existingNegError.code !== 'PGRST116') { // PGRST116 means "No rows found"
         console.error('createNegotiation: Supabase error checking existing negotiation:', existingNegError);
-        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+        if (fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+      }
         return res.status(500).json({ error: existingNegError.message });
     }
     if (existingNegotiation) {
@@ -507,7 +509,7 @@ const getTranscriberNegotiations = async (req, res) => {
       .select(`
         id,
         status,
-        agreed_price_usd,     
+        agreed_price_usd,
         requirements,
         deadline_hours,
         client_message,
@@ -518,10 +520,7 @@ const getTranscriberNegotiations = async (req, res) => {
         client:users!client_id (
             id,
             full_name,
-            email,
-            clients (
-                average_rating
-            )
+            email
         )
       `)
       .eq('transcriber_id', transcriberId)
@@ -909,7 +908,6 @@ const clientAcceptCounter = async (req, res, io) => {
         if (transcriberError) console.error('Error fetching transcriber for client accept counter email:', transcriberError);
 
         if (transcriberUser) {
-            // Use the same email template as when transcriber accepts, but with client details as sender
             await emailService.sendNegotiationAcceptedEmail(req.user, transcriberUser, updatedNegotiation);
         }
 
