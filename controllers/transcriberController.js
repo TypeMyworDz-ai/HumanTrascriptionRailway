@@ -61,7 +61,7 @@ const setOnlineStatus = async (userId, isOnline) => {
             // Fetch current availability status
             const { data: userProfile, error: fetchUserError } = await supabase
                 .from('users')
-                .select('is_available, current_job_id')
+                .select('is_available, current_job_id') // Check primary availability flags
                 .eq('id', userId)
                 .single();
 
@@ -223,7 +223,7 @@ const getTranscriberNegotiations = async (req, res) => {
       .select(`
         id,
         status,
-        agreed_price_usd,     // Changed to agreed_price_usd
+        agreed_price_usd,
         requirements,
         deadline_hours,
         client_message,
@@ -347,10 +347,6 @@ const acceptNegotiation = async (req, res, next, io) => {
         if (count === 0) {
             return res.status(409).json({ error: 'Negotiation was not found, or its status is no longer pending. This could be a race condition.' });
         }
-
-        // Step 3: Update transcriber's status to busy (unavailable) with the current job ID
-        // This is done after the client payment, so for now, the transcriber is only 'accepted_awaiting_payment'
-        // await syncAvailabilityStatus(transcriberId, false, negotiationId); // REMOVED: This should happen after payment.
 
         // Send a real-time notification to the client about the acceptance
         if (io) {
@@ -658,7 +654,7 @@ const getTranscriberUpcomingPayouts = async (req, res) => {
 
     } catch (error) {
         console.error('[getTranscriberUpcomingPayouts] Error fetching upcoming payouts:', error);
-        res.status(500).json({ error: error.message || 'Server error fetching upcoming payouts.!' });
+        res.status(500).json({ error: error.message || 'Server error fetching upcoming payouts.! ' });
     }
 };
 
