@@ -223,7 +223,7 @@ const getTranscriberNegotiations = async (req, res) => {
       .select(`
         id,
         status,
-        agreed_price_kes,
+        agreed_price_usd,     // Changed to agreed_price_usd
         requirements,
         deadline_hours,
         client_message,
@@ -447,16 +447,16 @@ const rejectNegotiation = async (req, res, next, io) => {
 // Counter Negotiation
 const counterNegotiation = async (req, res, next, io) => {
     const { negotiationId } = req.params;
-    const { proposed_price_kes, deadline_hours, transcriber_response } = req.body;
+    const { proposed_price_usd, deadline_hours, transcriber_response } = req.body; // Changed to proposed_price_usd
     const transcriberId = req.user.userId;
 
     // Validate input fields
-    if (!negotiationId || !proposed_price_kes || !deadline_hours) {
+    if (!negotiationId || !proposed_price_usd || !deadline_hours) { // Changed to proposed_price_usd
         return res.status(400).json({ error: 'Negotiation ID, proposed price, and deadline hours are required for a counter-offer.' });
     }
 
     // Parse and validate numeric inputs
-    const parsedPrice = parseFloat(proposed_price_kes);
+    const parsedPrice = parseFloat(proposed_price_usd); // Changed to proposed_price_usd
     const parsedDeadline = parseInt(deadline_hours, 10);
 
     if (isNaN(parsedPrice) || parsedPrice <= 0 || isNaN(parsedDeadline) || parsedDeadline <= 0) {
@@ -487,9 +487,9 @@ const counterNegotiation = async (req, res, next, io) => {
             .from('negotiations')
             .update({
                 status: 'transcriber_counter', // Status indicating transcriber's counter-offer
-                agreed_price_kes: parsedPrice,
+                agreed_price_usd: parsedPrice, // Changed to agreed_price_usd
                 deadline_hours: parsedDeadline,
-                transcriber_response: transcriber_response || `Transcriber proposed KES ${parsedPrice} with a ${parsedDeadline} hour deadline.`, // Store the response/message
+                transcriber_response: transcriber_response || `Transcriber proposed USD ${parsedPrice} with a ${parsedDeadline} hour deadline.`, // Changed to USD
                 updated_at: new Date().toISOString()
             })
             .eq('id', negotiationId)
@@ -513,7 +513,7 @@ const counterNegotiation = async (req, res, next, io) => {
                 transcriberId: transcriberId,
                 newPrice: parsedPrice,
                 newDeadline: parsedDeadline,
-                message: `Your negotiation request (ID: ${negotiationId}) received a counter-offer: KES ${parsedPrice}, ${parsedDeadline} hours. ${transcriber_response ? `Transcriber's message: ${transcriber_response}` : ''}`,
+                message: `Your negotiation request (ID: ${negotiationId}) received a counter-offer: USD ${parsedPrice}, ${parsedDeadline} hours. ${transcriber_response ? `Transcriber's message: ${transcriber_response}` : ''}`, // Changed to USD
                 newStatus: 'transcriber_counter' // Indicate the new status
             });
             console.log(`Emitted 'negotiation_countered' to client ${negotiationToCounter.client_id}`);

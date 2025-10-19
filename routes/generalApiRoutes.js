@@ -87,7 +87,8 @@ const {
     getAvailableDirectUploadJobsForTranscriber,
     takeDirectUploadJob,
     completeDirectUploadJob,
-    getAllDirectUploadJobsForAdmin
+    getAllDirectUploadJobsForAdmin,
+    handleQuoteCalculationRequest // NEW: Import the new controller for quote calculation
 } = require('..//controllers/directUploadController');
 
 // Import multer for direct use in this file for error handling
@@ -508,23 +509,66 @@ module.exports = (io) => {
   });
 
   // --- NEW: Direct Upload Job Routes ---
-  const uploadDirect = multer({
-    storage: multer.diskStorage({
-      destination: function (req, file, cb) {
-        cb(null, path.join(__dirname, '..//uploads/direct_uploads'));
-      },
-      filename: function (req, file, cb) {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  // Multer setup for direct upload files (moved from directUploadController for direct use here)
+  const directUploadFileStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+      const uploadDir = 'uploads/direct_upload_files';
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
       }
-    }),
-    // Add file filter or limits if needed
+      cb(null, uploadDir);
+    },
+    filename: (req, file, cb) => {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    }
   });
 
-  router.post('/direct-upload/job', authMiddleware, uploadDirect.fields([
-    { name: 'audioVideoFile', maxCount: 1 },
-    { name: 'instructionFiles', maxCount: 5 } // Assuming max 5 instruction files
-  ]), async (req, res, next) => {
+  const directUploadFileFilter = (req, file, cb) => {
+    const allowedTypes = [
+      'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/mp4', 'audio/m4a', 'audio/ogg',
+      'video/mp4', 'video/webm', 'video/ogg',
+      'application/pdf',
+      'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'text/plain',
+      'image/jpeg', 'image/jpg', 'image/png', 'image/gif'
+    ];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only audio, video, PDF, DOC, DOCX, TXT, and image files are allowed for direct uploads!'), false);
+    }
+  };
+
+  const uploadDirectFilesMiddleware = multer({
+    storage: directUploadFileStorage,
+    fileFilter: directUploadFileFilter,
+    limits: {
+      fileSize: 500 * 1024 * 1024 // 500MB limit
+    }
+  }).fields([
+      { name: 'audioVideoFile', maxCount: 1 },
+      { name: 'instructionFiles', maxCount: 5 }
+  ]);
+
+  // Route to get an instant quote for a direct upload job
+  router.post('/direct-upload/job/quote', authMiddleware, uploadDirectFilesMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+      // Clean up uploaded files if access is denied
+      if (req.files?.audioVideoFile?.[0]) {
+        fs.unlink(req.files.audioVideoFile[0].path, (err) => { if (err) console.error("Error deleting temp audioVideoFile:", err); });
+      }
+      if (req.files?.instructionFiles?.length > 0) {
+        req.files.instructionFiles.forEach(file => {
+          fs.unlink(file.path, (err) => { if (err) console.error("Error deleting temp instructionFile:", err); });
+        });
+      }
+      return res.status(403).json({ error: 'Access denied. Only clients can get quotes for direct upload jobs.' });
+    }
+    handleQuoteCalculationRequest(req, res, io); // NEW: Call the dedicated controller function
+  }, multerErrorHandler); // Apply Multer error handler
+
+  router.post('/direct-upload/job', authMiddleware, uploadDirectFilesMiddleware, async (req, res, next) => {
     if (req.user.userType !== 'client') {
       // Clean up uploaded files if access is denied
       if (req.files?.audioVideoFile?.[0]) {
@@ -538,7 +582,8 @@ module.exports = (io) => {
       return res.status(403).json({ error: 'Access denied. Only clients can create direct upload jobs.' });
     }
     createDirectUploadJob(req, res, io);
-  });
+  }, multerErrorHandler); // Apply Multer error handler here too
+
 
   router.get('/client/direct-jobs', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'client') {
@@ -546,6 +591,14 @@ module.exports = (io) => {
     }
     getDirectUploadJobsForClient(req, res, io);
   });
+
+  router.get('/transcriber/direct-jobs/available', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can view available direct upload jobs.' });
+    }
+    getAvailableDirectUploadJobsForTranscriber(req, res, io);
+  });
+
 
   router.put('/transcriber/direct-jobs/:jobId/take', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'transcriber') {

@@ -1,8 +1,8 @@
 const axios = require('axios');
-const supabase = require('..//database'); // CORRECTED: Changed from '..//supabaseClient' to '..//database'
-const { syncAvailabilityStatus } = require('.//transcriberController'); // Import syncAvailabilityStatus
-const emailService = require('..//emailService'); // For sending payment confirmation emails
-const { calculateTranscriberEarning } = require('..//utils/paymentUtils'); // Now imports from the new file
+const supabase = require('../database'); // CORRECTED: Changed from '../supabaseClient' to '../database'
+const { syncAvailabilityStatus } = require('./transcriberController'); // Import syncAvailabilityStatus
+const emailService = require('../emailService'); // For sending payment confirmation emails
+const { calculateTranscriberEarning } = require('../utils/paymentUtils'); // Now imports from the new file
 
 // Paystack Secret Key from environment variables
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
@@ -22,7 +22,7 @@ const getNextFriday = () => {
 
 // Function to initialize a Paystack transaction
 const initializePayment = async (req, res, io) => {
-    const { negotiationId, amount, email } = req.body; // email is the client's email
+    const { negotiationId, amount, email } = req.body; // amount is now expected in USD (dollars)
     const clientId = req.user.userId;
 
     // Basic validation for required fields
@@ -35,11 +35,17 @@ const initializePayment = async (req, res, io) => {
         return res.status(500).json({ error: 'Payment service not configured.' });
     }
 
+    // Ensure amount is a valid positive number
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+        return res.status(400).json({ error: 'Invalid payment amount.' });
+    }
+
     try {
         // 1. Verify negotiation status and client ownership
         const { data: negotiation, error: negError } = await supabase
             .from('negotiations')
-            .select('id, client_id, transcriber_id, agreed_price_kes, status')
+            .select('id, client_id, transcriber_id, agreed_price_usd, status') // Changed to agreed_price_usd
             .eq('id', negotiationId)
             .eq('client_id', clientId) // Ensure the logged-in user is the client
             .single();
@@ -50,12 +56,13 @@ const initializePayment = async (req, res, io) => {
         }
 
         // Ensure the negotiation is in a state where payment can be initiated (e.g., 'accepted_awaiting_payment')
-        if (negotiation.status !== 'accepted_awaiting_payment') { // CORRECTED: Changed status check
+        if (negotiation.status !== 'accepted_awaiting_payment') {
             return res.status(400).json({ error: `Payment can only be initiated for accepted negotiations (status: accepted_awaiting_payment). Current status: ${negotiation.status}` });
         }
 
-        // Validate that the provided amount matches the agreed price in the negotiation
-        if (amount !== negotiation.agreed_price_kes) {
+        // Validate that the provided amount matches the agreed price in the negotiation (in USD, comparing cents)
+        if (Math.round(parsedAmount * 100) !== Math.round(negotiation.agreed_price_usd * 100)) { // Compare cents
+            console.error('Payment amount mismatch. Provided:', parsedAmount, 'Agreed:', negotiation.agreed_price_usd);
             return res.status(400).json({ error: 'Payment amount does not match the agreed negotiation price.' });
         }
 
@@ -64,14 +71,16 @@ const initializePayment = async (req, res, io) => {
             'https://api.paystack.co/transaction/initialize',
             {
                 email: email,
-                amount: amount * 100, // Paystack expects amount in kobo (or smallest currency unit)
+                amount: Math.round(parsedAmount * 100), // Paystack expects amount in cents
                 reference: `${negotiationId}-${Date.now()}`, // Generate a unique reference
                 callback_url: `${CLIENT_URL}/payment-callback?negotiationId=${negotiationId}`, // Redirect URL after payment
+                currency: 'USD', // Specify currency as USD
                 metadata: { // Include custom data for later retrieval
                     negotiation_id: negotiationId,
                     client_id: clientId,
                     transcriber_id: negotiation.transcriber_id,
-                    agreed_price_kes: negotiation.agreed_price_kes
+                    agreed_price_usd: negotiation.agreed_price_usd, // Store agreed price in USD
+                    currency: 'USD' // Store currency in metadata
                 }
             },
             {
@@ -137,7 +146,7 @@ const verifyPayment = async (req, res, io) => {
             negotiation_id: metadataNegotiationId,
             client_id: metadataClientId,
             transcriber_id: metadataTranscriberId,
-            agreed_price_kes: metadataAgreedPrice
+            agreed_price_usd: metadataAgreedPrice // Changed to agreed_price_usd
         } = transaction.metadata;
 
         // Perform sanity checks on metadata
@@ -145,9 +154,9 @@ const verifyPayment = async (req, res, io) => {
             console.error('Metadata negotiation ID mismatch:', metadataNegotiationId, negotiationId);
             return res.status(400).json({ error: 'Invalid transaction metadata (negotiation ID mismatch).' });
         }
-        // Ensure the amount matches (convert Paystack amount back to original unit)
-        if (transaction.amount / 100 !== metadataAgreedPrice) {
-            console.error('Metadata amount mismatch:', transaction.amount / 100, metadataAgreedPrice);
+        // Ensure the amount matches (transaction.amount is in cents, metadataAgreedPrice is in dollars)
+        if (transaction.amount !== Math.round(metadataAgreedPrice * 100)) { // Compare cents
+            console.error('Metadata amount mismatch. Transaction amount (cents):', transaction.amount, 'Metadata agreed price (cents):', Math.round(metadataAgreedPrice * 100));
             return res.status(400).json({ error: 'Invalid transaction metadata (amount mismatch).' });
         }
 
@@ -160,7 +169,7 @@ const verifyPayment = async (req, res, io) => {
         // Fetch the current negotiation details to check status and prevent double updates
         const { data: negotiation, error: negFetchError } = await supabase
             .from('negotiations')
-            .select('id, client_id, transcriber_id, agreed_price_kes, status')
+            .select('id, client_id, transcriber_id, agreed_price_usd, status') // Changed to agreed_price_usd
             .eq('id', negotiationId)
             .single();
 
@@ -175,7 +184,7 @@ const verifyPayment = async (req, res, io) => {
         }
 
         // Calculate the transcriber's earning (e.g., 80% of the agreed price)
-        const transcriberPayAmount = calculateTranscriberEarning(transaction.amount / 100);
+        const transcriberPayAmount = calculateTranscriberEarning(transaction.amount / 100); // Pass USD amount
 
         // Record the payment details in the 'payments' table
         const { data: paymentRecord, error: paymentError } = await supabase
@@ -185,9 +194,9 @@ const verifyPayment = async (req, res, io) => {
                     negotiation_id: negotiationId,
                     client_id: metadataClientId,
                     transcriber_id: metadataTranscriberId,
-                    amount: transaction.amount / 100, // Full amount paid by client
-                    transcriber_earning: transcriberPayAmount, // Transcriber's share
-                    currency: transaction.currency,
+                    amount: transaction.amount / 100, // Full amount paid by client in USD
+                    transcriber_earning: transcriberPayAmount, // Transcriber's share in USD
+                    currency: 'USD', // Standardize to USD
                     paystack_reference: transaction.reference,
                     paystack_status: transaction.status,
                     transaction_date: new Date(transaction.paid_at).toISOString(), // Use the timestamp from Paystack
@@ -212,7 +221,7 @@ const verifyPayment = async (req, res, io) => {
                     payment_id: paymentRecord.id, // Link to the newly created payment record
                     negotiation_id: negotiationId,
                     amount: transcriberPayAmount,
-                    currency: transaction.currency,
+                    currency: 'USD', // Standardize to USD
                     status: 'pending', // Initial status for payout
                     due_date: getNextFriday(), // Due date for this payout
                 }
@@ -291,7 +300,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
             .from('payments')
             .select(`
                 *,
-                negotiation:negotiations(requirements, deadline_hours),
+                negotiation:negotiations(requirements, deadline_hours, agreed_price_usd), // Changed to agreed_price_usd
                 client:users!client_id(full_name, email)
             `)
             .eq('transcriber_id', transcriberId)
@@ -338,7 +347,7 @@ const getClientPaymentHistory = async (req, res) => {
             .from('payments')
             .select(`
                 *,
-                negotiation:negotiations(requirements, deadline_hours),
+                negotiation:negotiations(requirements, deadline_hours, agreed_price_usd), // Changed to agreed_price_usd
                 transcriber:users!transcriber_id(full_name, email)
             `)
             .eq('client_id', clientId)
@@ -389,12 +398,12 @@ const getAllPaymentHistoryForAdmin = async (req, res) => {
         *,
         client:users!client_id(full_name, email),
         transcriber:users!transcriber_id(full_name, email),
-        negotiation:negotiations(requirements, deadline_hours)
+        negotiation:negotiations(requirements, deadline_hours, agreed_price_usd) // Changed to agreed_price_usd
       `)
       .order('transaction_date', { ascending: false }); // Order by transaction date
 
     if (error) {
-        console.error('Error fetching all payment history for admin:', error);
+        console.error('Error fetching all payment history for admin:2', error);
         return res.status(500).json({ error: error.message });
     }
 

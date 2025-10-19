@@ -1,8 +1,8 @@
-const supabase = require('..//database');
+const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const emailService = require('..//emailService');
+const emailService = require('../emailService');
 const { updateAverageRating } = require('./ratingController'); // Import updateAverageRating
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB limit
@@ -264,12 +264,12 @@ const tempUploadNegotiationFile = async (req, res) => {
 
 const createNegotiation = async (req, res, next, io) => {
   try {
-    const { transcriber_id, requirements, proposed_price_kes, deadline_hours, negotiation_file_url } = req.body;
+    const { transcriber_id, requirements, proposed_price_usd, deadline_hours, negotiation_file_url } = req.body; // Changed to proposed_price_usd
     const clientId = req.user.userId;
 
     // Basic validation for required fields
-    if (!transcriber_id || !requirements || !proposed_price_kes || !deadline_hours || !negotiation_file_url) {
-      return res.status(400).json({ error: 'All fields (transcriber_id, requirements, proposed_price_kes, deadline_hours, and negotiation_file_url) are required.' });
+    if (!transcriber_id || !requirements || !proposed_price_usd || !deadline_hours || !negotiation_file_url) { // Changed to proposed_price_usd
+      return res.status(400).json({ error: 'All fields (transcriber_id, requirements, proposed_price_usd, deadline_hours, and negotiation_file_url) are required.' }); // Changed to proposed_price_usd
     }
 
     // Check if the temporary file exists on the server
@@ -356,9 +356,9 @@ const createNegotiation = async (req, res, next, io) => {
           client_id: clientId,
           transcriber_id: transcriber_id,
           requirements: requirements,
-          agreed_price_kes: proposed_price_kes,
+          agreed_price_usd: proposed_price_usd, // Changed to agreed_price_usd
           deadline_hours: deadline_hours,
-          client_message: `Budget: KES ${proposed_price_kes}, Deadline: ${deadline_hours} hours`,
+          client_message: `Budget: USD ${proposed_price_usd}, Deadline: ${deadline_hours} hours`, // Changed to USD
           negotiation_files: negotiation_file_url, // Store the filename (which is now the permanent name)
           status: 'pending'
         }
@@ -427,7 +427,7 @@ const getClientNegotiations = async (req, res) => {
       .select(`
         id,
         status,
-        agreed_price_kes,
+        agreed_price_usd,     
         requirements,
         deadline_hours,
         client_message,
@@ -446,7 +446,7 @@ const getClientNegotiations = async (req, res) => {
         )
       `)
       .eq('client_id', clientId)
-      .order('created_at', { ascending: false }); // Order by creation date, newest first
+      .order('created_at', { ascending: false });
 
     if (negotiationsError) {
       console.error('Negotiations query error:', negotiationsError);
@@ -462,21 +462,21 @@ const getClientNegotiations = async (req, res) => {
 
     // Process negotiations to format transcriber data cleanly
     const negotiationsWithTranscribers = negotiations.map(negotiation => {
-        const { transcriber, ...rest } = negotiation; // Destructure to separate transcriber info
+        const { transcriber, ...rest } = negotiation;
 
         // Safely access nested transcriber profile data
         const transcriberProfileData = transcriber?.transcribers?.[0] || {};
 
         return {
-            ...rest, // Include all negotiation details
-            users: transcriber ? { // Nest transcriber details under 'users' key
+            ...rest,
+            users: transcriber ? {
                 id: transcriber.id,
                 full_name: transcriber.full_name,
                 email: transcriber.email,
-                average_rating: transcriberProfileData.average_rating || 0, // Default to 0 if no rating
+                average_rating: transcriberProfileData.average_rating || 0,
                 completed_jobs: transcriberProfileData.completed_jobs || 0,
-            } : { // Fallback if transcriber data is missing
-                id: negotiation.transcriber_id, // Use the ID from the negotiation table
+            } : {
+                id: negotiation.transcriber_id,
                 full_name: 'Unknown Transcriber',
                 average_rating: 0,
                 completed_jobs: 0
@@ -501,13 +501,13 @@ const getTranscriberNegotiations = async (req, res) => {
 
     console.log('Get transcriber negotiations for:', transcriberId);
 
-    // Fetch negotiations associated with the transcriber, joining with client details
+    // Fetch negotiations associated with the transcriber, joining with client details from the 'users' table
     const { data: negotiations, error: negotiationsError } = await supabase
       .from('negotiations')
       .select(`
         id,
         status,
-        agreed_price_kes,
+        agreed_price_usd,     
         requirements,
         deadline_hours,
         client_message,
@@ -519,7 +519,7 @@ const getTranscriberNegotiations = async (req, res) => {
             id,
             full_name,
             email,
-            clients ( -- Fetch client profile to get average_rating
+            clients (
                 average_rating
             )
         )
@@ -549,7 +549,7 @@ const getTranscriberNegotiations = async (req, res) => {
             client_info: client ? {
                 id: client.id,
                 full_name: client.full_name,
-                client_rating: clientProfileData.average_rating || 5.0, // Use fetched average_rating, default to 5.0
+                client_rating: clientProfileData.average_rating || 5.0,
                 email: client.email,
             } : {
                 id: negotiation.client_id,
@@ -605,7 +605,7 @@ const deleteNegotiation = async (req, res, io) => {
     // NEW: Always clear transcriber's current_job_id and set available to true if transcriber_id exists
     if (negotiation.transcriber_id) {
         console.log(`Attempting to free up transcriber ${negotiation.transcriber_id} for negotiation ${negotiationId}.`);
-        await syncAvailabilityStatus(negotiation.transcriber_id, true, null); // Set available to true, clear current_job_id
+        await syncAvailabilityStatus(negotiation.transcriber_id, true, null);
         console.log(`Transcriber ${negotiation.transcriber_id} availability status updated.`);
     }
 
@@ -646,7 +646,7 @@ const deleteNegotiation = async (req, res, io) => {
       io.to(negotiation.transcriber_id).emit('negotiation_cancelled', {
         negotiationId: negotiation.id,
         message: `A negotiation request from ${req.user.full_name} was cancelled.`,
-        newStatus: 'cancelled' // Indicate the new status for frontend updates
+        newStatus: 'cancelled'
       });
       console.log(`Emitted 'negotiation_cancelled' to transcriber ${negotiation.transcriber_id}`);
     }
@@ -667,7 +667,7 @@ const acceptNegotiation = async (req, res, io) => {
         // Fetch negotiation details to verify status and user authorization
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
-            .select('status, transcriber_id, client_id, agreed_price_kes, deadline_hours')
+            .select('status, transcriber_id, client_id, agreed_price_usd, deadline_hours')
             .eq('id', negotiationId)
             .single();
 
@@ -700,7 +700,7 @@ const acceptNegotiation = async (req, res, io) => {
             io.to(negotiation.client_id).emit('negotiation_accepted', {
                 negotiationId: updatedNegotiation.id,
                 message: `Your negotiation with ${req.user.full_name} has been accepted!`,
-                newStatus: 'accepted_awaiting_payment' // Inform frontend of the status change
+                newStatus: 'accepted_awaiting_payment'
             });
             console.log(`Emitted 'negotiation_accepted' to client ${negotiation.client_id}`);
         }
@@ -724,11 +724,11 @@ const acceptNegotiation = async (req, res, io) => {
 const counterNegotiation = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
-        const { proposed_price_kes, deadline_hours, transcriber_response } = req.body;
+        const { proposed_price_usd, deadline_hours, transcriber_response } = req.body;
         const transcriberId = req.user.userId;
 
         // Validate input fields
-        if (!proposed_price_kes || !deadline_hours || !transcriber_response) {
+        if (!proposed_price_usd || !deadline_hours || !transcriber_response) {
             return res.status(400).json({ error: 'Proposed price, deadline, and response are required for a counter-offer.' });
         }
 
@@ -757,10 +757,10 @@ const counterNegotiation = async (req, res, io) => {
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
             .update({
-                status: 'transcriber_counter', // Set status to indicate transcriber's counter
-                agreed_price_kes: proposed_price_kes,
+                status: 'transcriber_counter',
+                agreed_price_usd: proposed_price_usd,
                 deadline_hours: deadline_hours,
-                transcriber_response: transcriber_response, // Store the transcriber's message
+                transcriber_response: transcriber_response,
                 updated_at: new Date().toISOString()
             })
             .eq('id', negotiationId)
@@ -774,7 +774,7 @@ const counterNegotiation = async (req, res, io) => {
             io.to(negotiation.client_id).emit('negotiation_countered', {
                 negotiationId: updatedNegotiation.id,
                 message: `Transcriber ${req.user.full_name} sent a counter offer!`,
-                newStatus: 'transcriber_counter' // Inform frontend of the status change
+                newStatus: 'transcriber_counter'
             });
             console.log(`Emitted 'negotiation_countered' to client ${negotiation.client_id}`);
         }
@@ -798,7 +798,7 @@ const counterNegotiation = async (req, res, io) => {
 const rejectNegotiation = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
-        const { reason } = req.body; // Reason for rejection
+        const { reason } = req.body;
         const transcriberId = req.user.userId;
 
         // Fetch negotiation details to verify status and authorization
@@ -825,7 +825,7 @@ const rejectNegotiation = async (req, res, io) => {
         // Update negotiation status to 'rejected' and store the rejection reason
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
-            .update({ status: 'rejected', transcriber_response: reason, updated_at: new Date().toISOString() }) // Use transcriber_response for rejection reason
+            .update({ status: 'rejected', transcriber_response: reason, updated_at: new Date().toISOString() })
             .eq('id', negotiationId)
             .select()
             .single();
@@ -837,7 +837,7 @@ const rejectNegotiation = async (req, res, io) => {
             io.to(negotiation.client_id).emit('negotiation_rejected', {
                 negotiationId: updatedNegotiation.id,
                 message: `Transcriber ${req.user.full_name} rejected your negotiation.`,
-                newStatus: 'rejected' // Inform frontend of the status change
+                newStatus: 'rejected'
             });
             console.log(`Emitted 'negotiation_rejected' to client ${negotiation.client_id}`);
         }
@@ -847,7 +847,7 @@ const rejectNegotiation = async (req, res, io) => {
         if (clientError) console.error('Error fetching client for negotiation rejected email:', clientError);
 
         if (clientUser) {
-            await emailService.sendNegotiationRejectedEmail(clientUser, updatedNegotiation, reason); // Pass the rejection reason
+            await emailService.sendNegotiationRejectedEmail(clientUser, updatedNegotiation, reason);
         }
 
         res.json({ message: 'Negotiation rejected successfully.', negotiation: updatedNegotiation });
@@ -866,7 +866,7 @@ const clientAcceptCounter = async (req, res, io) => {
         // Fetch negotiation details to verify status and authorization
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
-            .select('status, transcriber_id, client_id, agreed_price_kes, deadline_hours')
+            .select('status, transcriber_id, client_id, agreed_price_usd, deadline_hours')
             .eq('id', negotiationId)
             .single();
 
@@ -899,7 +899,7 @@ const clientAcceptCounter = async (req, res, io) => {
             io.to(negotiation.transcriber_id).emit('negotiation_accepted', {
                 negotiationId: updatedNegotiation.id,
                 message: `Client ${req.user.full_name} accepted your counter-offer!`,
-                newStatus: 'accepted_awaiting_payment' // Inform frontend of the status change
+                newStatus: 'accepted_awaiting_payment'
             });
             console.log(`Emitted 'negotiation_accepted' to transcriber ${negotiation.transcriber_id}`);
         }
@@ -924,7 +924,7 @@ const clientAcceptCounter = async (req, res, io) => {
 const clientRejectCounter = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
-        const { client_response } = req.body; // Client's reason for rejection
+        const { client_response } = req.body;
         const clientId = req.user.userId;
 
         // Fetch negotiation details to verify status and authorization
@@ -963,7 +963,7 @@ const clientRejectCounter = async (req, res, io) => {
             io.to(negotiation.transcriber_id).emit('negotiation_rejected', {
                 negotiationId: updatedNegotiation.id,
                 message: `Client ${req.user.full_name} rejected your counter-offer.`,
-                newStatus: 'rejected' // Inform frontend of the status change
+                newStatus: 'rejected'
             });
             console.log(`Emitted 'negotiation_rejected' to transcriber ${negotiation.transcriber_id}`);
         }
@@ -973,7 +973,7 @@ const clientRejectCounter = async (req, res, io) => {
         if (transcriberError) console.error('Error fetching transcriber for client reject counter email:', transcriberError);
 
         if (transcriberUser) {
-            await emailService.sendNegotiationRejectedEmail(transcriberUser, updatedNegotiation, client_response); // Pass client's response as reason
+            await emailService.sendNegotiationRejectedEmail(transcriberUser, updatedNegotiation, client_response);
         }
 
         res.json({ message: 'Counter-offer rejected successfully.', negotiation: updatedNegotiation });
@@ -985,14 +985,14 @@ const clientRejectCounter = async (req, res, io) => {
 };
 
 const clientCounterBack = async (req, res, io) => {
-    let negotiationFile = req.file; // Get the uploaded file from Multer
+    let negotiationFile = req.file;
     try {
         const { negotiationId } = req.params;
-        const { proposed_price_kes, deadline_hours, client_response } = req.body;
+        const { proposed_price_usd, deadline_hours, client_response } = req.body;
         const clientId = req.user.userId;
 
         // Basic validation for required fields
-        if (!proposed_price_kes || !deadline_hours || !client_response) {
+        if (!proposed_price_usd || !deadline_hours || !client_response) {
             // Clean up the uploaded file if any required field is missing
             if (negotiationFile && fs.existsSync(negotiationFile.path)) {
                 fs.unlinkSync(negotiationFile.path);
@@ -1002,8 +1002,8 @@ const clientCounterBack = async (req, res, io) => {
 
         let negotiationFileName = null;
         if (negotiationFile) {
-            negotiationFileName = negotiationFile.filename; // Corrected from negotiationFile.filename
-            const filePath = path.join('uploads/negotiation_files', negotiationFileName); // Use negotiationFileName
+            negotiationFileName = negotiationFile.filename;
+            const filePath = path.join('uploads/negotiation_files', negotiationFileName);
             if (!fs.existsSync(filePath)) {
                 console.error(`CRITICAL WARNING: Uploaded file NOT found at expected path: ${filePath}`);
                 if (negotiationFile && fs.existsSync(negotiationFile.path)) {
@@ -1051,11 +1051,11 @@ const clientCounterBack = async (req, res, io) => {
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
             .update({
-                status: 'client_counter', // Set status to indicate client's counter
-                agreed_price_kes: proposed_price_kes,
+                status: 'client_counter',
+                agreed_price_usd: proposed_price_usd,
                 deadline_hours: deadline_hours,
-                client_message: client_response, // Store the client's message/response
-                negotiation_files: negotiationFileName, // Store the new file name if uploaded
+                client_message: client_response,
+                negotiation_files: negotiationFileName,
                 updated_at: new Date().toISOString()
             })
             .eq('id', negotiationId)
@@ -1073,10 +1073,10 @@ const clientCounterBack = async (req, res, io) => {
 
         // Emit a real-time event to the transcriber
         if (io) {
-            io.to(negotiation.transcriber_id).emit('negotiation_countered', { // Use same event as transcriber's counter
+            io.to(negotiation.transcriber_id).emit('negotiation_countered', {
                 negotiationId: updatedNegotiation.id,
                 message: `Client ${req.user.full_name} sent a counter-offer back!`,
-                newStatus: 'client_counter' // Inform frontend of the status change
+                newStatus: 'client_counter'
             });
             console.log(`Emitted 'negotiation_countered' to transcriber ${negotiation.transcriber_id}`);
         }
@@ -1086,7 +1086,6 @@ const clientCounterBack = async (req, res, io) => {
         if (transcriberError) console.error('Error fetching transcriber for client counter back email:', transcriberError);
 
         if (transcriberUser) {
-            // Use the counter-offer email template, with client details as the sender
             await emailService.sendCounterOfferEmail(transcriberUser, req.user, updatedNegotiation);
         }
 
@@ -1109,18 +1108,18 @@ const clientCounterBack = async (req, res, io) => {
 
 
 module.exports = {
-  uploadNegotiationFiles,
-  uploadTempNegotiationFile, // Export the new temp upload middleware
-  tempUploadNegotiationFile, // Export the new temp upload handler
-  getAvailableTranscribers,
-  createNegotiation,
-  getClientNegotiations,
-  deleteNegotiation,
-  syncAvailabilityStatus,
-  acceptNegotiation,
-  counterNegotiation,
-  rejectNegotiation,
-  clientAcceptCounter,
-  clientRejectCounter,
-  clientCounterBack
+    uploadNegotiationFiles,
+    uploadTempNegotiationFile,
+    tempUploadNegotiationFile,
+    getAvailableTranscribers,
+    createNegotiation,
+    getClientNegotiations,
+    deleteNegotiation,
+    syncAvailabilityStatus,
+    acceptNegotiation,
+    counterNegotiation,
+    rejectNegotiation,
+    clientAcceptCounter,
+    clientRejectCounter,
+    clientCounterBack
 };

@@ -1,5 +1,5 @@
-const supabase = require('..//database');
-const emailService = require('..//emailService'); // Ensure this path is correct
+const supabase = require('../database');
+const emailService = require('../emailService'); // Ensure this path is correct
 
 // --- Admin Statistics ---
 
@@ -22,10 +22,11 @@ const getPendingTranscriberTestsCount = async (req, res) => {
 // Get count of active jobs (negotiations with status 'accepted' or 'hired')
 const getActiveJobsCount = async (req, res) => {
     try {
+        // UPDATED: Include 'accepted_awaiting_payment' in active jobs count
         const { count, error } = await supabase
             .from('negotiations')
             .select('*', { count: 'exact', head: true })
-            .in('status', ['accepted', 'hired']); // Count jobs that are active
+            .in('status', ['accepted_awaiting_payment', 'hired']); // Count jobs that are active or awaiting payment
 
         if (error) throw error;
         res.json({ count });
@@ -61,7 +62,7 @@ const getTotalUsersCount = async (req, res) => {
         if (error) throw error;
         res.json({ count });
     } catch (error) {
-        console.error('Error fetching total users count:', error);
+        console.error('Error fetching total users count:', error); // SYNTAX FIX: Corrected console.error
         res.status(500).json({ error: error.message });
     }
 };
@@ -343,17 +344,18 @@ const getAnyUserById = async (req, res) => {
 // Get admin settings (e.g., default prices, deadlines)
 const getAdminSettings = async (req, res) => {
     try {
+        // UPDATED: Fetch pricing_rules instead of individual price/deadline settings
         const { data: settings, error } = await supabase
             .from('admin_settings')
-            .select('default_price_per_minute, default_deadline_hours')
+            .select('id, pricing_rules') // Select the id and the new JSONB column
             .single();
 
         // Handle case where settings table might be empty (return defaults)
         if (error && error.code === 'PGRST116') { // PGRST116 = No rows found
             return res.json({
                 settings: {
-                    default_price_per_minute: 0.00, // Default value
-                    default_deadline_hours: 24,     // Default value
+                    id: null, // No ID if no settings exist yet
+                    pricing_rules: [] // Default to an empty array of rules
                 }
             });
         }
@@ -369,35 +371,44 @@ const getAdminSettings = async (req, res) => {
 // Update admin settings
 const updateAdminSettings = async (req, res) => {
     try {
-        const { default_price_per_minute, default_deadline_hours } = req.body;
+        // UPDATED: Expect pricing_rules from the body
+        const { id, pricing_rules } = req.body; // 'id' will be used for updating an existing row
 
-        // Attempt to update existing settings, or insert if none exist
-        const { data, error } = await supabase
-            .from('admin_settings')
-            .update({
-                default_price_per_minute: default_price_per_minute,
-                default_deadline_hours: default_deadline_hours,
-                updated_at: new Date().toISOString(),
-            })
-            .limit(1) // Ensure only one row is updated/affected
-            .select(); // Return the updated row
-
-        if (error) throw error;
-
-        // If no row was updated (table was empty), insert new settings
-        if (!data || data.length === 0) {
-            const { data: insertData, error: insertError } = await supabase
-                .from('admin_settings')
-                .insert({
-                    default_price_per_minute: default_price_per_minute,
-                    default_deadline_hours: default_deadline_hours,
-                })
-                .select(); // Return the inserted row
-            if (insertError) throw insertError;
-            return res.json({ message: 'Settings initialized and saved successfully.', settings: insertData[0] });
+        if (!pricing_rules || !Array.isArray(pricing_rules)) {
+            return res.status(400).json({ error: 'Pricing rules must be provided as an array.' });
         }
 
-        res.json({ message: 'Settings updated successfully.', settings: data[0] });
+        const updatePayload = {
+            pricing_rules: pricing_rules,
+            updated_at: new Date().toISOString(),
+        };
+
+        let result;
+        if (id) {
+            // Attempt to update existing settings
+            const { data, error } = await supabase
+                .from('admin_settings')
+                .update(updatePayload)
+                .eq('id', id) // Update the specific row
+                .select(); // Return the updated row
+
+            if (error) throw error;
+            result = data;
+        } else {
+            // If no ID is provided, assume no settings exist, and insert new ones
+            const { data, error } = await supabase
+                .from('admin_settings')
+                .insert(updatePayload)
+                .select(); // Return the inserted row
+            if (error) throw error;
+            result = data;
+        }
+        
+        if (!result || result.length === 0) {
+            return res.status(500).json({ error: 'Failed to save or update settings. No data returned.' });
+        }
+
+        res.json({ message: 'Settings updated successfully.', settings: result[0] });
     } catch (error) {
         console.error('Error updating admin settings:', error);
         res.status(500).json({ error: error.message });
@@ -412,7 +423,7 @@ const getAllJobsForAdmin = async (req, res) => {
             .select(`
                 id,
                 status,
-                agreed_price_kes,
+                agreed_price_usd,     // UPDATED: Changed to agreed_price_usd
                 requirements,
                 deadline_hours,
                 created_at,

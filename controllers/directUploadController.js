@@ -6,133 +6,151 @@ const { syncAvailabilityStatus } = require('./transcriberController'); // Import
 const emailService = require('../emailService'); // For sending notifications
 const util = require('util');
 const { getAudioDurationInSeconds } = require('get-audio-duration'); // For calculating audio length
+const { calculatePricePerMinute } = require('../utils/pricingCalculator'); // Import the pricing calculator
 
 // Promisify fs.unlink for async file deletion
 const unlinkAsync = util.promisify(fs.unlink);
 
-// --- Multer Configuration for Direct Upload Files ---
-const directUploadFileStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = 'uploads/direct_upload_files'; // Directory for direct upload files
-    // Create directory if it doesn't exist
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    // Create a unique filename to prevent conflicts
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-// File filter to allow only specific types of files
-const directUploadFileFilter = (req, file, cb) => {
-  const allowedTypes = [
-    // Audio types
-    'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/mp4', 'audio/m4a', 'audio/ogg',
-    // Video types
-    'video/mp4', 'video/webm', 'video/ogg',
-    // Document types
-    'application/pdf',
-    'application/msword', // .doc
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
-    'text/plain',
-    // Image types
-    'image/jpeg', 'image/jpg', 'image/png', 'image/gif'
-  ];
-  // Check if the file's MIME type is in the allowed list
-  if (allowedTypes.includes(file.mimetype)) {
-    cb(null, true); // Accept the file
-  } else {
-    cb(new Error('Only audio, video, PDF, DOC, DOCX, TXT, and image files are allowed for direct uploads!'), false);
-  }
-};
-
-// Multer configuration for handling multiple file fields
-const uploadDirectFiles = multer({
-  storage: directUploadFileStorage,
-  fileFilter: directUploadFileFilter,
-  limits: {
-    fileSize: 200 * 1024 * 1024 // Limit file size to 200MB
-  }
-}).fields([
-    { name: 'audioVideoFile', maxCount: 1 }, // Main audio/video file
-    { name: 'instructionFiles', maxCount: 5 } // Additional instruction files (up to 5)
-]);
+// --- Multer Configuration for Direct Upload Files (MOVED TO generalApiRoutes.js) ---
+// Note: The actual Multer setup for `uploadDirectFiles` is now in generalApiRoutes.js
+// We keep references to `uploadDirectFiles` for clarity if it were to be used directly here,
+// but for the quote and job creation routes, the middleware is applied in generalApiRoutes.js.
 
 
-// --- Quote Calculation Helper ---
-const calculateQuote = async (audioLengthMinutes, qualityParam, deadlineParam, specialRequirements) => {
-    // Fetch default pricing and deadline settings from admin_settings table
-    const { data: adminSettings, error: settingsError } = await supabase
-        .from('admin_settings')
-        .select('default_price_per_minute, default_deadline_hours')
-        .single();
+// --- Quote Calculation Helper (UPDATED to use pricingCalculator) ---
+const getQuoteAndDeadline = async (audioLengthMinutes, audioQualityParam, deadlineTypeParam, specialRequirements) => {
+    // Construct job parameters for the pricing calculator
+    const jobParams = {
+        audio_quality: audioQualityParam, // UPDATED: Changed from 'quality' to 'audio_quality'
+        deadline_type: deadlineTypeParam,
+        duration_minutes: audioLengthMinutes,
+        special_requirements: specialRequirements // Pass through if rules might use it directly
+    };
 
-    if (settingsError || !adminSettings) {
-        console.error("Error fetching admin settings for quote calculation:", settingsError);
-        throw new Error("Pricing settings not found.");
+    const pricePerMinuteUsd = await calculatePricePerMinute(jobParams);
+
+    if (pricePerMinuteUsd === null) {
+        throw new Error('No pricing rule matched for the provided job parameters. Please check admin settings.');
     }
 
-    let pricePerMinute = adminSettings.default_price_per_minute;
-    let deadlineMultiplier = 1;
-    let qualityMultiplier = 1;
-    let specialReqMultiplier = 1;
-
-    // Adjust price based on quality parameter
-    if (qualityParam === 'premium') {
-        qualityMultiplier = 1.5;
-    } else if (qualityParam === 'basic') {
-        qualityMultiplier = 0.8;
-    }
-
-    // Adjust price based on deadline parameter
-    if (deadlineParam === 'rush') {
-        deadlineMultiplier = 1.5;
-    } else if (deadlineParam === 'extended') {
-        deadlineMultiplier = 0.8;
-    }
-
-    // Adjust price based on the number of special requirements
-    if (specialRequirements && specialRequirements.length > 0) {
-        specialReqMultiplier = 1 + (specialRequirements.length * 0.1); // Add 10% per requirement
-    }
-
-    // Calculate the final price per minute and the total quote
-    const finalPricePerMinute = pricePerMinute * qualityMultiplier * deadlineMultiplier * specialReqMultiplier;
-    const quote = parseFloat((audioLengthMinutes * finalPricePerMinute).toFixed(2));
+    const totalQuoteUsd = parseFloat((audioLengthMinutes * pricePerMinuteUsd).toFixed(2));
 
     // Determine suggested deadline hours based on parameters
-    let suggestedDeadlineHours = adminSettings.default_deadline_hours;
-    if (deadlineParam === 'rush') {
-        // Rush deadline: shorter, minimum 2 hours
-        suggestedDeadlineHours = Math.max(2, Math.round(audioLengthMinutes / 30));
-    } else if (deadlineParam === 'normal') {
-        // Normal deadline: based on audio length, minimum 6 hours
-        suggestedDeadlineHours = Math.max(6, Math.round(audioLengthMinutes / 15));
-    } else if (deadlineParam === 'extended') {
-        // Extended deadline: longer, maximum 168 hours (7 days)
-        suggestedDeadlineHours = Math.min(168, Math.max(24, Math.round(audioLengthMinutes / 5)));
+    // This logic can also be moved into pricingCalculator if it becomes complex and rule-based
+    let suggestedDeadlineHours;
+    switch (deadlineTypeParam) {
+        case 'urgent':
+            suggestedDeadlineHours = Math.max(2, Math.round(audioLengthMinutes * 0.5)); // Example: Faster processing
+            break;
+        case 'standard':
+            suggestedDeadlineHours = Math.max(12, Math.round(audioLengthMinutes * 1)); // Example: 1 minute audio = 1 hour deadline
+            break;
+        case 'flexible':
+            suggestedDeadlineHours = Math.max(24, Math.round(audioLengthMinutes * 2)); // Example: Slower processing
+            break;
+        default:
+            suggestedDeadlineHours = 24; // Default to 24 hours
     }
-    // Ensure deadline doesn't exceed a reasonable maximum (e.g., 1 week)
-    suggestedDeadlineHours = Math.min(suggestedDeadlineHours, 168);
+    suggestedDeadlineHours = Math.min(suggestedDeadlineHours, 168); // Cap at 7 days (168 hours)
+    suggestedDeadlineHours = Math.max(suggestedDeadlineHours, 2); // Minimum 2 hours
 
-    return { quote, agreed_deadline_hours: suggestedDeadlineHours };
+    return {
+        quote_amount_usd: totalQuoteUsd,
+        agreed_deadline_hours: suggestedDeadlineHours,
+        price_per_minute_usd: pricePerMinuteUsd,
+        audio_length_minutes: audioLengthMinutes, // Include for modal display
+        audio_quality_param: audioQualityParam, // Include for modal display
+        deadline_type_param: deadlineTypeParam, // Include for modal display
+        special_requirements: specialRequirements // Include for modal display
+    };
 };
 
 
 // --- Controller Functions ---
+
+// NEW: Handles the quote calculation request from the client (POST /api/direct-upload/job/quote)
+const handleQuoteCalculationRequest = async (req, res, io) => {
+    const clientId = req.user.userId;
+    const {
+        audioQualityParam, // UPDATED: Changed from 'qualityParam' to 'audioQualityParam'
+        deadlineTypeParam,
+        specialRequirements // Expecting this as a JSON string or array
+    } = req.body;
+
+    let audioVideoFile = req.files?.audioVideoFile?.[0]; // Main file uploaded for duration calculation
+
+    // Store paths of all uploaded files for cleanup in case of errors
+    const uploadedFilePaths = [];
+    if (audioVideoFile) uploadedFilePaths.push(audioVideoFile.path);
+    // Note: instructionFiles are not needed for quote calculation, so no need to process them here.
+
+    // Helper function to clean up uploaded files
+    const cleanupFiles = async () => {
+        await Promise.all(uploadedFilePaths.map(async (filePath) => {
+            if (fs.existsSync(filePath)) {
+                try {
+                    await unlinkAsync(filePath); // Use promisified unlink
+                    console.log(`Cleaned up temporary uploaded file: ${filePath}`);
+                } catch (unlinkError) {
+                    console.error(`Error deleting uploaded file during cleanup: ${unlinkError}`);
+                }
+            }
+        }));
+    };
+
+    // Validate that the main audio/video file was uploaded
+    if (!audioVideoFile) {
+        await cleanupFiles();
+        return res.status(400).json({ error: 'Main audio/video file is required for quote calculation.' });
+    }
+
+    try {
+        const audioVideoFilePath = audioVideoFile.path;
+        if (!fs.existsSync(audioVideoFilePath)) {
+            console.error(`!!! CRITICAL WARNING !!! Audio/Video file NOT found at expected path after upload: ${audioVideoFilePath}`);
+            await cleanupFiles();
+            return res.status(500).json({ error: 'Uploaded audio/video file not found on server after processing.' });
+        }
+
+        const audioLengthSeconds = await getAudioDurationInSeconds(audioVideoFilePath);
+        const audioLengthMinutes = audioLengthSeconds / 60;
+
+        const quoteDetails = await getQuoteAndDeadline(
+            audioLengthMinutes,
+            audioQualityParam, // Use the new param name
+            deadlineTypeParam,
+            specialRequirements ? JSON.parse(specialRequirements) : []
+        );
+
+        res.status(200).json({
+            message: 'Quote calculated successfully.',
+            quoteDetails: quoteDetails
+        });
+
+    } catch (error) {
+        console.error('handleQuoteCalculationRequest: UNCAUGHT EXCEPTION:', error);
+        await cleanupFiles(); // Ensure temporary files are cleaned up
+        res.status(500).json({ error: error.message || 'Failed to calculate quote due to server error.' });
+    } finally {
+        // Always clean up the temporary audio/video file after quote calculation
+        if (audioVideoFile && fs.existsSync(audioVideoFile.path)) {
+            await unlinkAsync(audioVideoFile.path).catch(err => console.error("Error cleaning up audioVideoFile after quote:", err));
+        }
+    }
+};
+
 
 // Client uploads files and creates a direct job request
 const createDirectUploadJob = async (req, res, io) => {
     const clientId = req.user.userId;
     const {
         clientInstructions,
-        qualityParam,
-        deadlineParam,
-        specialRequirements // Expecting this as a JSON string
+        audioQualityParam, // UPDATED: Changed from 'qualityParam' to 'audioQualityParam'
+        deadlineTypeParam,
+        specialRequirements, // Expecting this as a JSON string or array
+        quoteAmountUsd, // Received from frontend after quote calculation
+        pricePerMinuteUsd, // Received from frontend after quote calculation
+        agreedDeadlineHours // Received from frontend after quote calculation
     } = req.body;
 
     let audioVideoFile = req.files?.audioVideoFile?.[0]; // Main file
@@ -177,22 +195,14 @@ const createDirectUploadJob = async (req, res, io) => {
             console.log(`Confirmed Audio/Video file exists at: ${audioVideoFilePath}`);
         }
 
-        // 1. Get audio/video file duration
+        // 1. Get audio/video file duration (already done for quote, but re-calculate or retrieve if needed for validation)
         const audioLengthSeconds = await getAudioDurationInSeconds(audioVideoFilePath);
         const audioLengthMinutes = audioLengthSeconds / 60;
 
-        // 2. Calculate quote and suggested deadline based on parameters
-        const { quote, agreed_deadline_hours } = await calculateQuote(
-            audioLengthMinutes,
-            qualityParam,
-            deadlineParam,
-            specialRequirements ? JSON.parse(specialRequirements) : [] // Parse JSON string if provided
-        );
-
-        // 3. Prepare instruction file names (if any)
+        // 2. Prepare instruction file names (if any)
         const instructionFileNames = instructionFiles.map(file => file.filename).join(',');
 
-        // 4. Create the direct upload job record in the 'direct_upload_jobs' table
+        // 3. Create the direct upload job record in the 'direct_upload_jobs' table
         const { data: job, error: jobError } = await supabase
             .from('direct_upload_jobs')
             .insert([
@@ -204,11 +214,13 @@ const createDirectUploadJob = async (req, res, io) => {
                     audio_length_minutes: audioLengthMinutes,
                     client_instructions: clientInstructions,
                     instruction_files: instructionFileNames || null, // Store comma-separated names or null
-                    quote_amount: quote,
-                    agreed_deadline_hours: agreed_deadline_hours,
+                    quote_amount_usd: parseFloat(quoteAmountUsd), // Ensure it's a float, from frontend
+                    price_per_minute_usd: parseFloat(pricePerMinuteUsd), // Ensure it's a float, from frontend
+                    currency: 'USD',
+                    agreed_deadline_hours: parseInt(agreedDeadlineHours, 10), // Ensure it's an int, from frontend
                     status: 'pending_review', // Initial status
-                    quality_param: qualityParam,
-                    deadline_param: deadlineParam,
+                    audio_quality_param: audioQualityParam, // UPDATED: Use new param name
+                    deadline_type_param: deadlineTypeParam, // UPDATED: Use new param name
                     special_requirements: specialRequirements ? JSON.parse(specialRequirements) : []
                 }
             ])
@@ -224,7 +236,7 @@ const createDirectUploadJob = async (req, res, io) => {
         // If job created successfully, files are now linked and should not be cleaned up.
         const newJob = job;
 
-        // 5. Notify qualified transcribers (4-star and 5-star) via Socket.IO
+        // 4. Notify qualified transcribers (4-star and 5-star) via Socket.IO
         const { data: transcribers, error: transcriberFetchError } = await supabase
             .from('users')
             .select('id, full_name, email, transcribers(average_rating)') // Fetch user details and transcriber profile
@@ -243,8 +255,8 @@ const createDirectUploadJob = async (req, res, io) => {
                 io.to(transcriber.id).emit('new_direct_job_available', {
                     jobId: newJob.id,
                     clientName: req.user.full_name,
-                    quote: newJob.quote_amount,
-                    message: `A new direct upload job from ${req.user.full_name} is available for KES ${newJob.quote_amount}!`,
+                    quote: newJob.quote_amount_usd,
+                    message: `A new direct upload job from ${req.user.full_name} is available for USD ${newJob.quote_amount_usd}!`,
                     newStatus: 'pending_review'
                 });
             });
@@ -273,8 +285,23 @@ const getDirectUploadJobsForClient = async (req, res) => {
         const { data: jobs, error } = await supabase
             .from('direct_upload_jobs')
             .select(`
-                *,
-                client:users!client_id(full_name, email),
+                id,
+                file_name,
+                file_url,
+                file_size_mb,
+                audio_length_minutes,
+                client_instructions,
+                instruction_files,
+                quote_amount_usd,
+                price_per_minute_usd,
+                currency,
+                agreed_deadline_hours,
+                status,
+                audio_quality_param, // UPDATED: Use new param name
+                deadline_type_param, // UPDATED: Use new param name
+                special_requirements,
+                created_at,
+                client:users!client_id(full_name, email), // Join to get client details
                 transcriber:users!transcriber_id(full_name, email)
             `)
             .eq('client_id', clientId) // Filter by the client making the request
@@ -328,12 +355,13 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
                 audio_length_minutes,
                 client_instructions,
                 instruction_files,
-                quote_amount,
+                quote_amount_usd,
+                price_per_minute_usd,
                 currency,
                 agreed_deadline_hours,
                 status,
-                quality_param,
-                deadline_param,
+                audio_quality_param, // UPDATED: Use new param name
+                deadline_type_param, // UPDATED: Use new param name
                 special_requirements,
                 created_at,
                 client:users!client_id(full_name, email) -- Join to get client details
@@ -350,7 +378,7 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error fetching available direct upload jobs for transcriber:', error);
+        console.error('Error fetching available direct upload jobs for transcriber:', error); // SYNTAX FIX: Corrected console.error
         res.status(500).json({ error: 'Server error fetching available direct upload jobs.' });
     }
 };
@@ -503,7 +531,22 @@ const getAllDirectUploadJobsForAdmin = async (req, res) => {
         const { data: jobs, error } = await supabase
             .from('direct_upload_jobs')
             .select(`
-                *,
+                id,
+                file_name,
+                file_url,
+                file_size_mb,
+                audio_length_minutes,
+                client_instructions,
+                instruction_files,
+                quote_amount_usd,
+                price_per_minute_usd,
+                currency,
+                agreed_deadline_hours,
+                status,
+                audio_quality_param,
+                deadline_type_param,
+                special_requirements,
+                created_at,
                 client:users!client_id(full_name, email),
                 transcriber:users!transcriber_id(full_name, email)
             `)
@@ -535,8 +578,8 @@ const getAllDirectUploadJobsForAdmin = async (req, res) => {
 
 
 module.exports = {
-    uploadDirectFiles,
-    calculateQuote,
+    // uploadDirectFiles, // Multer middleware is now defined and used in generalApiRoutes.js
+    handleQuoteCalculationRequest, // NEW: Export the quote calculation handler
     createDirectUploadJob,
     getDirectUploadJobsForClient,
     getAvailableDirectUploadJobsForTranscriber,
