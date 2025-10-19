@@ -1,8 +1,8 @@
 const axios = require('axios');
-const supabase = require('../database'); // CORRECTED: Changed from '../supabaseClient' to '../database'
-const { syncAvailabilityStatus } = require('./transcriberController'); // Import syncAvailabilityStatus
-const emailService = require('../emailService'); // For sending payment confirmation emails
-const { calculateTranscriberEarning } = require('../utils/paymentUtils'); // Now imports from the new file
+const supabase = require('../database');
+const { syncAvailabilityStatus } = require('./transcriberController');
+const emailService = require('../emailService');
+const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils'); // Now imports from the new file and new utilities
 
 // Paystack Secret Key from environment variables
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
@@ -36,8 +36,8 @@ const initializePayment = async (req, res, io) => {
     }
 
     // Ensure amount is a valid positive number
-    const parsedAmount = parseFloat(amount);
-    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+    const parsedAmountUsd = parseFloat(amount); // Keep this as USD amount from frontend
+    if (isNaN(parsedAmountUsd) || parsedAmountUsd <= 0) {
         return res.status(400).json({ error: 'Invalid payment amount.' });
     }
 
@@ -45,7 +45,7 @@ const initializePayment = async (req, res, io) => {
         // 1. Verify negotiation status and client ownership
         const { data: negotiation, error: negError } = await supabase
             .from('negotiations')
-            .select('id, client_id, transcriber_id, agreed_price_usd, status') // Changed to agreed_price_usd
+            .select('id, client_id, transcriber_id, agreed_price_usd, status')
             .eq('id', negotiationId)
             .eq('client_id', clientId) // Ensure the logged-in user is the client
             .single();
@@ -61,26 +61,32 @@ const initializePayment = async (req, res, io) => {
         }
 
         // Validate that the provided amount matches the agreed price in the negotiation (in USD, comparing cents)
-        if (Math.round(parsedAmount * 100) !== Math.round(negotiation.agreed_price_usd * 100)) { // Compare cents
-            console.error('Payment amount mismatch. Provided:', parsedAmount, 'Agreed:', negotiation.agreed_price_usd);
+        if (Math.round(parsedAmountUsd * 100) !== Math.round(negotiation.agreed_price_usd * 100)) { // Compare USD cents
+            console.error('Payment amount mismatch. Provided USD:', parsedAmountUsd, 'Agreed USD:', negotiation.agreed_price_usd);
             return res.status(400).json({ error: 'Payment amount does not match the agreed negotiation price.' });
         }
+
+        // --- NEW: Currency Conversion for Paystack ---
+        const amountKes = convertUsdToKes(parsedAmountUsd); // Convert USD to KES
+        const amountInCentsKes = Math.round(amountKes * 100); // Paystack expects amount in cents for KES
 
         // 2. Initialize transaction with Paystack API
         const paystackResponse = await axios.post(
             'https://api.paystack.co/transaction/initialize',
             {
                 email: email,
-                amount: Math.round(parsedAmount * 100), // Paystack expects amount in cents
+                amount: amountInCentsKes, // Send KES amount in cents to Paystack
                 reference: `${negotiationId}-${Date.now()}`, // Generate a unique reference
                 callback_url: `${CLIENT_URL}/payment-callback?negotiationId=${negotiationId}`, // Redirect URL after payment
-                currency: 'USD', // Specify currency as USD
+                currency: 'KES', // Specify currency as KES for Paystack
                 metadata: { // Include custom data for later retrieval
                     negotiation_id: negotiationId,
                     client_id: clientId,
                     transcriber_id: negotiation.transcriber_id,
-                    agreed_price_usd: negotiation.agreed_price_usd, // Store agreed price in USD
-                    currency: 'USD' // Store currency in metadata
+                    agreed_price_usd: negotiation.agreed_price_usd, // Store agreed price in original USD
+                    currency_paid: 'KES', // Store currency paid in metadata
+                    exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES, // Store exchange rate used
+                    amount_paid_kes: amountKes // Store KES amount paid
                 }
             },
             {
@@ -146,7 +152,10 @@ const verifyPayment = async (req, res, io) => {
             negotiation_id: metadataNegotiationId,
             client_id: metadataClientId,
             transcriber_id: metadataTranscriberId,
-            agreed_price_usd: metadataAgreedPrice // Changed to agreed_price_usd
+            agreed_price_usd: metadataAgreedPrice, // This is the original agreed price in USD
+            currency_paid: metadataCurrencyPaid, // This should be 'KES'
+            exchange_rate_usd_to_kes: metadataExchangeRate, // Exchange rate used during initialization
+            amount_paid_kes: metadataAmountPaidKes // KES amount paid during initialization
         } = transaction.metadata;
 
         // Perform sanity checks on metadata
@@ -154,11 +163,19 @@ const verifyPayment = async (req, res, io) => {
             console.error('Metadata negotiation ID mismatch:', metadataNegotiationId, negotiationId);
             return res.status(400).json({ error: 'Invalid transaction metadata (negotiation ID mismatch).' });
         }
-        // Ensure the amount matches (transaction.amount is in cents, metadataAgreedPrice is in dollars)
-        if (transaction.amount !== Math.round(metadataAgreedPrice * 100)) { // Compare cents
-            console.error('Metadata amount mismatch. Transaction amount (cents):', transaction.amount, 'Metadata agreed price (cents):', Math.round(metadataAgreedPrice * 100));
-            return res.status(400).json({ error: 'Invalid transaction metadata (amount mismatch).' });
+
+        // --- NEW: Validate amount with KES conversion ---
+        // transaction.amount is the actual amount charged by Paystack in KES cents.
+        // metadataAgreedPrice is the original agreed price in USD dollars.
+        // We need to convert metadataAgreedPrice to KES cents for comparison.
+        const expectedAmountKes = convertUsdToKes(metadataAgreedPrice);
+        const expectedAmountInCentsKes = Math.round(expectedAmountKes * 100);
+
+        if (transaction.amount !== expectedAmountInCentsKes) {
+            console.error('Metadata amount mismatch. Transaction amount (KES cents):', transaction.amount, 'Expected KES cents:', expectedAmountInCentsKes);
+            return res.status(400).json({ error: 'Invalid transaction metadata (amount mismatch). Paystack charged a different KES amount than expected.' });
         }
+        // --- END NEW: Validate amount with KES conversion ---
 
         // 2. Update Supabase records:
         //    a. Record the payment details in the 'payments' table.
@@ -169,7 +186,7 @@ const verifyPayment = async (req, res, io) => {
         // Fetch the current negotiation details to check status and prevent double updates
         const { data: negotiation, error: negFetchError } = await supabase
             .from('negotiations')
-            .select('id, client_id, transcriber_id, agreed_price_usd, status') // Changed to agreed_price_usd
+            .select('id, client_id, transcriber_id, agreed_price_usd, status')
             .eq('id', negotiationId)
             .single();
 
@@ -183,8 +200,9 @@ const verifyPayment = async (req, res, io) => {
             return res.status(200).json({ message: 'Payment already processed and job already hired.' });
         }
 
-        // Calculate the transcriber's earning (e.g., 80% of the agreed price)
-        const transcriberPayAmount = calculateTranscriberEarning(transaction.amount / 100); // Pass USD amount
+        // --- NEW: Determine the USD equivalent of the actual amount paid in KES ---
+        const actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2)); // Convert KES cents to KES dollars, then to USD
+        const transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd); // Calculate transcriber earning in USD
 
         // Record the payment details in the 'payments' table
         const { data: paymentRecord, error: paymentError } = await supabase
@@ -194,14 +212,16 @@ const verifyPayment = async (req, res, io) => {
                     negotiation_id: negotiationId,
                     client_id: metadataClientId,
                     transcriber_id: metadataTranscriberId,
-                    amount: transaction.amount / 100, // Full amount paid by client in USD
+                    amount: actualAmountPaidUsd, // Store the actual USD equivalent of the payment
                     transcriber_earning: transcriberPayAmount, // Transcriber's share in USD
-                    currency: 'USD', // Standardize to USD
+                    currency: 'USD', // Standardize to USD for internal records
                     paystack_reference: transaction.reference,
                     paystack_status: transaction.status,
                     transaction_date: new Date(transaction.paid_at).toISOString(), // Use the timestamp from Paystack
                     payout_status: 'pending', // NEW: Payout status
                     payout_week_end_date: getNextFriday(), // NEW: Payout week end date
+                    currency_paid_by_client: metadataCurrencyPaid, // NEW: Store the currency the client actually paid in
+                    exchange_rate_used: metadataExchangeRate // NEW: Store the exchange rate used
                 }
             ])
             .select()
@@ -220,8 +240,8 @@ const verifyPayment = async (req, res, io) => {
                     transcriber_id: metadataTranscriberId,
                     payment_id: paymentRecord.id, // Link to the newly created payment record
                     negotiation_id: negotiationId,
-                    amount: transcriberPayAmount,
-                    currency: 'USD', // Standardize to USD
+                    amount: transcriberPayAmount, // Transcriber earning is in USD
+                    currency: 'USD', // Standardize to USD for payout records
                     status: 'pending', // Initial status for payout
                     due_date: getNextFriday(), // Due date for this payout
                 }
@@ -286,7 +306,7 @@ const verifyPayment = async (req, res, io) => {
 
     } catch (error) {
         console.error('Error verifying Paystack payment: ', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Server error during payment verification.' });
+        res.status(500).json({ error: 'Server error during payment verification. ' + (error.message || '') });
     }
 };
 
