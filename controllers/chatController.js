@@ -221,6 +221,9 @@ const sendUserDirectMessage = async (req, res, io) => {
         const senderId = req.user.userId;
         const senderFullName = req.user.full_name || 'User';
 
+        console.log(`[sendUserDirectMessage] Attempting to send message. Sender: ${senderId}, Receiver: ${receiverId}`);
+        console.log(`[sendUserDirectMessage] Message content: "${messageText}", File: ${fileName || 'None'}`);
+
         if (!receiverId || (!messageText && !fileUrl)) {
             return res.status(400).json({ error: 'Receiver ID and either message text or a file are required.' });
         }
@@ -239,24 +242,30 @@ const sendUserDirectMessage = async (req, res, io) => {
             .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name')
             .single();
 
-        if (error) throw error;
+        if (error) {
+            console.error('[sendUserDirectMessage] Supabase insert error:', error);
+            throw error;
+        }
 
         if (io) {
             const messagePayload = {
                 ...newMessage,
                 sender_name: senderFullName,
             };
-            // Emit 'newChatMessage' to both sender and receiver for real-time update
+
+            console.log(`[sendUserDirectMessage] Emitting 'newChatMessage' to receiver room: ${receiverId}`);
             io.to(receiverId).emit('newChatMessage', messagePayload);
+            
+            console.log(`[sendUserDirectMessage] Emitting 'newChatMessage' to sender room: ${senderId}`);
             io.to(senderId).emit('newChatMessage', messagePayload);
-            // Increment unread count for the receiver
+            
+            console.log(`[sendUserDirectMessage] Emitting 'unreadMessageCountUpdate' to receiver room: ${receiverId}`);
             io.to(receiverId).emit('unreadMessageCountUpdate', { userId: receiverId, change: 1 });
-            console.log(`[sendUserDirectMessage] Emitted 'newChatMessage' to ${receiverId} and ${senderId}`);
         }
 
         res.status(201).json({ message: 'Message sent successfully', messageData: newMessage });
     } catch (error) {
-        console.error('Error sending user direct message:', error);
+        console.error('[sendUserDirectMessage] Error sending user direct message:', error);
         res.status(500).json({ error: error.message });
     }
 };

@@ -1,8 +1,8 @@
 const axios = require('axios');
-const supabase = require('../database');
+const supabase = require('..//database');
 const { syncAvailabilityStatus } = require('./transcriberController');
-const emailService = require('../emailService');
-const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils'); // Now imports from the new file and new utilities
+const emailService = require('..//emailService');
+const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils'); // Now imports from the new file and new utilities
 
 // Paystack Secret Key from environment variables
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
@@ -181,7 +181,7 @@ const verifyPayment = async (req, res, io) => {
         //    a. Record the payment details in the 'payments' table.
         //    b. Update the negotiation status to 'hired'.
         //    c. Update the transcriber's availability status.
-        //    d. NEW: Create a record in 'transcriber_payouts' table.
+        //    d. REMOVED: Create a record in 'transcriber_payouts' table here. This will now happen on job completion.
 
         // Fetch the current negotiation details to check status and prevent double updates
         const { data: negotiation, error: negFetchError } = await supabase
@@ -218,8 +218,9 @@ const verifyPayment = async (req, res, io) => {
                     paystack_reference: transaction.reference,
                     paystack_status: transaction.status,
                     transaction_date: new Date(transaction.paid_at).toISOString(), // Use the timestamp from Paystack
-                    payout_status: 'pending', // NEW: Payout status
-                    payout_week_end_date: getNextFriday(), // NEW: Payout week end date
+                    // UPDATED: Payout status to 'awaiting_completion'
+                    payout_status: 'awaiting_completion', 
+                    // REMOVED: payout_week_end_date here, as it will be set on completion
                     currency_paid_by_client: metadataCurrencyPaid, // NEW: Store the currency the client actually paid in
                     exchange_rate_used: metadataExchangeRate // NEW: Store the exchange rate used
                 }
@@ -232,30 +233,28 @@ const verifyPayment = async (req, res, io) => {
             throw paymentError;
         }
 
-        // NEW: Insert record into transcriber_payouts table
-        const { data: payoutRecord, error: payoutError } = await supabase
-            .from('transcriber_payouts')
-            .insert([
-                {
-                    transcriber_id: metadataTranscriberId,
-                    payment_id: paymentRecord.id, // Link to the newly created payment record
-                    negotiation_id: negotiationId,
-                    amount: transcriberPayAmount, // Transcriber earning is in USD
-                    currency: 'USD', // Standardize to USD for payout records
-                    status: 'pending', // Initial status for payout
-                    due_date: getNextFriday(), // Due date for this payout
-                }
-            ])
-            .select()
-            .single();
+        // --- REMOVED: Insertion into transcriber_payouts table. This will happen on job completion. ---
+        // const { data: payoutRecord, error: payoutError } = await supabase
+        //     .from('transcriber_payouts')
+        //     .insert([
+        //         {
+        //             transcriber_id: metadataTranscriberId,
+        //             payment_id: paymentRecord.id,
+        //             negotiation_id: negotiationId,
+        //             amount: transcriberPayAmount,
+        //             currency: 'USD',
+        //             status: 'pending',
+        //             due_date: getNextFriday(),
+        //         }
+        //     ])
+        //     .select()
+        //     .single();
 
-        if (payoutError) {
-            console.error('Error recording transcriber payout in Supabase: ', payoutError);
-            // Decide how to handle this error: rollback payment, log, alert admin, etc.
-            // For now, we'll log and rethrow, as payment itself was successful.
-            throw payoutError; 
-        }
-        console.log(`Recorded payout for transcriber ${metadataTranscriberId}:`, payoutRecord);
+        // if (payoutError) {
+        //     console.error('Error recording transcriber payout in Supabase: ', payoutError);
+        //     throw payoutError; 
+        // }
+        // console.log(`Recorded payout for transcriber ${metadataTranscriberId}:`, payoutRecord);
 
 
         // Update the negotiation status to 'hired'

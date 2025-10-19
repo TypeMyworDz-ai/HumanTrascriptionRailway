@@ -1,8 +1,10 @@
-const supabase = require('../database');
+const supabase = require('..//database');
 const path = require('path');
 const fs = require('fs');
-const emailService = require('../emailService');
+const emailService = require('..//emailService');
 const { updateAverageRating } = require('./ratingController');
+const { calculateTranscriberEarning } = require('..//utils/paymentUtils'); // Import calculateTranscriberEarning
+const { getNextFriday } = require('..//utils/paymentUtils'); // Import getNextFriday
 
 // Utility function to sync availability status between 'users' and 'transcribers' tables
 const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) => {
@@ -518,7 +520,7 @@ const counterNegotiation = async (req, res, next, io) => {
         res.status(200).json({ message: 'Counter-offer submitted successfully. Awaiting client response.' });
 
     } catch (error) {
-        console.error('[counterNegotiation] Error submitting counter-offer:', error);
+        console.error('Error submitting counter-offer:', error);
         res.status(500).json({ error: error.message || 'Server error submitting counter-offer' });
     }
 };
@@ -564,6 +566,49 @@ const completeJob = async (req, res, next, io) => {
             console.error(`[completeJob] Supabase error updating negotiation ${negotiationId} status:`, updateError);
             throw updateError;
         }
+
+        // --- NEW: Create transcriber_payouts record upon job completion ---
+        // 1. Fetch the corresponding payment record to get transcriber_earning and other details
+        const { data: paymentRecord, error: paymentFetchError } = await supabase
+            .from('payments')
+            .select('id, transcriber_id, negotiation_id, amount, transcriber_earning, currency')
+            .eq('negotiation_id', negotiationId)
+            .eq('transcriber_id', transcriberId)
+            .eq('payout_status', 'awaiting_completion') // Ensure we fetch the one awaiting payout
+            .single();
+
+        if (paymentFetchError || !paymentRecord) {
+            console.error(`[completeJob] Error fetching payment record for negotiation ${negotiationId} to create payout:`, paymentFetchError);
+            // Even if payout record creation fails, proceed with other updates, but log error
+            // This might mean manual intervention is needed for this payout.
+        } else {
+            // 2. Insert record into transcriber_payouts table
+            const { data: payoutRecord, error: payoutError } = await supabase
+                .from('transcriber_payouts')
+                .insert([
+                    {
+                        transcriber_id: paymentRecord.transcriber_id,
+                        payment_id: paymentRecord.id, // Link to the existing payment record
+                        negotiation_id: paymentRecord.negotiation_id,
+                        amount: paymentRecord.transcriber_earning, // Use the already calculated earning
+                        currency: paymentRecord.currency, // Use the currency from payment record (USD)
+                        status: 'pending', // Initial status for payout (ready to be paid)
+                        due_date: getNextFriday(), // Set due date for this payout
+                    }
+                ])
+                .select()
+                .single();
+
+            if (payoutError) {
+                console.error(`[completeJob] Error recording transcriber payout for negotiation ${negotiationId}:`, payoutError);
+            } else {
+                console.log(`[completeJob] Recorded payout for transcriber ${paymentRecord.transcriber_id}:`, payoutRecord);
+                // Optionally update the payment record's payout_status to 'pending' (ready for payout)
+                await supabase.from('payments').update({ payout_status: 'pending' }).eq('id', paymentRecord.id);
+            }
+        }
+        // --- END NEW: Create transcriber_payouts record upon job completion ---
+
 
         // UPDATED: Sync availability status - make transcriber available again and clear current job ID
         await syncAvailabilityStatus(transcriberId, true, null); // Set is_available to true, clear current_job_id

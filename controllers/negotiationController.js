@@ -1,8 +1,8 @@
-const supabase = require('../database');
+const supabase = require('..//database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const emailService = require('../emailService');
+const emailService = require('..//emailService');
 const { updateAverageRating } = require('./ratingController'); // Import updateAverageRating
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB limit
@@ -117,7 +117,7 @@ const getAvailableTranscribers = async (req, res) => {
   try {
     console.log('Fetching available transcribers...');
 
-    // Fetch users who are transcribers, online, available, not currently in a job, and have an active status
+    // UPDATED: Filter by is_online: true AND current_job_id: null
     const { data: transcribers, error } = await supabase
       .from('users')
       .select(`
@@ -137,8 +137,8 @@ const getAvailableTranscribers = async (req, res) => {
         )
       `)
       .eq('user_type', 'transcriber')
-      .eq('is_available', true) // Ensure they are marked as available in the users table
-      .is('current_job_id', null) // Ensure they are not currently assigned to a job
+      .eq('is_online', true) // Must be online
+      .is('current_job_id', null) // Must not have an active job
       .eq('transcribers.status', 'active_transcriber'); // Ensure their transcriber status is active
 
     if (error) {
@@ -146,22 +146,13 @@ const getAvailableTranscribers = async (req, res) => {
         throw error;
     }
 
-    // Filter the results further in JS to ensure all conditions are met (sometimes DB filters can be tricky with nested data)
-    let availableTranscribers = (transcribers || []).filter(user =>
-      user.transcribers &&
-      user.transcribers.status === 'active_transcriber' &&
-      user.is_online === true &&
-      user.is_available === true &&
-      user.current_job_id === null
-    );
-
-    // Map the data to a cleaner format for the frontend
-    availableTranscribers = availableTranscribers.map(user => ({
+    // No need for further JS filtering as the Supabase query is now precise.
+    let availableTranscribers = (transcribers || []).map(user => ({
       id: user.id,
       status: user.transcribers.status,
       user_level: user.transcribers.user_level,
       is_online: user.is_online,
-      is_available: user.is_available,
+      is_available: user.is_available, // This will reflect the database value (can be manually toggled by admin)
       average_rating: user.transcribers.average_rating || 5.0, // Default to 5.0 if no rating
       completed_jobs: user.transcribers.completed_jobs || 0,
       badges: user.transcribers.badges,
@@ -772,7 +763,7 @@ const counterNegotiation = async (req, res, io) => {
         if (io) {
             io.to(negotiation.client_id).emit('negotiation_countered', {
                 negotiationId: updatedNegotiation.id,
-                message: `Transcriber ${req.user.full_name} sent a counter offer!`,
+                message: `Client ${req.user.full_name} sent a counter offer!`,
                 newStatus: 'transcriber_counter'
             });
             console.log(`Emitted 'negotiation_countered' to client ${negotiation.client_id}`);
