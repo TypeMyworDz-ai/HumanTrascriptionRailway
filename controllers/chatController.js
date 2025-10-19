@@ -96,7 +96,7 @@ const getAdminDirectMessages = async (req, res, io) => {
             console.error(`[getAdminDirectMessages] Supabase error fetching messages:`, error);
             throw error;
         }
-        console.log(`[getAdminDirectMessages] Fetched ${messages?.length || 0} messages.`);
+        console.log(`[getAdminDirectMessages] Fetched ${messages?.length || 0} messages. Total: ${messages?.length}`);
 
         // Mark messages sent by the user to the admin as read
         if (messages && messages.length > 0 && io) {
@@ -265,6 +265,12 @@ const getUnreadMessageCount = async (req, res) => {
     try {
         const userId = req.user.userId;
 
+        // Ensure userId is valid before querying
+        if (!userId) {
+            console.warn('[getUnreadMessageCount] userId is undefined or null.');
+            return res.json({ count: 0 }); // Return 0 count gracefully
+        }
+
         const { count, error } = await supabase
             .from('messages')
             .select('*', { count: 'exact', head: true })
@@ -272,12 +278,16 @@ const getUnreadMessageCount = async (req, res) => {
             .eq('is_read', false)
             .is('negotiation_id', null); // Count only direct messages
 
-        if (error) throw error;
+        if (error) {
+            console.error(`[getUnreadMessageCount] Supabase error fetching unread message count for user ${userId}:`, error);
+            // Instead of throwing, return 0 with a server error status
+            return res.status(500).json({ error: error.message || 'Failed to fetch unread message count.', count: 0 });
+        }
 
         res.json({ count });
     } catch (error) {
-        console.error('Error fetching unread message count:', error);
-        res.status(500).json({ error: error.message });
+        console.error('[getUnreadMessageCount] Error fetching unread message count: ', error);
+        res.status(500).json({ error: error.message || 'Server error fetching unread message count.', count: 0 });
     }
 };
 
@@ -294,7 +304,7 @@ const getNegotiationMessages = async (req, res, io) => {
             .single();
 
         if (negotiationError || !negotiation) {
-            console.error(`NegotiationMessages: Negotiation ${negotiationId} not found or user ${userId} not authorized.`);
+            console.error(`NegotiationMessages: Negotiation ${negotiationId} not found or user ${userId} not authorized.`, negotiationError);
             return res.status(404).json({ error: 'Negotiation not found or access denied.' });
         }
 
@@ -310,7 +320,10 @@ const getNegotiationMessages = async (req, res, io) => {
             .eq('negotiation_id', negotiationId)
             .order('timestamp', { ascending: true });
 
-        if (error) throw error;
+        if (error) {
+            console.error(`[getNegotiationMessages] Supabase error fetching messages for negotiation ${negotiationId}:`, error);
+            throw error;
+        }
 
         // Mark messages sent by the other party as read
         if (messages && messages.length > 0 && io) {
@@ -366,7 +379,7 @@ const sendNegotiationMessage = async (req, res, io) => {
             .single();
 
         if (negotiationError || !negotiation) {
-            console.error(`SendNegotiationMessage: Negotiation ${negotiationId} not found or user ${senderId} not authorized.`);
+            console.error(`SendNegotiationMessage: Negotiation ${negotiationId} not found or user ${senderId} not authorized.`, negotiationError);
             return res.status(404).json({ error: 'Negotiation not found or access denied.' });
         }
 

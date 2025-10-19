@@ -7,6 +7,17 @@ const { updateAverageRating } = require('./ratingController'); // Import updateA
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB limit
 
+// Helper function to calculate the next Friday's date
+const getNextFriday = () => {
+    const today = new Date();
+    const dayOfWeek = today.getDay(); // Sunday - 0, Monday - 1, ..., Saturday - 6
+    const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
+    const nextFriday = new Date(today);
+    nextFriday.setDate(today.getDate() + daysUntilFriday);
+    nextFriday.setHours(23, 59, 59, 999); // Set to end of day Friday
+    return nextFriday.toISOString();
+};
+
 const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) => {
     const updateData = {
         is_available: isAvailable,
@@ -563,7 +574,8 @@ const getTranscriberNegotiations = async (req, res) => {
 const deleteNegotiation = async (req, res, io) => {
   try {
     const { negotiationId } = req.params;
-    const clientId = req.user.userId;
+    const userId = req.user.userId;
+    const userType = req.user.userType;
 
     // Fetch negotiation details to verify ownership and status
     const { data: negotiation, error: fetchError } = await supabase
@@ -576,18 +588,28 @@ const deleteNegotiation = async (req, res, io) => {
       return res.status(404).json({ error: 'Negotiation not found.' });
     }
 
-    // Ensure the user attempting deletion is the client
-    if (negotiation.client_id !== clientId) {
-      return res.status(403).json({ error: 'You are not authorized to delete this negotiation.' });
+    // Admin bypasses all ownership and status checks for deletion
+    if (userType !== 'admin') {
+        // Ensure the user attempting deletion is the client
+        if (negotiation.client_id !== userId) {
+          return res.status(403).json({ error: 'You are not authorized to delete this negotiation.' });
+        }
+
+        // Define allowed statuses for deletion by clients
+        const deletableStatuses = ['pending', 'accepted_awaiting_payment', 'rejected', 'cancelled', 'transcriber_counter', 'client_counter'];
+        if (!deletableStatuses.includes(negotiation.status)) {
+          return res.status(400).json({ error: `Negotiations with status '${negotiation.status}' cannot be deleted. Only ${deletableStatuses.join(', ')} can be deleted by a client.` });
+        }
     }
 
-    // Define allowed statuses for deletion (updated based on previous feedback)
-    const deletableStatuses = ['pending', 'accepted_awaiting_payment', 'rejected', 'cancelled', 'transcriber_counter', 'client_counter']; // Added counter statuses
-    if (!deletableStatuses.includes(negotiation.status)) {
-      return res.status(400).json({ error: `Negotiations with status '${negotiation.status}' cannot be deleted. Only ${deletableStatuses.join(', ')} can be deleted.` });
+    // NEW: Always clear transcriber's current_job_id and set available to true if transcriber_id exists
+    if (negotiation.transcriber_id) {
+        console.log(`Attempting to free up transcriber ${negotiation.transcriber_id} for negotiation ${negotiationId}.`);
+        await syncAvailabilityStatus(negotiation.transcriber_id, true, null); // Set available to true, clear current_job_id
+        console.log(`Transcriber ${negotiation.transcriber_id} availability status updated.`);
     }
 
-    // CRITICAL FIX: Delete associated messages first
+    // CRITICAL FIX: Delete associated messages first to satisfy FK constraint
     const { error: deleteMessagesError } = await supabase
         .from('messages')
         .delete()
@@ -980,9 +1002,8 @@ const clientCounterBack = async (req, res, io) => {
 
         let negotiationFileName = null;
         if (negotiationFile) {
-            negotiationFileName = negotiationFile.filename;
-            const filePath = negotiationFile.path;
-            // Verify that the uploaded file exists on the server after multer processing
+            negotiationFileName = negotiationFile.filename; // Corrected from negotiationFile.filename
+            const filePath = path.join('uploads/negotiation_files', negotiationFileName); // Use negotiationFileName
             if (!fs.existsSync(filePath)) {
                 console.error(`CRITICAL WARNING: Uploaded file NOT found at expected path: ${filePath}`);
                 if (negotiationFile && fs.existsSync(negotiationFile.path)) {

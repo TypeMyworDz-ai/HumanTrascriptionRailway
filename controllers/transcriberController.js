@@ -1,8 +1,8 @@
-const supabase = require('../database');
-const path = require('path'); // Corrected: Ensure 'path' is correctly required
+const supabase = require('..//database');
+const path = require('path');
 const fs = require('fs');
-const emailService = require('../emailService'); // Make sure this path is correct
-const { updateAverageRating } = require('./ratingController'); // NEW: Import updateAverageRating (if not already)
+const emailService = require('..//emailService');
+const { updateAverageRating } = require('.//ratingController');
 
 // Utility function to sync availability status between 'users' and 'transcribers' tables
 const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) => {
@@ -129,6 +129,12 @@ const checkTestStatus = async (req, res) => {
   try {
     const userId = req.user.userId;
 
+    // Ensure userId is valid before querying
+    if (!userId) {
+        console.warn('[checkTestStatus] userId is undefined or null.');
+        return res.status(400).json({ error: 'User ID is required.' });
+    }
+
     // Fetch transcriber status and profile details from the 'transcribers' table
     const { data: transcriberProfile, error: profileError } = await supabase
       .from('transcribers') // Query the 'transcribers' table
@@ -136,8 +142,17 @@ const checkTestStatus = async (req, res) => {
       .eq('id', userId) // The 'id' in transcribers table corresponds to the user's ID
       .single();
 
-    if (profileError || !transcriberProfile) {
-        console.error('Transcriber profile not found for user:', userId, profileError);
+    if (profileError) {
+        console.error(`[checkTestStatus] Supabase error fetching transcriber profile for user ${userId}:`, profileError);
+        // Return 404 if profile not found, 500 for other errors
+        if (profileError.code === 'PGRST116') { // No rows found
+             console.warn(`[checkTestStatus] Transcriber profile not found for user ${userId}.`);
+             return res.status(404).json({ error: 'Transcriber profile not found for this user.' });
+        }
+        throw profileError; // Re-throw other Supabase errors
+    }
+    if (!transcriberProfile) { // Defensive check
+        console.warn(`[checkTestStatus] Transcriber profile not found for user ${userId} (after initial check).`);
         return res.status(404).json({ error: 'Transcriber profile not found for this user.' });
     }
 
@@ -146,11 +161,14 @@ const checkTestStatus = async (req, res) => {
       .from('test_submissions')
       .select('*') // Select all columns for the submission
       .eq('user_id', userId) // Correctly query by user_id in test_submissions
+      .order('created_at', { ascending: false }) // Get the latest submission
+      .limit(1)
       .single();
 
     // Handle case where no test submission is found (PGRST116 is the Supabase error code for "no rows found")
     if (testSubmissionError && testSubmissionError.code !== 'PGRST116') {
-      throw testSubmissionError; // Throw error if it's not a "not found" error
+        console.error(`[checkTestStatus] Supabase error fetching test submission for user ${userId}:`, testSubmissionError);
+        throw testSubmissionError; // Throw error if it's not a "not found" error
     }
 
     // Return the combined information
@@ -164,8 +182,8 @@ const checkTestStatus = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Check test status error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('[checkTestStatus] Error checking test status: ', error.message || error); // Log full error message
+    res.status(500).json({ error: error.message || 'Server error checking transcriber status.' });
   }
 };
 
@@ -195,7 +213,7 @@ const getTranscriberNegotiations = async (req, res) => {
             full_name,
             email
         )
-      `) // Removed the embedded comment here
+      `)
       .eq('transcriber_id', transcriberId)
       .order('created_at', { ascending: false }); // Order by creation date, newest first
 
@@ -261,6 +279,7 @@ const acceptNegotiation = async (req, res, next, io) => {
             .single();
 
         if (fetchUserError || !userProfile) {
+            console.error(`[acceptNegotiation] Error fetching user profile for transcriber ${transcriberId}:`, fetchUserError);
             return res.status(404).json({ error: 'User profile not found.' });
         }
 
@@ -278,12 +297,13 @@ const acceptNegotiation = async (req, res, next, io) => {
             .single();
 
         if (fetchNegError || !negotiationToAccept) {
+            console.error(`[acceptNegotiation] Negotiation ${negotiationId} not found or not assigned to transcriber ${transcriberId}:`, fetchNegError);
             return res.status(404).json({ error: 'Negotiation not found or not assigned to you.' });
         }
 
         // Ensure the negotiation is in a 'pending' state before accepting
         if (negotiationToAccept.status !== 'pending') {
-            return res.status(409).json({ error: 'Negotiation is no longer pending (it may have been accepted or deleted by the client).' });
+            return res.status(409).json({ error: 'Negotiation is no longer pending (it may have been accepted or deleted by the client). Current status: ' + negotiationToAccept.status });
         }
 
         // Update the negotiation status to 'accepted' (or 'accepted_awaiting_payment' if that's the next step)
@@ -295,7 +315,10 @@ const acceptNegotiation = async (req, res, next, io) => {
             .eq('status', 'pending') // Conditional update based on current status
             .select('*', { count: 'exact' }); // Use select with count to check if update affected a row
 
-        if (negError) throw negError;
+        if (negError) {
+            console.error(`[acceptNegotiation] Supabase error updating negotiation ${negotiationId} status:`, negError);
+            throw negError;
+        }
 
         // Check if the update actually affected a row (handles race conditions)
         if (count === 0) {
@@ -322,8 +345,8 @@ const acceptNegotiation = async (req, res, next, io) => {
         });
 
     } catch (error) {
-        console.error('Error accepting negotiation:', error);
-        res.status(500).json({ error: error.message });
+        console.error('[acceptNegotiation] Error accepting negotiation:', error);
+        res.status(500).json({ error: error.message || 'Server error accepting negotiation.' });
     }
 };
 
@@ -347,12 +370,13 @@ const rejectNegotiation = async (req, res, next, io) => {
             .single();
 
         if (fetchNegError || !negotiationToReject) {
+            console.error(`[rejectNegotiation] Negotiation ${negotiationId} not found or not assigned to transcriber ${transcriberId}:`, fetchNegError);
             return res.status(404).json({ error: 'Negotiation not found or not assigned to you.' });
         }
 
         // Ensure the negotiation is in a 'pending' state before rejection
         if (negotiationToReject.status !== 'pending') {
-            return res.status(409).json({ error: 'Negotiation is no longer pending.' });
+            return res.status(409).json({ error: 'Negotiation is no longer pending. Current status: ' + negotiationToReject.status });
         }
 
         // Update negotiation status to 'rejected' and store the transcriber's response
@@ -368,10 +392,13 @@ const rejectNegotiation = async (req, res, next, io) => {
             .eq('status', 'pending') // Conditional update
             .select('*', { count: 'exact' });
 
-        if (negError) throw negError;
+        if (negError) {
+            console.error(`[rejectNegotiation] Supabase error updating negotiation ${negotiationId} status:`, negError);
+            throw negError;
+        }
 
         if (count === 0) {
-            return res.status(404).json({ error: 'Negotiation not found or not in pending status.' });
+            return res.status(404).json({ error: 'Negotiation not found or not in pending status. This could be a race condition.' });
         }
 
         // Send a real-time notification to the client about the rejection
@@ -388,8 +415,8 @@ const rejectNegotiation = async (req, res, next, io) => {
         res.status(200).json({ message: 'Negotiation rejected successfully.' });
 
     } catch (error) {
-        console.error('Error rejecting negotiation:', error);
-        res.status(500).json({ error: error.message });
+        console.error('[rejectNegotiation] Error rejecting negotiation:', error);
+        res.status(500).json({ error: error.message || 'Server error rejecting negotiation.' });
     }
 };
 
@@ -422,12 +449,13 @@ const counterNegotiation = async (req, res, next, io) => {
             .single();
 
         if (fetchNegError || !negotiationToCounter) {
+            console.error(`[counterNegotiation] Negotiation ${negotiationId} not found or not assigned to transcriber ${transcriberId}:`, fetchNegError);
             return res.status(404).json({ error: 'Negotiation not found or not assigned to you.' });
         }
 
         // Ensure the negotiation is in a 'pending' state before countering
         if (negotiationToCounter.status !== 'pending') {
-            return res.status(409).json({ error: 'Negotiation is no longer pending.' });
+            return res.status(409).json({ error: 'Negotiation is no longer pending. Current status: ' + negotiationToCounter.status });
         }
 
         // Update negotiation with counter-offer details and set status to 'transcriber_counter'
@@ -445,10 +473,13 @@ const counterNegotiation = async (req, res, next, io) => {
             .eq('status', 'pending') // Conditional update
             .select('*', { count: 'exact' });
 
-        if (negError) throw negError;
+        if (negError) {
+            console.error(`[counterNegotiation] Supabase error updating negotiation ${negotiationId} status:`, negError);
+            throw negError;
+        }
 
         if (count === 0) {
-            return res.status(404).json({ error: 'Negotiation not found or not in pending status.' });
+            return res.status(404).json({ error: 'Negotiation not found or not in pending status. This could be a race condition.' });
         }
 
         // Send a real-time notification to the client about the counter-offer
@@ -467,8 +498,8 @@ const counterNegotiation = async (req, res, next, io) => {
         res.status(200).json({ message: 'Counter-offer submitted successfully. Awaiting client response.' });
 
     } catch (error) {
-        console.error('Error submitting counter-offer:', error);
-        res.status(500).json({ error: 'Server error submitting counter-offer' });
+        console.error('[counterNegotiation] Error submitting counter-offer:', error);
+        res.status(500).json({ error: error.message || 'Server error submitting counter-offer' });
     }
 };
 
@@ -491,12 +522,13 @@ const completeJob = async (req, res, next, io) => {
             .single();
 
         if (fetchError || !negotiation) {
+            console.error(`[completeJob] Negotiation ${negotiationId} not found or not assigned to transcriber ${transcriberId}:`, fetchError);
             return res.status(404).json({ error: 'Job not found or not assigned to you.' });
         }
 
         // Check if the job is in a state that can be completed
         if (negotiation.status !== 'accepted' && negotiation.status !== 'hired') {
-            return res.status(409).json({ error: 'Job is not in an active state. Only active jobs can be marked complete.' });
+            return res.status(409).json({ error: 'Job is not in an active state. Only active jobs can be marked complete. Current status: ' + negotiation.status });
         }
 
         // Update negotiation status to 'completed'
@@ -508,7 +540,10 @@ const completeJob = async (req, res, next, io) => {
             })
             .eq('id', negotiationId);
 
-        if (updateError) throw updateError;
+        if (updateError) {
+            console.error(`[completeJob] Supabase error updating negotiation ${negotiationId} status:`, updateError);
+            throw updateError;
+        }
 
         // UPDATED: Sync availability status - make transcriber available again and clear current job ID
         await syncAvailabilityStatus(transcriberId, true, null); // Set is_available to true, clear current_job_id
@@ -529,10 +564,80 @@ const completeJob = async (req, res, next, io) => {
         });
 
     } catch (error) {
-        console.error('Error completing job:', error);
-        res.status(500).json({ error: error.message });
+        console.error('[completeJob] Error completing job:', error);
+        res.status(500).json({ error: error.message || 'Server error completing job.' });
     }
 };
+
+// NEW: Function to get a transcriber's upcoming payouts
+const getTranscriberUpcomingPayouts = async (req, res) => {
+    const transcriberId = req.user.userId;
+
+    try {
+        // Fetch all pending payouts for this transcriber, ordered by due date
+        const { data: payouts, error } = await supabase
+            .from('transcriber_payouts')
+            .select(`
+                id,
+                negotiation_id,
+                amount,
+                currency,
+                status,
+                due_date,
+                created_at,
+                negotiation:negotiations(requirements, client_id, client:users!client_id(full_name))
+            `)
+            .eq('transcriber_id', transcriberId)
+            .eq('status', 'pending') // Only fetch pending payouts
+            .order('due_date', { ascending: true }); // Order by earliest due date
+
+        if (error) {
+            console.error(`[getTranscriberUpcomingPayouts] Supabase error fetching payouts for transcriber ${transcriberId}:`, error);
+            throw error;
+        }
+
+        // Group payouts by payout_week_end_date (due_date) and calculate weekly totals
+        const groupedPayouts = {};
+        let totalUpcomingPayouts = 0;
+
+        (payouts || []).forEach(payout => {
+            const weekEndDate = new Date(payout.due_date).toLocaleDateString(); // Use local date string for grouping
+            if (!groupedPayouts[weekEndDate]) {
+                groupedPayouts[weekEndDate] = {
+                    date: weekEndDate,
+                    totalAmount: 0,
+                    payouts: []
+                };
+            }
+            groupedPayouts[weekEndDate].totalAmount += payout.amount;
+            groupedPayouts[weekEndDate].payouts.push({
+                id: payout.id,
+                negotiation_id: payout.negotiation_id,
+                amount: payout.amount,
+                currency: payout.currency,
+                status: payout.status,
+                clientName: payout.negotiation?.client?.full_name || 'N/A',
+                jobRequirements: payout.negotiation?.requirements || 'N/A',
+                created_at: new Date(payout.created_at).toLocaleDateString()
+            });
+            totalUpcomingPayouts += payout.amount;
+        });
+
+        // Convert groupedPayouts object to an array and sort by date
+        const upcomingPayoutsArray = Object.values(groupedPayouts).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+        res.status(200).json({
+            message: 'Upcoming payouts retrieved successfully.',
+            upcomingPayouts: upcomingPayoutsArray,
+            totalUpcomingPayouts: totalUpcomingPayouts,
+        });
+
+    } catch (error) {
+        console.error('[getTranscriberUpcomingPayouts] Error fetching upcoming payouts:', error);
+        res.status(500).json({ error: error.message || 'Server error fetching upcoming payouts.' });
+    }
+};
+
 
 // NEW: Function for transcribers to update their profile (including payment details)
 const updateTranscriberProfile = async (req, res) => {
@@ -585,5 +690,6 @@ module.exports = {
   completeJob, // NEW: Added completeJob function
   syncAvailabilityStatus, // NEW: Export utility function for other controllers to use
   setOnlineStatus, // NEW: Export the setOnlineStatus function
-  updateTranscriberProfile // NEW: Export updateTranscriberProfile
+  updateTranscriberProfile, // NEW: Export updateTranscriberProfile
+  getTranscriberUpcomingPayouts, // NEW: Export the new function
 };

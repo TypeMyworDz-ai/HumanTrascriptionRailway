@@ -8,7 +8,17 @@ const { calculateTranscriberEarning } = require('..//utils/paymentUtils'); // No
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000'; // Frontend URL for redirects
 
-// --- Helper Functions ---
+// Helper function to calculate the next Friday's date
+const getNextFriday = () => {
+    const today = new Date();
+    const dayOfWeek = today.getDay(); // Sunday - 0, Monday - 1, ..., Saturday - 6
+    const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
+    const nextFriday = new Date(today);
+    nextFriday.setDate(today.getDate() + daysUntilFriday);
+    nextFriday.setHours(23, 59, 59, 999); // Set to end of day Friday
+    return nextFriday.toISOString();
+};
+
 
 // Function to initialize a Paystack transaction
 const initializePayment = async (req, res, io) => {
@@ -145,6 +155,7 @@ const verifyPayment = async (req, res, io) => {
         //    a. Record the payment details in the 'payments' table.
         //    b. Update the negotiation status to 'hired'.
         //    c. Update the transcriber's availability status.
+        //    d. NEW: Create a record in 'transcriber_payouts' table.
 
         // Fetch the current negotiation details to check status and prevent double updates
         const { data: negotiation, error: negFetchError } = await supabase
@@ -154,7 +165,7 @@ const verifyPayment = async (req, res, io) => {
             .single();
 
         if (negFetchError || !negotiation) {
-            console.error('Error fetching negotiation during payment verification:', negFetchError);
+            console.error('Error fetching negotiation during payment verification: ', negFetchError);
             return res.status(404).json({ error: 'Negotiation not found for verification.' });
         }
 
@@ -179,16 +190,44 @@ const verifyPayment = async (req, res, io) => {
                     currency: transaction.currency,
                     paystack_reference: transaction.reference,
                     paystack_status: transaction.status,
-                    transaction_date: new Date(transaction.paid_at).toISOString() // Use the timestamp from Paystack
+                    transaction_date: new Date(transaction.paid_at).toISOString(), // Use the timestamp from Paystack
+                    payout_status: 'pending', // NEW: Payout status
+                    payout_week_end_date: getNextFriday(), // NEW: Payout week end date
                 }
             ])
             .select()
             .single();
 
         if (paymentError) {
-            console.error('Error recording payment in Supabase:', paymentError);
+            console.error('Error recording payment in Supabase: ', paymentError);
             throw paymentError;
         }
+
+        // NEW: Insert record into transcriber_payouts table
+        const { data: payoutRecord, error: payoutError } = await supabase
+            .from('transcriber_payouts')
+            .insert([
+                {
+                    transcriber_id: metadataTranscriberId,
+                    payment_id: paymentRecord.id, // Link to the newly created payment record
+                    negotiation_id: negotiationId,
+                    amount: transcriberPayAmount,
+                    currency: transaction.currency,
+                    status: 'pending', // Initial status for payout
+                    due_date: getNextFriday(), // Due date for this payout
+                }
+            ])
+            .select()
+            .single();
+
+        if (payoutError) {
+            console.error('Error recording transcriber payout in Supabase: ', payoutError);
+            // Decide how to handle this error: rollback payment, log, alert admin, etc.
+            // For now, we'll log and rethrow, as payment itself was successful.
+            throw payoutError; 
+        }
+        console.log(`Recorded payout for transcriber ${metadataTranscriberId}:`, payoutRecord);
+
 
         // Update the negotiation status to 'hired'
         const { error: negUpdateError } = await supabase
@@ -197,7 +236,7 @@ const verifyPayment = async (req, res, io) => {
             .eq('id', negotiationId);
 
         if (negUpdateError) {
-            console.error('Error updating negotiation status to hired:', negUpdateError);
+            console.error('Error updating negotiation status to hired: ', negUpdateError);
             throw negUpdateError;
         }
 
@@ -208,8 +247,8 @@ const verifyPayment = async (req, res, io) => {
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', metadataClientId).single();
         const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', metadataTranscriberId).single();
 
-        if (clientError) console.error('Error fetching client for payment email:', clientError);
-        if (transcriberError) console.error('Error fetching transcriber for payment email:', transcriberError);
+        if (clientError) console.error('Error fetching client for payment email: ', clientError);
+        if (transcriberError) console.error('Error fetching transcriber for payment email: ', transcriberError);
 
         // Send confirmation emails if details were fetched successfully
         if (clientUser && transcriberUser) {
@@ -237,7 +276,7 @@ const verifyPayment = async (req, res, io) => {
         });
 
     } catch (error) {
-        console.error('Error verifying Paystack payment:', error.response ? error.response.data : error.message);
+        console.error('Error verifying Paystack payment: ', error.response ? error.response.data : error.message);
         res.status(500).json({ error: 'Server error during payment verification.' });
     }
 };
@@ -264,11 +303,11 @@ const getTranscriberPaymentHistory = async (req, res) => {
         }
 
         // Calculate earnings summaries (total and monthly) based on transcriber_earning
-        const totalEarnings = payments.reduce((sum, p) => sum + p.transcriber_earning, 0);
+        const totalEarnings = (payments || []).reduce((sum, p) => sum + p.transcriber_earning, 0);
         const currentMonth = new Date().getMonth();
         const currentYear = new Date().getFullYear();
 
-        const monthlyEarnings = payments.filter(p => {
+        const monthlyEarnings = (payments || []).filter(p => {
             const date = new Date(p.transaction_date);
             return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
         }).reduce((sum, p) => sum + p.transcriber_earning, 0);
@@ -311,11 +350,11 @@ const getClientPaymentHistory = async (req, res) => {
         }
 
         // Calculate payment summaries (total and monthly) based on the full amount paid
-        const totalPayments = payments.reduce((sum, p) => sum + p.amount, 0);
+        const totalPayments = (payments || []).reduce((sum, p) => sum + p.amount, 0);
         const currentMonth = new Date().getMonth();
         const currentYear = new Date().getFullYear();
 
-        const monthlyPayments = payments.filter(p => {
+        const monthlyPayments = (payments || []).filter(p => {
             const date = new Date(p.transaction_date);
             return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
         }).reduce((sum, p) => sum + p.amount, 0);

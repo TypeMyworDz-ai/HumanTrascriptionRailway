@@ -7,8 +7,13 @@ const {
   getTranscriberNegotiations,
   acceptNegotiation,
   counterNegotiation,
-  rejectNegotiation
-} = require('../controllers/transcriberController'); // NEW: Import all from transcriberController
+  rejectNegotiation,
+  getTranscriberUpcomingPayouts, // NEW: Import getTranscriberUpcomingPayouts
+  completeJob, // Ensure completeJob is imported if used elsewhere in routes
+  syncAvailabilityStatus, // Ensure syncAvailabilityStatus is imported if used elsewhere in routes
+  setOnlineStatus, // Ensure setOnlineStatus is imported if used elsewhere in routes
+  updateTranscriberProfile // Ensure updateTranscriberProfile is imported if used elsewhere in routes
+} = require('..//controllers/transcriberController'); // NEW: Import all from transcriberController
 
 module.exports = (io) => {
   const router = express.Router();
@@ -59,6 +64,14 @@ module.exports = (io) => {
       return res.status(403).json({ error: 'Access denied. Only transcribers can reject negotiations.' });
     }
     rejectNegotiation(req, res, next, io);
+  });
+
+  // NEW: GET /api/transcriber/payouts/upcoming - Get transcriber's upcoming payouts
+  router.get('/payouts/upcoming', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can view their upcoming payouts.' });
+    }
+    getTranscriberUpcomingPayouts(req, res, next);
   });
 
   return router;

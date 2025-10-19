@@ -1,5 +1,5 @@
-const supabase = require('../database');
-const emailService = require('../emailService'); // Ensure this path is correct
+const supabase = require('..//database');
+const emailService = require('..//emailService'); // Ensure this path is correct
 
 // --- Admin Statistics ---
 
@@ -46,7 +46,7 @@ const getOpenDisputesCount = async (req, res) => {
         if (error) throw error;
         res.json({ count });
     } catch (error) {
-        console.error('Error fetching open disputes count:', error);
+            console.error('Error fetching open disputes count:', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -85,7 +85,7 @@ const getAllTranscriberTestSubmissions = async (req, res) => {
                     full_name,
                     email
                 )
-            `) // Corrected: Removed embedded comment
+            `)
             .order('created_at', { ascending: false }); // Order by creation date, newest first
 
         if (error) throw error;
@@ -114,7 +114,7 @@ const getTranscriberTestSubmissionById = async (req, res) => {
                     full_name,
                     email
                 )
-            `) // Corrected: Removed embedded comment
+            `)
             .eq('id', submissionId) // Filter by the submission ID
             .single();
 
@@ -265,7 +265,7 @@ const getUserByIdForAdmin = async (req, res) => {
         const { data: user, error } = await supabase
             .from('users')
             .select(`
-                id, full_name, email, user_type, created_at, is_online, is_available,
+                id, full_name, email, user_type, created_at, is_online, is_available, current_job_id,
                 transcribers (status, user_level, average_rating, completed_jobs, badges),
                 clients (average_rating)
             `)
@@ -274,10 +274,17 @@ const getUserByIdForAdmin = async (req, res) => {
 
         if (error) {
             console.error(`[getUserByIdForAdmin] Supabase error fetching user ${userId}:`, error);
-            throw error;
+            // Return 404 if user not found, 500 for other errors
+            if (error.code === 'PGRST116') { // No rows found
+                 console.warn(`[getUserByIdForAdmin] User ${userId} not found.`);
+                 return res.status(404).json({ error: 'User not found.' });
+            }
+            // Log the full error to understand what's happening
+            console.error(`[getUserByIdForAdmin] Detailed Supabase error for user ${userId}:`, error);
+            throw error; // Re-throw other Supabase errors
         }
-        if (!user) {
-            console.warn(`[getUserByIdForAdmin] User ${userId} not found.`);
+        if (!user) { // This case should ideally be caught by PGRST116, but defensive check
+            console.warn(`[getUserByIdForAdmin] User ${userId} not found (after initial check).`);
             return res.status(404).json({ error: 'User not found.' });
         }
 
@@ -294,8 +301,8 @@ const getUserByIdForAdmin = async (req, res) => {
         console.log(`[getUserByIdForAdmin] Successfully fetched and formatted user: ${userId}`);
         res.json({ user: formattedUser });
     } catch (error) {
-        console.error('Error fetching user by ID for admin:', error);
-        res.status(500).json({ error: error.message });
+        console.error('[getUserByIdForAdmin] Error fetching user by ID for admin: ', error.message); // Log full error message
+        res.status(500).json({ error: error.message || 'Server error fetching user details.' });
     }
 };
 
@@ -305,16 +312,29 @@ const getAnyUserById = async (req, res) => {
         const { userId } = req.params;
         const { data: user, error } = await supabase
             .from('users')
-            .select('id, full_name, email, user_type') // Select minimal fields
+            .select('id, full_name, email, user_type, is_online, is_available, current_job_id') // Added availability and job status
             .eq('id', userId)
             .single();
 
-        if (error) throw error;
-        if (!user) return res.status(404).json({ error: 'User not found.' });
+        if (error) {
+            console.error(`[getAnyUserById] Supabase error fetching user ${userId}:`, error);
+            // Return 404 if user not found, 500 for other errors
+            if (error.code === 'PGRST116') { // No rows found
+                 console.warn(`[getAnyUserById] User ${userId} not found.`);
+                 return res.status(404).json({ error: 'User not found.' });
+            }
+            // Log the full error to understand what's happening
+            console.error(`[getAnyUserById] Detailed Supabase error for user ${userId}:`, error);
+            throw error; // Re-throw other Supabase errors
+        }
+        if (!user) { // Defensive check
+            console.warn(`[getAnyUserById] User ${userId} not found (after initial check).`);
+            return res.status(404).json({ error: 'User not found.' });
+        }
         res.json({ user });
     } catch (error) {
-        console.error('Error fetching any user by ID:', error);
-        res.status(500).json({ error: error.message });
+        console.error('[getAnyUserById] Error fetching any user by ID: ', error.message); // Log full error message
+        res.status(500).json({ error: error.message || 'Server error fetching user details.' });
     }
 };
 
@@ -396,11 +416,13 @@ const getAllJobsForAdmin = async (req, res) => {
                 requirements,
                 deadline_hours,
                 created_at,
+                client_id,
+                transcriber_id,
                 client:users!client_id (
-                    full_name
+                    full_name, email
                 ),
                 transcriber:users!transcriber_id (
-                    full_name
+                    full_name, email
                 )
             `)
             .order('created_at', { ascending: false }); // Order by creation date
@@ -410,16 +432,67 @@ const getAllJobsForAdmin = async (req, res) => {
         // Format results to handle potential null client/transcriber IDs gracefully
         const jobs = negotiations.map(n => ({
             ...n,
-            client: n.client || { full_name: 'Unknown Client' }, // Provide default if client is null
-            transcriber: n.transcriber || { full_name: 'Unassigned' } // Provide default if transcriber is null
+            client: n.client || { full_name: 'Unknown Client', email: 'N/A' }, // Provide default if client is null
+            transcriber: n.transcriber || { full_name: 'Unassigned', email: 'N/A' } // Provide default if transcriber is null
         }));
 
-        res.json({ jobs });
+        res.json(jobs); // Return the array of jobs directly
     } catch (error) {
         console.error('Error fetching all jobs for admin:', error);
         res.status(500).json({ error: error.message });
     }
 };
+
+// NEW: Function to get a single job (negotiation) by ID for admin view
+const getJobByIdForAdmin = async (req, res) => {
+    try {
+        const { jobId } = req.params;
+        console.log(`[getJobByIdForAdmin] Attempting to fetch job ID: ${jobId}`);
+
+        const { data: negotiation, error } = await supabase
+            .from('negotiations')
+            .select(`
+                *,
+                client:users!client_id (
+                    id, full_name, email
+                ),
+                transcriber:users!transcriber_id (
+                    id, full_name, email
+                )
+            `)
+            .eq('id', jobId)
+            .single();
+
+        if (error) {
+            console.error(`[getJobByIdForAdmin] Supabase error fetching job ${jobId}:`, error);
+            // Return 404 if job not found, 500 for other errors
+            if (error.code === 'PGRST116') { // No rows found
+                 console.warn(`[getJobByIdForAdmin] Job ${jobId} not found.`);
+                 return res.status(404).json({ error: 'Job not found.' });
+            }
+            // Log the full error to understand what's happening
+            console.error(`[getJobByIdForAdmin] Detailed Supabase error for job ${jobId}:`, error);
+            throw error; // Re-throw other Supabase errors
+        }
+        if (!negotiation) { // This case should ideally be caught by PGRST116, but defensive check
+            console.warn(`[getJobByIdForAdmin] Job ${jobId} not found (after initial check).`);
+            return res.status(404).json({ error: 'Job not found.' });
+        }
+
+        // Format the job object to handle potential null client/transcriber IDs gracefully
+        const formattedJob = {
+            ...negotiation,
+            client: negotiation.client || { id: null, full_name: 'Unknown Client', email: 'N/A' },
+            transcriber: negotiation.transcriber || { id: null, full_name: 'Unassigned', email: 'N/A' }
+        };
+
+        res.json(formattedJob); // Return the formatted job object directly
+    } catch (error) {
+        console.error('Error fetching job by ID for admin: ', error.message); // Log full error message
+        res.status(500).json({ error: error.message || 'Server error fetching job details.' });
+    }
+};
+
 
 // NEW: Function to get all disputes for admin view
 const getAllDisputesForAdmin = async (req, res) => {
@@ -475,5 +548,6 @@ module.exports = {
     getAdminSettings,
     updateAdminSettings,
     getAllJobsForAdmin,
+    getJobByIdForAdmin, // NEW: Export the new function
     getAllDisputesForAdmin,
 };

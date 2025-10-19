@@ -39,6 +39,7 @@ const {
     getAdminSettings,
     updateAdminSettings,
     getAllJobsForAdmin,
+    getJobByIdForAdmin, // NEW: Import the new function
     getAllDisputesForAdmin,
 } = require('..//controllers/adminController');
 
@@ -150,9 +151,11 @@ module.exports = (io) => {
     getClientNegotiations(req, res, next);
   });
 
+  // CORRECTED: Allow admins to delete negotiations as well
   router.delete('/negotiations/:negotiationId', authMiddleware, (req, res, next) => {
-    if (req.user.userType !== 'client') {
-      return res.status(403).json({ error: 'Access denied. Only clients can cancel negotiations.' });
+    // Allow both client and admin to delete negotiations
+    if (req.user.userType !== 'client' && req.user.userType !== 'admin') {
+      return res.status(403).json({ error: 'Access denied. Only clients or admins can cancel/delete negotiations.' });
     }
     deleteNegotiation(req, res, io);
   });
@@ -421,12 +424,21 @@ module.exports = (io) => {
       updateAdminSettings(req, res, next);
   });
 
-  // --- NEW: Admin Jobs Route ---
+  // --- NEW: Admin Jobs Routes ---
+  // CORRECTED: Admin should be able to view all jobs
   router.get('/admin/jobs', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can view all jobs.' });
       }
       getAllJobsForAdmin(req, res, io);
+  });
+
+  // NEW: Admin route to get details of a single job
+  router.get('/admin/jobs/:jobId', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can view job details.' });
+      }
+      getJobByIdForAdmin(req, res, next);
   });
 
   router.get('/admin/disputes/all', authMiddleware, (req, res, next) => {
