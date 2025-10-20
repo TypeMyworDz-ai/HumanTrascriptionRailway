@@ -66,6 +66,14 @@ module.exports = (io) => {
     rejectNegotiation(req, res, next, io);
   });
 
+  // NEW: PUT /api/transcriber/negotiations/:negotiationId/complete - Mark job as complete
+  router.put('/negotiations/:negotiationId/complete', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can mark jobs as complete.' });
+    }
+    completeJob(req, res, next, io); // Pass io for real-time updates
+  });
+
   // NEW: GET /api/transcriber/payouts/upcoming - Get transcriber's upcoming payouts
   router.get('/payouts/upcoming', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'transcriber') {
