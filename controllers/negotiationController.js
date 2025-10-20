@@ -1,9 +1,9 @@
-const supabase = require('..//database');
+const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const emailService = require('..//emailService');
-const { updateAverageRating } = require('./ratingController'); // Import updateAverageRating
+const emailService = require('../emailService');
+// Removed import for updateAverageRating as client rating is being removed.
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB limit
 
@@ -146,23 +146,25 @@ const getAvailableTranscribers = async (req, res) => {
         throw error;
     }
 
-    // No need for further JS filtering as the Supabase query is now precise.
-    let availableTranscribers = (transcribers || []).map(user => ({
-      id: user.id,
-      status: user.transcribers.status,
-      user_level: user.transcribers.user_level,
-      is_online: user.is_online,
-      is_available: user.is_available, // This will reflect the database value (can be manually toggled by admin)
-      average_rating: user.transcribers.average_rating || 5.0, // Default to 5.0 if no rating
-      completed_jobs: user.transcribers.completed_jobs || 0,
-      badges: user.transcribers.badges,
-      users: { // Nest user details under a 'users' key for consistency with other responses
+    // FIX: Filter out users where 'transcribers' relation is null before mapping
+    let availableTranscribers = (transcribers || [])
+      .filter(user => user.transcribers !== null) // Ensure transcriber profile exists
+      .map(user => ({
         id: user.id,
-        full_name: user.full_name,
-        email: user.email,
-        created_at: user.created_at
-      }
-    }));
+        status: user.transcribers.status,
+        user_level: user.transcribers.user_level,
+        is_online: user.is_online,
+        is_available: user.is_available, // This will reflect the database value (can be manually toggled by admin)
+        average_rating: user.transcribers.average_rating || 5.0, // Default to 5.0 if no rating
+        completed_jobs: user.transcribers.completed_jobs || 0,
+        badges: user.transcribers.badges,
+        users: { // Nest user details under a 'users' key for consistency with other responses
+          id: user.id,
+          full_name: user.full_name,
+          email: user.email,
+          created_at: user.created_at
+        }
+      }));
 
     // Sort transcribers by rating in descending order
     availableTranscribers.sort((a, b) => b.average_rating - a.average_rating);
@@ -203,7 +205,7 @@ const getAvailableTranscribers = async (req, res) => {
             .insert(sampleTranscriberProfiles);
 
         if (insertProfileError) {
-          console.error('Error creating sample transcriber profiles:', insertProfileError);
+          console.error('Error creating sample transcriber profiles::', insertProfileError);
         } else {
           // Re-fetch and format the newly created sample data
           availableTranscribers = insertedUsers.map((user, index) => ({
@@ -341,6 +343,10 @@ const createNegotiation = async (req, res, next, io) => {
     const permanentFilePath = path.join(permanentUploadDir, negotiation_file_url);
     fs.renameSync(tempFilePath, permanentFilePath); // Atomically move the file
 
+    // Calculate due_date
+    const createdAt = new Date();
+    const dueDate = new Date(createdAt.getTime() + deadline_hours * 60 * 60 * 1000); // Add hours to current time
+
     // Insert the new negotiation request
     const { data, error: insertError } = await supabase
       .from('negotiations')
@@ -351,6 +357,7 @@ const createNegotiation = async (req, res, next, io) => {
           requirements: requirements,
           agreed_price_usd: proposed_price_usd, // Changed to agreed_price_usd
           deadline_hours: deadline_hours,
+          due_date: dueDate.toISOString(), // Store the calculated due_date
           client_message: `Budget: USD ${proposed_price_usd}, Deadline: ${deadline_hours} hours`, // Changed to USD
           negotiation_files: negotiation_file_url, // Store the filename (which is now the permanent name)
           status: 'pending'
@@ -423,6 +430,7 @@ const getClientNegotiations = async (req, res) => {
         agreed_price_usd,     
         requirements,
         deadline_hours,
+        due_date, 
         client_message,
         transcriber_response,
         negotiation_files,
@@ -457,8 +465,9 @@ const getClientNegotiations = async (req, res) => {
     const negotiationsWithTranscribers = negotiations.map(negotiation => {
         const { transcriber, ...rest } = negotiation;
 
-        // Safely access nested transcriber profile data
-        const transcriberProfileData = transcriber?.transcribers?.[0] || {};
+        // FIXED: Safely access nested transcriber profile data without [0] indexing
+        const transcriberProfileData = transcriber?.transcribers || {};
+        console.log(`[getClientNegotiations] Processing negotiation ${negotiation.id}: Transcriber profile data:`, transcriberProfileData);
 
         return {
             ...rest,
@@ -477,6 +486,7 @@ const getClientNegotiations = async (req, res) => {
         };
     });
 
+    console.log('[getClientNegotiations] Formatted negotiations sent to frontend:', negotiationsWithTranscribers.map(n => ({ id: n.id, transcriberRating: n.users.average_rating, transcriberJobs: n.users.completed_jobs, dueDate: n.due_date })));
     res.json({
       message: 'Negotiations retrieved successfully',
       negotiations: negotiationsWithTranscribers
@@ -503,6 +513,7 @@ const getTranscriberNegotiations = async (req, res) => {
         agreed_price_usd,
         requirements,
         deadline_hours,
+        due_date, 
         client_message,
         transcriber_response,
         negotiation_files,
@@ -511,7 +522,8 @@ const getTranscriberNegotiations = async (req, res) => {
         client:users!client_id (
             id,
             full_name,
-            email
+            email,
+            clients (average_rating)
         )
       `)
       .eq('transcriber_id', transcriberId)
@@ -533,7 +545,9 @@ const getTranscriberNegotiations = async (req, res) => {
     const negotiationsWithClients = negotiations.map(negotiation => {
         const { client, ...rest } = negotiation;
         // Safely access nested client profile data
-        const clientProfileData = client?.clients?.[0] || {};
+        const clientProfileData = client?.clients || {};
+        console.log(`[getTranscriberNegotiations] Processing negotiation ${negotiation.id}: Client profile data:`, clientProfileData);
+
         return {
             ...rest,
             client_info: client ? {
@@ -550,6 +564,7 @@ const getTranscriberNegotiations = async (req, res) => {
         };
     });
 
+    console.log('[getTranscriberNegotiations] Formatted negotiations sent to frontend:', negotiationsWithClients.map(n => ({ id: n.id, clientRating: n.client_info.client_rating, dueDate: n.due_date })));
     res.json({
       message: 'Transcriber negotiations retrieved successfully',
       negotiations: negotiationsWithClients
@@ -586,14 +601,14 @@ const deleteNegotiation = async (req, res, io) => {
         }
 
         // Define allowed statuses for deletion by clients
-        const deletableStatuses = ['pending', 'accepted_awaiting_payment', 'rejected', 'cancelled', 'transcriber_counter', 'client_counter'];
+        const deletableStatuses = ['pending', 'accepted_awaiting_payment', 'rejected', 'cancelled', 'transcriber_counter', 'client_counter', 'completed']; // Added 'completed'
         if (!deletableStatuses.includes(negotiation.status)) {
           return res.status(400).json({ error: `Negotiations with status '${negotiation.status}' cannot be deleted. Only ${deletableStatuses.join(', ')} can be deleted by a client.` });
         }
     }
 
-    // NEW: Always clear transcriber's current_job_id and set available to true if transcriber_id exists
-    if (negotiation.transcriber_id) {
+    // NEW: Always clear transcriber's current_job_id and set available to true if transcriber_id exists and the job was 'hired' or 'completed'
+    if (negotiation.transcriber_id && (negotiation.status === 'hired' || negotiation.status === 'completed')) {
         console.log(`Attempting to free up transcriber ${negotiation.transcriber_id} for negotiation ${negotiationId}.`);
         await syncAvailabilityStatus(negotiation.transcriber_id, true, null);
         console.log(`Transcriber ${negotiation.transcriber_id} availability status updated.`);
@@ -934,7 +949,7 @@ const clientRejectCounter = async (req, res, io) => {
 
         // Check if the negotiation is in the 'transcriber_counter' state
         if (negotiation.status !== 'transcriber_counter') {
-            return res.status(400).json({ error: 'Negotiation is not in a state to reject a counter-offer. Current status: ' + negotiation.status });
+            return res.status(400).json({ error: 'Negotiation is not in a state that allows for a counter-offer. Current status: ' + negotiation.status });
         }
 
         // Update negotiation status to 'rejected' and store the client's response
@@ -1095,6 +1110,112 @@ const clientCounterBack = async (req, res, io) => {
     }
 };
 
+// NEW: Function to allow a client to mark a job as complete
+const markJobCompleteByClient = async (req, res, io) => {
+    try {
+        const { negotiationId } = req.params;
+        const clientId = req.user.userId;
+        const userType = req.user.userType;
+
+        // 1. Authorization: Only clients can mark a job as complete
+        if (userType !== 'client') {
+            return res.status(403).json({ error: 'Only clients are authorized to mark jobs as complete.' });
+        }
+
+        // 2. Fetch negotiation details to verify ownership and status
+        const { data: negotiation, error: fetchError } = await supabase
+            .from('negotiations')
+            .select('status, client_id, transcriber_id, agreed_price_usd, deadline_hours')
+            .eq('id', negotiationId)
+            .single();
+
+        if (fetchError || !negotiation) {
+            return res.status(404).json({ error: 'Negotiation not found.' });
+        }
+
+        // 3. Ownership check: Ensure the client owns this negotiation
+        if (negotiation.client_id !== clientId) {
+            return res.status(403).json({ error: 'You are not authorized to mark this job as complete.' });
+        }
+
+        // 4. Status check: Ensure the job is currently 'hired'
+        if (negotiation.status !== 'hired') {
+            return res.status(400).json({ error: `Job must be in 'hired' status to be marked as complete. Current status: ${negotiation.status}` });
+        }
+
+        // 5. Update negotiation status to 'completed'
+        const { data: updatedNegotiation, error: updateError } = await supabase
+            .from('negotiations')
+            .update({ status: 'completed', completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+            .eq('id', negotiationId)
+            .select()
+            .single();
+
+        if (updateError) throw updateError;
+
+        // 6. Update transcriber's availability (set current_job_id to null and is_available to true)
+        if (negotiation.transcriber_id) {
+            await syncAvailabilityStatus(negotiation.transcriber_id, true, null);
+            console.log(`Transcriber ${negotiation.transcriber_id} freed up after client marked job ${negotiationId} as complete.`);
+        }
+
+        // 7. Increment transcriber's completed_jobs count
+        const { data: transcriberProfile, error: fetchProfileError } = await supabase
+            .from('transcribers')
+            .select('completed_jobs')
+            .eq('id', negotiation.transcriber_id)
+            .single();
+
+        if (fetchProfileError || !transcriberProfile) {
+            console.warn(`Could not fetch transcriber profile for ID ${negotiation.transcriber_id} to increment completed jobs. Error:`, fetchProfileError);
+        } else {
+            const { error: incrementError } = await supabase
+                .from('transcribers')
+                .update({ completed_jobs: (transcriberProfile.completed_jobs || 0) + 1 })
+                .eq('id', negotiation.transcriber_id);
+
+            if (incrementError) {
+                console.error(`Failed to increment completed_jobs for transcriber ${negotiation.transcriber_id}:`, incrementError);
+            } else {
+                console.log(`Incremented completed_jobs for transcriber ${negotiation.transcriber_id}.`);
+            }
+        }
+
+
+        // 8. Emit a real-time event to both client and transcriber
+        if (io) {
+            io.to(negotiation.client_id).emit('job_completed', {
+                negotiationId: updatedNegotiation.id,
+                message: `You marked job ${updatedNegotiation.id?.substring(0, 8)} as complete!`,
+                newStatus: 'completed'
+            });
+            if (negotiation.transcriber_id) {
+                io.to(negotiation.transcriber_id).emit('job_completed', {
+                    negotiationId: updatedNegotiation.id,
+                    message: `Client ${req.user.full_name} marked job ${updatedNegotiation.id?.substring(0, 8)} as complete.`,
+                    newStatus: 'completed'
+                });
+                console.log(`Emitted 'job_completed' to transcriber ${negotiation.transcriber_id} and client ${negotiation.client_id}`);
+            }
+        }
+
+        // 9. Send email notifications
+        const { data: transcriberUser, error: transcriberUserError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
+        if (transcriberUserError) console.error('Error fetching transcriber for job completed email:', transcriberUserError);
+
+        if (transcriberUser) {
+            await emailService.sendJobCompletedEmailToTranscriber(transcriberUser, req.user, updatedNegotiation);
+            await emailService.sendJobCompletedEmailToClient(req.user, transcriberUser, updatedNegotiation);
+        }
+
+        res.json({ message: 'Job marked as complete successfully.', negotiation: updatedNegotiation });
+
+    } catch (error) {
+        console.error('Error marking job as complete by client:', error);
+        res.status(500).json({ error: error.message || 'Failed to mark job as complete due to server error.' });
+    }
+};
+
 
 module.exports = {
     uploadNegotiationFiles,
@@ -1110,5 +1231,6 @@ module.exports = {
     rejectNegotiation,
     clientAcceptCounter,
     clientRejectCounter,
-    clientCounterBack
+    clientCounterBack,
+    markJobCompleteByClient // NEW: Export the client-side job completion function
 };

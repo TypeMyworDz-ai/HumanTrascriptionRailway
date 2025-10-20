@@ -19,14 +19,21 @@ const getPendingTranscriberTestsCount = async (req, res) => {
     }
 };
 
-// Get count of active jobs (negotiations with status 'accepted' or 'hired')
+// Get count of all jobs (negotiations) for admin dashboard display
 const getActiveJobsCount = async (req, res) => {
     try {
-        // UPDATED: Include 'accepted_awaiting_payment' in active jobs count
+        // FIX: Include all relevant statuses for an admin's "all jobs" count
         const { count, error } = await supabase
             .from('negotiations')
             .select('*', { count: 'exact', head: true })
-            .in('status', ['accepted_awaiting_payment', 'hired']); // Count jobs that are active or awaiting payment
+            .in('status', [
+                'pending',
+                'transcriber_counter',
+                'client_counter',
+                'accepted_awaiting_payment',
+                'hired',
+                'completed' // Include completed jobs for overall count
+            ]);
 
         if (error) throw error;
         res.json({ count });
@@ -47,7 +54,7 @@ const getOpenDisputesCount = async (req, res) => {
         if (error) throw error;
         res.json({ count });
     } catch (error) {
-            console.error('Error fetching open disputes count:', error);
+        console.error('Error fetching open disputes count:', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -62,7 +69,7 @@ const getTotalUsersCount = async (req, res) => {
         if (error) throw error;
         res.json({ count });
     } catch (error) {
-        console.error('Error fetching total users count:', error); // SYNTAX FIX: Corrected console.error
+        console.error('Error fetching total users count:', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -238,7 +245,15 @@ const rejectTranscriberTest = async (req, res) => {
 const getAllUsersForAdmin = async (req, res) => {
     try {
         const { search } = req.query; // Get search query from query parameters
-        let query = supabase.from('users').select('id, full_name, email, user_type, created_at');
+        let query = supabase.from('users').select(`
+            id, 
+            full_name, 
+            email, 
+            user_type, 
+            created_at,
+            transcribers (average_rating),
+            clients (average_rating)
+        `);
 
         // Apply search filter if provided
         if (search) {
@@ -249,7 +264,22 @@ const getAllUsersForAdmin = async (req, res) => {
         const { data: users, error } = await query.order('created_at', { ascending: false });
 
         if (error) throw error;
-        res.json({ users });
+
+        // Format users to include average ratings directly
+        const formattedUsers = users.map(user => {
+            const average_rating = user.user_type === 'transcriber' 
+                                ? (user.transcribers?.average_rating || 0) // FIX: Removed [0]
+                                : (user.user_type === 'client' 
+                                   ? (user.clients?.average_rating || 0) // FIX: Removed [0]
+                                   : 0);
+            
+            return {
+                ...user,
+                average_rating: average_rating // Assign the correctly calculated average_rating
+            };
+        });
+
+        res.json({ users: formattedUsers });
     } catch (error) {
         console.error('Error fetching all users for admin:', error);
         res.status(500).json({ error: error.message });
@@ -284,7 +314,7 @@ const getUserByIdForAdmin = async (req, res) => {
             console.error(`[getUserByIdForAdmin] Detailed Supabase error for user ${userId}:`, error);
             throw error; // Re-throw other Supabase errors
         }
-        if (!user) { // This case should ideally be caught by PGRST116, but defensive check
+        if (!user) { // Defensive check
             console.warn(`[getUserByIdForAdmin] User ${userId} not found (after initial check).`);
             return res.status(404).json({ error: 'User not found.' });
         }
@@ -375,7 +405,7 @@ const updateAdminSettings = async (req, res) => {
         const { id, pricing_rules } = req.body; // 'id' will be used for updating an existing row
 
         if (!pricing_rules || !Array.isArray(pricing_rules)) {
-            return res.status(400).json({ error: 'Pricing rules must be provided as an array.' });
+            return res.status(400).json({ error: 'Pricing rules must be provided as an array.!' });
         }
 
         const updatePayload = {
@@ -423,7 +453,7 @@ const getAllJobsForAdmin = async (req, res) => {
             .select(`
                 id,
                 status,
-                agreed_price_usd,     // UPDATED: Changed to agreed_price_usd
+                agreed_price_usd,     
                 requirements,
                 deadline_hours,
                 created_at,
@@ -485,7 +515,7 @@ const getJobByIdForAdmin = async (req, res) => {
             console.error(`[getJobByIdForAdmin] Detailed Supabase error for job ${jobId}:`, error);
             throw error; // Re-throw other Supabase errors
         }
-        if (!negotiation) { // This case should ideally be caught by PGRST116, but defensive check
+        if (!negotiation) { // Defensive check
             console.warn(`[getJobByIdForAdmin] Job ${jobId} not found (after initial check).`);
             return res.status(404).json({ error: 'Job not found.' });
         }

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('..//database');
-const authMiddleware = require('..//middleware/authMiddleware');
+const supabase = require('../database');
+const authMiddleware = require('../middleware/authMiddleware');
 const fs = require('fs');
 const path = require('path');
 
@@ -20,8 +20,9 @@ const {
   rejectNegotiation,
   clientAcceptCounter,
   clientRejectCounter,
-  clientCounterBack
-} = require('..//controllers/negotiationController');
+  clientCounterBack,
+  markJobCompleteByClient // NEW: Import the client-side job completion function
+} = require('../controllers/negotiationController');
 
 // Import admin controller functions
 const {
@@ -41,7 +42,7 @@ const {
     getAllJobsForAdmin,
     getJobByIdForAdmin, // NEW: Import the new function
     getAllDisputesForAdmin,
-} = require('..//controllers/adminController');
+} = require('../controllers/adminController');
 
 // Import chat controller functions
 const {
@@ -55,7 +56,7 @@ const {
     sendNegotiationMessage,
     uploadChatAttachment, // This is the Multer middleware for chat attachments
     handleChatAttachmentUpload // This is the controller function for chat attachments
-} = require('..//controllers/chatController');
+} = require('../controllers/chatController');
 
 // NEW: Import payment controller functions
 const {
@@ -64,20 +65,20 @@ const {
     getTranscriberPaymentHistory,
     getClientPaymentHistory,
     getAllPaymentHistoryForAdmin
-} = require('..//controllers/paymentController');
+} = require('../controllers/paymentController');
 
 // NEW: Import rating controller functions
 const {
-    rateTranscriber,
-    rateClientByAdmin,
+    // Removed rateTranscriber as per instructions
+    rateUserByAdmin, // UPDATED: Import the new generic admin rating function
     getTranscriberRatings,
     getClientRating
-} = require('..//controllers/ratingController');
+} = require('../controllers/ratingController');
 
 // NEW: Import updateTranscriberProfile from transcriberController
-const { updateTranscriberProfile } = require('..//controllers/transcriberController');
+const { updateTranscriberProfile } = require('../controllers/transcriberController');
 // NEW: Import updateClientProfile from authController
-const { updateClientProfile } = require('..//controllers/authController');
+const { updateClientProfile } = require('../controllers/authController');
 
 // NEW: Import functions from directUploadController.js
 const {
@@ -89,7 +90,7 @@ const {
     completeDirectUploadJob,
     getAllDirectUploadJobsForAdmin,
     handleQuoteCalculationRequest // NEW: Import the new controller for quote calculation
-} = require('..//controllers/directUploadController');
+} = require('../controllers/directUploadController');
 
 // Import multer for direct use in this file for error handling
 const multer = require('multer');
@@ -159,6 +160,14 @@ module.exports = (io) => {
       return res.status(403).json({ error: 'Access denied. Only clients or admins can cancel/delete negotiations.' });
     }
     deleteNegotiation(req, res, io);
+  });
+
+  // NEW: Client marks a job as complete
+  router.put('/negotiations/:negotiationId/complete', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+      return res.status(403).json({ error: 'Access denied. Only clients can mark jobs as complete.' });
+    }
+    markJobCompleteByClient(req, res, io);
   });
 
   // --- MESSAGING ROUTES (General) ---
@@ -486,20 +495,23 @@ module.exports = (io) => {
   });
 
   // --- NEW: Rating Routes ---
-  router.post('/ratings/transcriber', authMiddleware, (req, res, next) => {
-    if (req.user.userType !== 'client') {
-      return res.status(403).json({ error: 'Access denied. Only clients can rate transcribers.' });
-    }
-    rateTranscriber(req, res, next);
-  });
+  // REMOVED: Client rating transcriber route
+  // router.post('/ratings/transcriber', authMiddleware, (req, res, next) => {
+  //   if (req.user.userType !== 'client') {
+  //     return res.status(403).json({ error: 'Access denied. Only clients can rate transcribers.' });
+  //   }
+  //   rateTranscriber(req, res, next);
+  // });
 
-  router.post('/ratings/client', authMiddleware, (req, res, next) => {
+  // UPDATED: Generic admin rating route for both clients and transcribers
+  router.post('/admin/ratings', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'admin') {
-      return res.status(403).json({ error: 'Access denied. Only admins can rate clients.' });
+      return res.status(403).json({ error: 'Access denied. Only admins can rate users.' });
     }
-    rateClientByAdmin(req, res, next);
+    rateUserByAdmin(req, res, next);
   });
 
+  // Removed old client rating route
   router.get('/ratings/transcriber/:transcriberId', authMiddleware, (req, res, next) => {
     getTranscriberRatings(req, res, next);
   });
