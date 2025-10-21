@@ -184,18 +184,23 @@ const createDirectUploadJob = async (req, res, io) => {
         return res.status(400).json({ error: 'Main audio/video file is required.' });
     }
 
-    // NEW: Add validation for quoteAmountUsd, pricePerMinuteUsd, and agreedDeadlineHours
-    if (typeof quoteAmountUsd === 'undefined' || quoteAmountUsd === null || isNaN(parseFloat(quoteAmountUsd))) {
+    // NEW: Perform parsing once and store in new variables for consistent validation and insertion
+    const parsedQuoteAmountUsd = parseFloat(quoteAmountUsd);
+    const parsedPricePerMinuteUsd = parseFloat(pricePerMinuteUsd);
+    const parsedAgreedDeadlineHours = parseInt(agreedDeadlineHours, 10);
+
+    // NEW: Add robust validation for parsed numeric fields
+    if (isNaN(parsedQuoteAmountUsd) || parsedQuoteAmountUsd === null) {
         await cleanupFiles();
-        return res.status(400).json({ error: 'Quote amount is missing or invalid. Please ensure quote is calculated and sent.' });
+        return res.status(400).json({ error: 'Quote amount is missing or invalid. Please ensure quote is calculated and sent correctly.' });
     }
-    if (typeof pricePerMinuteUsd === 'undefined' || pricePerMinuteUsd === null || isNaN(parseFloat(pricePerMinuteUsd))) {
+    if (isNaN(parsedPricePerMinuteUsd) || parsedPricePerMinuteUsd === null) {
         await cleanupFiles();
-        return res.status(400).json({ error: 'Price per minute is missing or invalid. Please ensure quote is calculated and sent.' });
+        return res.status(400).json({ error: 'Price per minute is missing or invalid. Please ensure quote is calculated and sent correctly.' });
     }
-    if (typeof agreedDeadlineHours === 'undefined' || agreedDeadlineHours === null || isNaN(parseInt(agreedDeadlineHours, 10))) {
+    if (isNaN(parsedAgreedDeadlineHours) || parsedAgreedDeadlineHours === null) {
         await cleanupFiles();
-        return res.status(400).json({ error: 'Agreed deadline hours are missing or invalid. Please ensure quote is calculated and sent.' });
+        return res.status(400).json({ error: 'Agreed deadline hours are missing or invalid. Please ensure quote is calculated and sent correctly.' });
     }
 
 
@@ -203,7 +208,7 @@ const createDirectUploadJob = async (req, res, io) => {
         // Verify the main audio/video file exists on the server after upload
         const audioVideoFilePath = audioVideoFile.path;
         if (!fs.existsSync(audioVideoFilePath)) {
-            console.error(`!!! CRITICAL WARNING !!! Audio/Video file NOT found at expected path: ${audioVideoFilePath}`);
+            console.error(`!!! CRITICAL WARNING !!! Audio/Video file NOT found at expected path after upload: ${audioVideoFilePath}`);
             await cleanupFiles(); // Clean up all files if the main file is missing
             return res.status(500).json({ error: 'Uploaded audio/video file not found on server after processing.' });
         } else {
@@ -229,10 +234,10 @@ const createDirectUploadJob = async (req, res, io) => {
                     audio_length_minutes: audioLengthMinutes,
                     client_instructions: clientInstructions,
                     instruction_files: instructionFileNames || null, // Store comma-separated names or null
-                    quote_amount_usd: parseFloat(quoteAmountUsd), // Ensure it's a float, from frontend
-                    price_per_minute_usd: parseFloat(pricePerMinuteUsd), // Ensure it's a float, from frontend
+                    quote_amount_usd: parsedQuoteAmountUsd, // Use the parsed value
+                    price_per_minute_usd: parsedPricePerMinuteUsd, // Use the parsed value
                     currency: 'USD',
-                    agreed_deadline_hours: parseInt(agreedDeadlineHours, 10), // Ensure it's an int, from frontend
+                    agreed_deadline_hours: parsedAgreedDeadlineHours, // Use the parsed value
                     status: 'pending_review', // Initial status
                     audio_quality_param: audioQualityParam, // UPDATED: Use new param name
                     deadline_type_param: deadlineTypeParam, // UPDATED: Use new param name
@@ -393,7 +398,7 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error fetching available direct upload jobs for transcriber:', error); // SYNTAX FIX: Corrected console.error
+        console.error('Error fetching available direct upload jobs for transcriber:', error);
         res.status(500).json({ error: 'Server error fetching available direct upload jobs.' });
     }
 };
@@ -586,6 +591,7 @@ const getAllDirectUploadJobsForAdmin = async (req, res) => {
         });
 
     } catch (error) {
+        // FIX: Corrected syntax error here
         console.error('Server error fetching all direct upload jobs for admin:', error);
         res.status(500).json({ error: 'Server error fetching all direct upload jobs for admin.' });
     }
