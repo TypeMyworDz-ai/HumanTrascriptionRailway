@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('../database');
-const authMiddleware = require('../middleware/authMiddleware');
+const supabase = require('..//database');
+const authMiddleware = require('..//middleware/authMiddleware');
 const fs = require('fs');
 const path = require('path');
 
@@ -22,7 +22,7 @@ const {
   clientRejectCounter,
   clientCounterBack,
   markJobCompleteByClient // NEW: Import the client-side job completion function
-} = require('../controllers/negotiationController');
+} = require('..//controllers/negotiationController');
 
 // Import admin controller functions
 const {
@@ -42,7 +42,7 @@ const {
     getAllJobsForAdmin,
     getJobByIdForAdmin, // NEW: Import the new function
     getAllDisputesForAdmin,
-} = require('../controllers/adminController');
+} = require('..//controllers/adminController');
 
 // Import chat controller functions
 const {
@@ -56,7 +56,7 @@ const {
     sendNegotiationMessage,
     uploadChatAttachment, // This is the Multer middleware for chat attachments
     handleChatAttachmentUpload // This is the controller function for chat attachments
-} = require('../controllers/chatController');
+} = require('..//controllers/chatController');
 
 // NEW: Import payment controller functions
 const {
@@ -65,7 +65,7 @@ const {
     getTranscriberPaymentHistory,
     getClientPaymentHistory,
     getAllPaymentHistoryForAdmin
-} = require('../controllers/paymentController');
+} = require('..//controllers/paymentController');
 
 // NEW: Import rating controller functions
 const {
@@ -73,12 +73,12 @@ const {
     rateUserByAdmin, // UPDATED: Import the new generic admin rating function
     getTranscriberRatings,
     getClientRating
-} = require('../controllers/ratingController');
+} = require('..//controllers/ratingController');
 
 // NEW: Import updateTranscriberProfile from transcriberController
-const { updateTranscriberProfile } = require('../controllers/transcriberController');
+const { updateTranscriberProfile } = require('..//controllers/transcriberController');
 // NEW: Import updateClientProfile from authController
-const { updateClientProfile } = require('../controllers/authController');
+const { updateClientProfile } = require('..//controllers/authController');
 
 // NEW: Import functions from directUploadController.js
 const {
@@ -90,7 +90,7 @@ const {
     completeDirectUploadJob,
     getAllDirectUploadJobsForAdmin,
     handleQuoteCalculationRequest // NEW: Import the new controller for quote calculation
-} = require('../controllers/directUploadController');
+} = require('..//controllers/directUploadController');
 
 // Import multer for direct use in this file for error handling
 const multer = require('multer');
@@ -152,6 +152,60 @@ module.exports = (io) => {
     }
     getClientNegotiations(req, res, next);
   });
+
+  // NEW: Route to download negotiation files
+  router.get('/negotiations/:negotiationId/download/:fileName', authMiddleware, async (req, res) => {
+    const { negotiationId, fileName } = req.params;
+    const userId = req.user.userId;
+    const userType = req.user.userType;
+
+    try {
+      // 1. Verify user authorization for this file
+      const { data: negotiation, error } = await supabase
+        .from('negotiations')
+        .select('client_id, transcriber_id, negotiation_files')
+        .eq('id', negotiationId)
+        .single();
+
+      if (error || !negotiation) {
+        console.error(`Download error: Negotiation ${negotiationId} not found or database error.`, error);
+        return res.status(404).json({ error: 'Negotiation not found or file not associated.' });
+      }
+
+      // Check if the user is the client, the transcriber, or an admin
+      const isAuthorized = (
+        negotiation.client_id === userId ||
+        negotiation.transcriber_id === userId ||
+        userType === 'admin'
+      );
+
+      if (!isAuthorized) {
+        return res.status(403).json({ error: 'Access denied. You are not authorized to download this file.' });
+      }
+
+      // 2. Construct the file path on the server
+      const filePath = path.join(__dirname, '..', 'uploads', 'negotiation_files', fileName);
+
+      // 3. Verify file exists on disk
+      if (!fs.existsSync(filePath)) {
+        console.error(`Download error: File not found on disk: ${filePath}`);
+        return res.status(404).json({ error: 'File not found on server.' });
+      }
+
+      // 4. Send the file for download
+      res.download(filePath, fileName, (err) => {
+        if (err) {
+          console.error(`Error sending file ${fileName} for download:`, err);
+          res.status(500).json({ error: 'Failed to download file.' });
+        }
+      });
+
+    } catch (downloadError) {
+      console.error('Unexpected error during file download:', downloadError);
+      res.status(500).json({ error: 'Server error during file download.' });
+    }
+  });
+
 
   // CORRECTED: Allow admins to delete negotiations as well
   router.delete('/negotiations/:negotiationId', authMiddleware, (req, res, next) => {
