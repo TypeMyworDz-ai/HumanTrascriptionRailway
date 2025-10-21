@@ -184,6 +184,21 @@ const createDirectUploadJob = async (req, res, io) => {
         return res.status(400).json({ error: 'Main audio/video file is required.' });
     }
 
+    // NEW: Add validation for quoteAmountUsd, pricePerMinuteUsd, and agreedDeadlineHours
+    if (typeof quoteAmountUsd === 'undefined' || quoteAmountUsd === null || isNaN(parseFloat(quoteAmountUsd))) {
+        await cleanupFiles();
+        return res.status(400).json({ error: 'Quote amount is missing or invalid. Please ensure quote is calculated and sent.' });
+    }
+    if (typeof pricePerMinuteUsd === 'undefined' || pricePerMinuteUsd === null || isNaN(parseFloat(pricePerMinuteUsd))) {
+        await cleanupFiles();
+        return res.status(400).json({ error: 'Price per minute is missing or invalid. Please ensure quote is calculated and sent.' });
+    }
+    if (typeof agreedDeadlineHours === 'undefined' || agreedDeadlineHours === null || isNaN(parseInt(agreedDeadlineHours, 10))) {
+        await cleanupFiles();
+        return res.status(400).json({ error: 'Agreed deadline hours are missing or invalid. Please ensure quote is calculated and sent.' });
+    }
+
+
     try {
         // Verify the main audio/video file exists on the server after upload
         const audioVideoFilePath = audioVideoFile.path;
