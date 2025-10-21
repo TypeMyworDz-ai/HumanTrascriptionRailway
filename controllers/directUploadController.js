@@ -55,7 +55,8 @@ const getQuoteAndDeadline = async (audioLengthMinutes, audioQualityParam, deadli
     suggestedDeadlineHours = Math.max(suggestedDeadlineHours, 2); // Minimum 2 hours
 
     return {
-        quote_amount_usd: totalQuoteUsd,
+        // FIX: Changed to 'quote_amount' to match database column
+        quote_amount: totalQuoteUsd,
         agreed_deadline_hours: suggestedDeadlineHours,
         price_per_minute_usd: pricePerMinuteUsd,
         audio_length_minutes: audioLengthMinutes, // Include for modal display
@@ -241,7 +242,8 @@ const createDirectUploadJob = async (req, res, io) => {
                     audio_length_minutes: audioLengthMinutes,
                     client_instructions: clientInstructions,
                     instruction_files: instructionFileNames || null, // Store comma-separated names or null
-                    quote_amount_usd: parsedQuoteAmountUsd, // Use the parsed value
+                    // FIX: Changed to 'quote_amount' to match database column
+                    quote_amount: parsedQuoteAmountUsd, // Use the parsed value
                     price_per_minute_usd: parsedPricePerMinuteUsd, // Use the parsed value
                     currency: 'USD',
                     agreed_deadline_hours: parsedAgreedDeadlineHours, // Use the parsed value
@@ -319,7 +321,8 @@ const getDirectUploadJobsForClient = async (req, res) => {
                 audio_length_minutes,
                 client_instructions,
                 instruction_files,
-                quote_amount_usd,
+                // FIX: Changed to 'quote_amount' to match database column
+                quote_amount,
                 price_per_minute_usd,
                 currency,
                 agreed_deadline_hours,
@@ -382,7 +385,8 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
                 audio_length_minutes,
                 client_instructions,
                 instruction_files,
-                quote_amount_usd,
+                // FIX: Changed to 'quote_amount' to match database column
+                quote_amount,
                 price_per_minute_usd,
                 currency,
                 agreed_deadline_hours,
@@ -565,7 +569,8 @@ const getAllDirectUploadJobsForAdmin = async (req, res) => {
                 audio_length_minutes,
                 client_instructions,
                 instruction_files,
-                quote_amount_usd,
+                // FIX: Changed to 'quote_amount' to match database column
+                quote_amount,
                 price_per_minute_usd,
                 currency,
                 agreed_deadline_hours,
@@ -598,7 +603,6 @@ const getAllDirectUploadJobsForAdmin = async (req, res) => {
         });
 
     } catch (error) {
-        // FIX: Corrected syntax error here
         console.error('Server error fetching all direct upload jobs for admin:', error);
         res.status(500).json({ error: 'Server error fetching all direct upload jobs for admin.' });
     }
