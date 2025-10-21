@@ -153,6 +153,13 @@ const createDirectUploadJob = async (req, res, io) => {
         agreedDeadlineHours // Received from frontend after quote calculation
     } = req.body;
 
+    // --- NEW LOGGING ---
+    console.log('[createDirectUploadJob] Received req.body:', req.body);
+    console.log('[createDirectUploadJob] Raw quoteAmountUsd:', quoteAmountUsd);
+    console.log('[createDirectUploadJob] Raw pricePerMinuteUsd:', pricePerMinuteUsd);
+    console.log('[createDirectUploadJob] Raw agreedDeadlineHours:', agreedDeadlineHours);
+    // --- END NEW LOGGING ---
+
     let audioVideoFile = req.files?.audioVideoFile?.[0]; // Main file
     let instructionFiles = req.files?.instructionFiles || []; // Additional files
 
@@ -208,7 +215,7 @@ const createDirectUploadJob = async (req, res, io) => {
         // Verify the main audio/video file exists on the server after upload
         const audioVideoFilePath = audioVideoFile.path;
         if (!fs.existsSync(audioVideoFilePath)) {
-            console.error(`!!! CRITICAL WARNING !!! Audio/Video file NOT found at expected path after upload: ${audioVideoFilePath}`);
+            console.error(`!!! CRITICAL WARNING !!! Audio/Video file NOT found at expected path: ${audioVideoFilePath}`);
             await cleanupFiles(); // Clean up all files if the main file is missing
             return res.status(500).json({ error: 'Uploaded audio/video file not found on server after processing.' });
         } else {
