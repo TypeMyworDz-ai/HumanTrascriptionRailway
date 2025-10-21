@@ -1017,11 +1017,10 @@ const clientCounterBack = async (req, res, io) => {
             }
         }
 
-
         // Fetch negotiation details to verify status and authorization
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
-            .select('status, transcriber_id, client_id')
+            .select('status, transcriber_id, client_id, negotiation_files') // FIX: Fetch existing negotiation_files
             .eq('id', negotiationId)
             .single();
 
@@ -1051,6 +1050,9 @@ const clientCounterBack = async (req, res, io) => {
             return res.status(400).json({ error: 'Negotiation is not in a state that allows for a counter-offer back. Current status: ' + negotiation.status });
         }
 
+        // FIX: Determine the file name to use for the update
+        const fileToUpdate = negotiationFileName || negotiation.negotiation_files;
+
         // Update negotiation with the client's counter-offer
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
@@ -1059,7 +1061,7 @@ const clientCounterBack = async (req, res, io) => {
                 agreed_price_usd: proposed_price_usd,
                 deadline_hours: deadline_hours,
                 client_message: client_response,
-                negotiation_files: negotiationFileName,
+                negotiation_files: fileToUpdate, // FIX: Use the determined file name
                 updated_at: new Date().toISOString()
             })
             .eq('id', negotiationId)
