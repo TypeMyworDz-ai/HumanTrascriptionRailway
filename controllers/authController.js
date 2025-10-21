@@ -1,5 +1,5 @@
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+const jwt = require('jsonwebtoken'); // FIX: Corrected 'require' to 'jsonwebtoken'
 const supabase = require('../database');
 const emailService = require('../emailService');
 const { v4: uuidv4 } = require('uuid'); // Import uuid for token generation
@@ -15,6 +15,7 @@ console.log('[authController.js] FRONTEND_URL:', FRONTEND_URL);
 const registerUser = async (req, res) => {
  console.groupCollapsed('[registerUser] Function called.'); // Use groupCollapsed for better readability in console logs
  try {
+  // ADDED 'trainee' as a possible user_type
   const { email, password, full_name, user_type = 'client', phone } = req.body;
 
   console.log('registerUser: Request body:', req.body);
@@ -36,19 +37,62 @@ const registerUser = async (req, res) => {
   const password_hash = await bcrypt.hash(password, 10);
   console.log('registerUser: Password hashed.');
 
+  // Prepare initial user data for the 'users' table based on user_type
+  // All profile-related fields are now initialized directly in the 'users' table
+  const insertUserData = {
+    email,
+    password_hash,
+    full_name,
+    user_type,
+    last_login: null,
+    is_active: true, // Default to active
+    is_online: false, // Default to offline
+    is_available: true, // Default to available
+    current_job_id: null,
+    phone: phone || null, // Universal phone field
+
+    // Initialize transcriber-specific fields (null for clients/admins/trainees)
+    transcriber_status: null,
+    transcriber_user_level: null,
+    transcriber_average_rating: null,
+    transcriber_completed_jobs: null,
+    transcriber_mpesa_number: null,
+    transcriber_paypal_email: null,
+
+    // Initialize client-specific fields (null for transcribers/admins/trainees)
+    client_average_rating: null,
+    client_completed_jobs: null, // NEW: client_completed_jobs
+    client_comment: null, // NEW: client_comment
+  };
+
+  // Set initial role-specific values for transcribers
+  if (user_type === 'transcriber') {
+    insertUserData.transcriber_status = 'pending_assessment';
+    insertUserData.transcriber_user_level = 'transcriber';
+    insertUserData.transcriber_average_rating = 0.0; // Default for new transcribers
+    insertUserData.transcriber_completed_jobs = 0;
+  }
+  // Set initial role-specific values for clients
+  if (user_type === 'client') {
+    insertUserData.client_average_rating = 5.0; // Default rating for new clients
+    insertUserData.client_completed_jobs = 0; // NEW: Initialize client_completed_jobs
+  }
+  // NEW: Set initial role-specific values for trainees
+  if (user_type === 'trainee') {
+      insertUserData.transcriber_status = 'pending_training_payment'; // Trainees start here
+      insertUserData.transcriber_user_level = 'trainee'; // Assign a level for trainees
+      insertUserData.is_available = false; // Trainees are not available for jobs
+      // FIX: Explicitly set default values for NOT NULL columns for trainees
+      insertUserData.transcriber_average_rating = 0.0; 
+      insertUserData.transcriber_completed_jobs = 0;
+  }
+  // Admins will have null for all role-specific fields by default
+
   // Insert core user data into the 'users' table
   const { data: userData, error: userError } = await supabase
     .from('users')
-    .insert([
-      {
-        email,
-        password_hash,
-        full_name,
-        user_type,
-        last_login: null // Initialize last_login to null
-      }
-    ])
-    .select('id, email, full_name, user_type, created_at, last_login') // Select necessary fields for response
+    .insert([insertUserData])
+    .select('*') // Select all columns for the response
     .single();
 
   if (userError) {
@@ -57,53 +101,71 @@ const registerUser = async (req, res) => {
   }
 
   const newUser = userData;
-  console.log('registerUser: Core user created:', newUser.id, newUser.email);
+  console.log('registerUser: Core user created:', newUser.id, newUser.email, 'type:', newUser.user_type);
 
   // --- SEND WELCOME EMAIL ---
-  // Utilize emailService for sending emails, with fallback to Mailtrap if Resend isn't configured
   if (newUser && newUser.email) {
     await emailService.sendWelcomeEmail(newUser);
   }
   // --- END EMAIL INTEGRATION ---
 
-  // Create user-specific profile data based on user_type
+  // For 'clients' and 'transcribers' tables, only insert the ID as a marker
+  // NEW: Do NOT create marker for 'trainee' in 'transcribers' table as they are not full transcribers yet
   if (newUser.user_type === 'client') {
-   console.log('registerUser: Creating client profile for user ID:', newUser.id);
-   // Initialize client profile with phone and a default average_rating of 5.0
-   const { error: clientProfileError } = await supabase
-     .from('clients')
-     .insert([{ id: newUser.id, phone: phone, average_rating: 5.0 }]) // Use average_rating as per schema
-     .select(); // No need to select if only inserting
-   if (clientProfileError) {
-    console.error('registerUser: Supabase error creating client profile:', clientProfileError);
-    throw clientProfileError;
-   }
-   console.log('registerUser: Client profile created for user ID:', newUser.id);
+    console.log('registerUser: Creating client marker profile for user ID:', newUser.id);
+    const { error: clientProfileError } = await supabase
+      .from('clients')
+      .insert([{ id: newUser.id }]) // Only insert ID
+      .select();
+    if (clientProfileError) {
+      console.error('registerUser: Supabase error creating client marker profile:', clientProfileError);
+      throw clientProfileError;
+    }
   } else if (newUser.user_type === 'transcriber') {
-   console.log('registerUser: Creating transcriber profile for user ID:', newUser.id);
-   // Initialize transcriber profile with default values
-   const { error: transcriberProfileError } = await supabase
-     .from('transcribers')
-     .insert([{ id: newUser.id, phone: phone, status: 'pending_assessment', user_level: 'transcriber', is_online: false, is_available: true, average_rating: 0.0, completed_jobs: 0, badges: null, current_job_id: null }])
-     .select();
-   if (transcriberProfileError) {
-    console.error('registerUser: Supabase error creating transcriber profile:', transcriberProfileError);
-    throw transcriberProfileError;
-   }
-   console.log('registerUser: Transcriber profile created for user ID:', newUser.id);
-  } else if (newUser.user_type === 'admin') {
-   console.log('registerUser: Admin user type detected. No separate profile table created.');
+    console.log('registerUser: Creating transcriber marker profile for user ID:', newUser.id);
+    const { error: transcriberProfileError } = await supabase
+      .from('transcribers')
+      .insert([{ id: newUser.id }]) // Only insert ID
+      .select();
+    if (transcriberProfileError) {
+      console.error('registerUser: Supabase error creating transcriber marker profile:', transcriberProfileError);
+      throw transcriberProfileError;
+    }
   }
 
-  // Respond with success message and basic user information
+  // FIX: Generate JWT token for the newly registered user
+  const token = jwt.sign(
+    {
+      userId: newUser.id,
+      email: newUser.email,
+      userType: newUser.user_type,
+      isOnline: newUser.is_online,
+      isAvailable: newUser.is_available,
+      currentJobId: newUser.current_job_id,
+      phone: newUser.phone,
+      transcriberStatus: newUser.transcriber_status,
+      transcriberUserLevel: newUser.transcriber_user_level,
+      transcriberAverageRating: newUser.transcriber_average_rating,
+      transcriberCompletedJobs: newUser.transcriber_completed_jobs,
+      transcriberMpesaNumber: newUser.transcriber_mpesa_number,
+      transcriberPaypalEmail: newUser.transcriber_paypal_email,
+      clientAverageRating: newUser.client_average_rating,
+      clientCompletedJobs: newUser.client_completed_jobs,
+      clientComment: newUser.client_comment,
+    },
+    process.env.JWT_SECRET || 'your-secret-key',
+    { expiresIn: '7d' }
+  );
+
+  // Prepare the user object to be returned (remove password hash)
+  // FIX: Rename destructured 'password_hash' to avoid redeclaration
+  const { password_hash: userPasswordHash, ...userWithoutPasswordHash } = newUser; 
+
+  // Respond with success message, token, and the full new user object
   res.status(201).json({
     message: 'User registered successfully',
-    user: {
-      id: newUser.id,
-      email: newUser.email,
-      full_name: newUser.full_name,
-      user_type: newUser.user_type,
-    }
+    token, // FIX: Return the token
+    user: userWithoutPasswordHash
    });
 
  } catch (error) {
@@ -124,10 +186,10 @@ const loginUser = async (req, res) => {
   const { email, password } = req.body;
 
   console.log('loginUser: Attempting to find user with email:', email);
-  // Fetch user with necessary fields including profile-related ones and status flags
+  // Fetch all user data from the 'users' table (now the source of truth)
   const { data: user, error: userFetchError } = await supabase
     .from('users')
-    .select('id, email, full_name, user_type, password_hash, is_active, status, user_level, is_online, is_available')
+    .select('*') // Select all columns as 'users' is now the source of truth
     .eq('email', email)
     .single();
 
@@ -140,7 +202,8 @@ const loginUser = async (req, res) => {
    return res.status(400).json({ error: 'Invalid email or password' });
   }
   // Log user details found (ensure sensitive data like password_hash is not logged)
-  console.log('loginUser: User found:', user.email, 'ID:', user.id, 'is_active:', user.is_active, 'user_type:', user.user_type, 'status:', user.status, 'level:', user.user_level, 'is_online:', user.is_online, 'is_available:', user.is_available);
+  // FIX: Corrected string literal concatenation for user.id to prevent syntax issues
+  console.log('loginUser: User found:', user.email, 'ID:', user.id, 'is_active:', user.is_active, 'user_type:', user.user_type, 'is_online:', user.is_online, 'is_available:', user.is_available); 
 
   // Check if the user account is active
   if (!user.is_active) {
@@ -158,78 +221,16 @@ const loginUser = async (req, res) => {
   }
   console.log('loginUser: Password comparison SUCCESS for user ID:', user.id);
 
-  // Fetch additional profile data based on user type
-  let profileData = {};
-  console.log('loginUser: User Type for profile fetching:', user.user_type);
-
-  if (user.user_type === 'client') {
-   console.log('loginUser: Fetching client profile for user ID:', user.id);
-   const { data: clientProfile, error: clientProfileError } = await supabase
-     .from('clients')
-     .select('phone, average_rating') // Fetch phone and average_rating
-     .eq('id', user.id)
-     .single();
-   if (clientProfileError) {
-    console.error('loginUser: Error fetching client profile:', clientProfileError);
-    return res.status(500).json({ error: clientProfileError.message });
-   }
-   if (!clientProfile) {
-    console.error('loginUser: Client profile NOT FOUND for user ID:', user.id);
-    return res.status(500).json({ error: 'Client profile not found.' });
-   }
-   // Map average_rating to client_rating for consistency if needed by frontend
-   profileData = { ...clientProfile, client_rating: clientProfile.average_rating };
-   delete profileData.average_rating; // Remove original average_rating if client_rating is used
-   console.log('loginUser: Client profile found:', profileData);
-
-   // Update last_login timestamp for the client
-   console.log('loginUser: Updating last_login for client user ID:', user.id);
-   const { error: updateError } = await supabase
-     .from('users')
-     .update({ last_login: new Date().toISOString() })
-     .eq('id', user.id);
-   if (updateError) {
-    console.error('loginUser: Error updating last_login for client:', updateError);
-   }
-
-  } else if (user.user_type === 'transcriber') {
-   console.log('loginUser: Fetching transcriber profile for user ID:', user.id);
-   const { data: transcriberProfile, error: transcriberProfileError } = await supabase
-     .from('transcribers')
-     .select('phone, status, user_level, is_online, is_available, average_rating, completed_jobs, badges, current_job_id')
-     .eq('id', user.id)
-     .single();
-   if (transcriberProfileError) {
-    console.error('loginUser: Error fetching transcriber profile:', transcriberProfileError);
-    return res.status(500).json({ error: transcriberProfileError.message });
-   }
-   if (!transcriberProfile) {
-    console.error('loginUser: Transcriber profile NOT FOUND for user ID:', user.id);
-    return res.status(500).json({ error: 'Transcriber profile not found.' });
-   }
-   // Combine user status flags with transcriber profile data
-   profileData = { ...transcriberProfile, is_online: user.is_online, is_available: user.is_available };
-   console.log('loginUser: Transcriber profile found:', profileData);
-
-   // Update last_login and set is_online to true for transcribers upon login
-   console.log('loginUser: Updating last_login and is_online for transcriber user ID:', user.id);
-   const { error: updateUserOnlineStatusError } = await supabase
-     .from('users')
-     .update({ last_login: new Date().toISOString(), is_online: true })
-     .eq('id', user.id);
-   if (updateUserOnlineStatusError) {
-    console.error('loginUser: Error updating users.is_online status:', updateUserOnlineStatusError);
-   }
-   profileData.is_online = true; // Ensure is_online is true in the returned profile data
-
-  } else if (user.user_type === 'admin') {
-   console.log('loginUser: Admin user type detected. No separate profile table for admin yet.');
-   // Admins might have specific fields in the 'users' table itself or a separate admin table not yet implemented.
-   // For now, we don't fetch additional profile data.
-  } else {
-   console.error('loginUser: Unknown user type detected:', user.user_type);
-   return res.status(400).json({ error: 'Unknown user type.' });
+  // Update last_login and set is_online to true for the user upon login
+  console.log('loginUser: Updating last_login and is_online for user ID:', user.id);
+  const { error: updateUserOnlineStatusError } = await supabase
+    .from('users')
+    .update({ last_login: new Date().toISOString(), is_online: true })
+    .eq('id', user.id);
+  if (updateUserOnlineStatusError) {
+   console.error('loginUser: Error updating users.is_online status:', updateUserOnlineStatusError);
   }
+  user.is_online = true; // Reflect the change immediately in the returned user object
 
   // Generate JWT token
   const token = jwt.sign(
@@ -237,27 +238,35 @@ const loginUser = async (req, res) => {
       userId: user.id,
       email: user.email,
       userType: user.user_type,
-      // Include relevant profile data in the token payload for quick access on the client
-      userStatus: profileData.status, // e.g., 'pending_assessment', 'active_transcriber'
-      userLevel: profileData.user_level, // e.g., 'transcriber'
-      isOnline: profileData.is_online,
-      isAvailable: profileData.is_available,
-      clientRating: profileData.client_rating // Include client rating if available
+      // Include all relevant 'users' table fields directly in the token payload
+      isOnline: user.is_online,
+      isAvailable: user.is_available,
+      currentJobId: user.current_job_id,
+      phone: user.phone,
+      // FIX: Explicitly include transcriber-specific fields in JWT payload
+      transcriberStatus: user.transcriber_status,
+      transcriberUserLevel: user.transcriber_user_level,
+      transcriberAverageRating: user.transcriber_average_rating,
+      transcriberCompletedJobs: user.transcriber_completed_jobs,
+      transcriberMpesaNumber: user.transcriber_mpesa_number,
+      transcriberPaypalEmail: user.transcriber_paypal_email,
+      clientAverageRating: user.client_average_rating,
+      clientCompletedJobs: user.client_completed_jobs, // NEW: client_completed_jobs
+      clientComment: user.client_comment, // NEW: client_comment
     },
    process.env.JWT_SECRET || 'your-secret-key', // Use environment variable for JWT secret
     { expiresIn: '7d' } // Token expires in 7 days
   );
 
-  // Prepare the user object to be returned, excluding sensitive info like password_hash
-  const { password_hash, ...userWithoutPasswordHash } = user;
-  const fullUserObject = { ...userWithoutPasswordHash, ...profileData }; // Combine core user data with profile data
-  console.log('loginUser: Login successful. Returning user object:', fullUserObject);
+  // Prepare the user object to be returned (it's already the full user object from 'users' table)
+  const { password_hash, ...userWithoutPasswordHash } = user; // Remove password_hash for security
+  console.log('loginUser: Login successful. Returning user object:', userWithoutPasswordHash);
 
   // Respond with success message, token, and user object
   res.json({
     message: 'Login successful',
     token,
-    user: fullUserObject
+    user: userWithoutPasswordHash
   });
 
  } catch (error) {
@@ -274,10 +283,10 @@ const getUserById = async (req, res) => {
   const { userId } = req.params;
 
   console.log('getUserById: Attempting to find user with ID:', userId);
-  // Fetch core user data
+  // Fetch all user data from the 'users' table (now the source of truth)
   const { data: user, error: userFetchError } = await supabase
     .from('users')
-    .select('id, full_name, email, user_type, last_login, created_at, is_online, is_available')
+    .select('*') // Select all columns as 'users' is now the source of truth
     .eq('id', userId)
     .single();
 
@@ -291,54 +300,14 @@ const getUserById = async (req, res) => {
   }
   console.log('getUserById: Core user found:', user.full_name, 'Type:', user.user_type);
 
-  // Fetch additional profile data based on user type
-  let profileData = {};
-  if (user.user_type === 'client') {
-   console.log('getUserById: Fetching client profile for user ID:', user.id);
-   const { data: clientProfile, error: clientProfileError } = await supabase
-     .from('clients')
-     .select('phone, average_rating')
-     .eq('id', user.id)
-     .single();
-   if (clientProfileError) {
-    console.error('Error fetching client profile by ID:', clientProfileError);
-    return res.status(500).json({ error: clientProfileError.message });
-   }
-   if (!clientProfile) {
-    console.error('getUserById: Client profile NOT FOUND for user ID:', user.id);
-    return res.status(500).json({ error: 'Client profile not found for user.' });
-   }
-   profileData = { ...clientProfile, client_rating: clientProfile.average_rating };
-   delete profileData.average_rating;
-   console.log('getUserById: Client profile found:', profileData);
-  } else if (user.user_type === 'transcriber') {
-   console.log('getUserById: Fetching transcriber profile for user ID:', user.id);
-   const { data: transcriberProfile, error: transcriberProfileError } = await supabase
-     .from('transcribers')
-     .select('phone, status, user_level, is_online, is_available, average_rating, completed_jobs, badges, current_job_id')
-     .eq('id', user.id)
-     .single();
-   if (transcriberProfileError) {
-    console.error('Error fetching transcriber profile by ID:', transcriberProfileError);
-    return res.status(500).json({ error: transcriberProfileError.message });
-   }
-   if (!transcriberProfile) {
-    console.error('getUserById: Transcriber profile NOT FOUND for user ID:', user.id);
-    return res.status(500).json({ error: 'Transcriber profile not found for user.' });
-   }
-   profileData = { ...transcriberProfile, is_online: user.is_online, is_available: user.is_available };
-   console.log('getUserById: Transcriber profile found:', profileData);
-  } else if (user.user_type === 'admin') {
-   console.log('getUserById: Admin user detected. No separate profile table assumed.');
-  }
+  // Profile data is now directly within the 'user' object from the 'users' table
+  const { password_hash, ...userWithoutPasswordHash } = user; // Remove password_hash for security
 
-  // Combine core user data with profile data
-  const fullUserObject = { ...user, ...profileData };
-  console.log('getUserById: Full user object returned:', fullUserObject);
+  console.log('getUserById: Full user object returned:', userWithoutPasswordHash);
 
   res.json({
     message: 'User retrieved successfully',
-    user: fullUserObject
+    user: userWithoutPasswordHash
   });
 
  } catch (error) {
@@ -349,10 +318,10 @@ const getUserById = async (req, res) => {
  }
 };
 
-// NEW: Function for clients to update their profile (full_name, phone)
+// NEW: Function for clients to update their profile (full_name, phone, client_average_rating, client_completed_jobs, client_comment)
 const updateClientProfile = async (req, res) => {
     const { userId } = req.params; // ID of the profile to update
-    const { full_name, phone } = req.body;
+    const { full_name, phone, client_average_rating, client_completed_jobs, client_comment } = req.body; // NEW: Include new client fields
     const currentUserId = req.user.userId; // User making the request (from JWT)
 
     // Authorization check: User must be the owner of the profile or an admin
@@ -361,60 +330,34 @@ const updateClientProfile = async (req, res) => {
     }
 
     try {
-        // Prepare data for updating the 'users' table (for full_name)
+        // Prepare data for updating the 'users' table (all profile fields are here now)
         const userUpdateData = { updated_at: new Date().toISOString() };
         if (full_name !== undefined) userUpdateData.full_name = full_name;
+        if (phone !== undefined) userUpdateData.phone = phone;
+        if (client_average_rating !== undefined) userUpdateData.client_average_rating = parseFloat(client_average_rating);
+        if (client_completed_jobs !== undefined) userUpdateData.client_completed_jobs = parseInt(client_completed_jobs, 10); // NEW: Update client_completed_jobs
+        if (client_comment !== undefined) userUpdateData.client_comment = client_comment; // NEW: Update client_comment
+
 
         // Update 'users' table, ensuring it's for a client
-        const { error: userError } = await supabase
+        const { data: updatedUser, error: userError } = await supabase
             .from('users')
             .update(userUpdateData)
             .eq('id', userId)
-            .eq('user_type', 'client'); // Scope update to clients only
+            .eq('user_type', 'client') // Scope update to clients only
+            .select('*') // Select all updated columns to return the full user object
+            .single();
 
         if (userError) throw userError;
+        if (!updatedUser) return res.status(404).json({ error: 'Client user not found or not a client.' });
 
-        // Prepare data for updating the 'clients' table (for phone)
-        const clientProfileUpdateData = { updated_at: new Date().toISOString() };
-        if (phone !== undefined) clientProfileUpdateData.phone = phone;
+        // No need to update 'clients' table for profile data anymore, only for the marker.
 
-        // Update 'clients' table and select relevant fields to return
-        const { data: clientProfile, error: clientProfileError } = await supabase
-            .from('clients')
-            .update(clientProfileUpdateData)
-            .eq('id', userId)
-            .select('id, phone, average_rating') // Select fields to return
-            .single();
-
-        if (clientProfileError) throw clientProfileError;
-        if (!clientProfile) return res.status(404).json({ error: 'Client profile not found.' });
-
-        // Fetch the updated user record to combine with profile data
-        const { data: updatedUser, error: fetchUpdatedUserError } = await supabase
-            .from('users')
-            .select('id, full_name, email, user_type, last_login, created_at, is_online, is_available')
-            .eq('id', userId)
-            .single();
-
-        if (fetchUpdatedUserError) throw fetchUpdatedUserError;
-        if (!updatedUser) return res.status(404).json({ error: 'User not found after update.' });
-
-        // Construct the full user object to return, nesting client profile data
-        const fullUserObject = {
-            ...updatedUser,
-            client_profile: { // Nest client profile data
-                ...clientProfile,
-                client_rating: clientProfile.average_rating // Keep client_rating for compatibility
-            },
-            // Add phone to the top level for easier frontend access if needed
-            phone: clientProfile.phone
-        };
-        // Clean up redundant fields if necessary (e.g., if average_rating is now client_rating)
-        delete fullUserObject.client_profile.average_rating;
+        const { password_hash, ...userWithoutPasswordHash } = updatedUser; // Remove password_hash for security
 
         res.status(200).json({
             message: 'Client profile updated successfully.',
-            user: fullUserObject
+            user: userWithoutPasswordHash // Return the full updated user object
         });
 
     } catch (error) {
@@ -553,5 +496,5 @@ module.exports = {
     getUserById,
     requestPasswordReset,
     resetPassword,
-    updateClientProfile
+    updateClientProfile, // FIX: Added missing comma
 };

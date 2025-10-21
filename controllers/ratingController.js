@@ -1,4 +1,4 @@
-const supabase = require('../database');
+const supabase = require('..//database');
 
 // Helper function to calculate and update the average rating for a user (transcriber or client)
 const updateAverageRating = async (userId, userType) => {
@@ -13,43 +13,22 @@ const updateAverageRating = async (userId, userType) => {
         if (fetchRatingsError) throw fetchRatingsError;
 
         // Calculate the new average rating
-        const defaultRating = 5.0; // Default to 5.0 for new/unrated users
+        const defaultRating = userType === 'client' ? 5.0 : 0.0; // Default to 5.0 for clients, 0.0 for transcribers
         const newAverage = ratings.length > 0
             ? parseFloat((ratings.reduce((sum, rating) => sum + rating.score, 0) / ratings.length).toFixed(1))
             : defaultRating; // Calculate average or use default if no ratings
 
-        // Check if the profile (transcriber or client) exists
-        const profileTable = userType === 'transcriber' ? 'transcribers' : 'clients';
-        const { data: existingProfile, error: fetchProfileError } = await supabase
-            .from(profileTable)
-            .select('id')
-            .eq('id', userId)
-            .single();
+        // FIX: Update the 'users' table directly for average ratings
+        const updateColumn = userType === 'transcriber' ? 'transcriber_average_rating' : 'client_average_rating';
+        
+        const { error: updateError } = await supabase
+            .from('users') // Always update the 'users' table
+            .update({ [updateColumn]: newAverage, updated_at: new Date().toISOString() })
+            .eq('id', userId);
 
-        if (fetchProfileError && fetchProfileError.code !== 'PGRST116') { // PGRST116 means "No rows found"
-            console.error(`[updateAverageRating] Error checking existing ${userType} profile for ${userId}:`, fetchProfileError);
-            throw fetchProfileError;
-        }
-
-        if (existingProfile) {
-            // Profile exists, update it
-            const { error: updateError } = await supabase
-                .from(profileTable)
-                .update({ average_rating: newAverage, updated_at: new Date().toISOString() })
-                .eq('id', userId);
-            if (updateError) throw updateError;
-            console.log(`[updateAverageRating] Updated existing ${userType} ${userId} average rating to ${newAverage}`);
-        } else {
-            // Profile does not exist, insert a new one
-            const { error: insertError } = await supabase
-                .from(profileTable)
-                .insert([
-                    { id: userId, average_rating: newAverage, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
-                ]);
-            if (insertError) throw insertError;
-            console.log(`[updateAverageRating] Created new ${userType} ${userId} profile with average rating ${newAverage}`);
-        }
-
+        if (updateError) throw updateError;
+        console.log(`[updateAverageRating] Updated user ${userId} ${updateColumn} to ${newAverage}`);
+        
         return newAverage; // Return the calculated average rating
 
     } catch (error) {
@@ -167,23 +146,23 @@ const getTranscriberRatings = async (req, res) => {
     const { transcriberId } = req.params;
 
     try {
-        // 1. Fetch the transcriber's average rating from their profile
-        const { data: transcriberProfile, error: profileError } = await supabase
-            .from('transcribers')
-            .select('average_rating') // Get the pre-calculated average rating
+        // FIX: Fetch the transcriber's average rating directly from the 'users' table
+        const { data: userProfile, error: profileError } = await supabase
+            .from('users')
+            .select('transcriber_average_rating') // Select the specific transcriber rating column
             .eq('id', transcriberId)
+            .eq('user_type', 'transcriber') // Ensure it's a transcriber
             .single();
 
-        if (profileError || !transcriberProfile) {
-            console.warn(`[getTranscriberRatings] Transcriber profile for ID ${transcriberId} not found. Defaulting rating to 0.`);
-            return res.status(200).json({ // Return 200 with default if profile not found
+        if (profileError || !userProfile) {
+            console.warn(`[getTranscriberRatings] Transcriber user profile for ID ${transcriberId} not found. Defaulting rating to 0.`);
+            return res.status(200).json({
                 message: 'Transcriber not found or no rating available, defaulting to 0.0.',
                 averageRating: 0.0,
                 ratings: []
             });
         }
-        console.log(`[getTranscriberRatings] Raw transcriber profile data for ${transcriberId}:`, transcriberProfile);
-
+        console.log(`[getTranscriberRatings] Raw transcriber user profile data for ${transcriberId}:`, userProfile);
 
         // 2. Fetch all individual ratings and comments for this transcriber
         const { data: ratings, error: ratingsError } = await supabase
@@ -193,27 +172,25 @@ const getTranscriberRatings = async (req, res) => {
                 score,
                 comment,
                 created_at,
-                rater:users!rater_id(full_name) -- Join with users to get the rater's name
+                rater:users!rater_id(full_name)
             `)
-            .eq('rated_user_id', transcriberId) // Filter by the transcriber being rated
-            .eq('rated_user_type', 'transcriber') // Ensure it's a rating for a transcriber
-            .order('created_at', { ascending: false }); // Order ratings by date
+            .eq('rated_user_id', transcriberId)
+            .eq('rated_user_type', 'transcriber')
+            .order('created_at', { ascending: false });
 
         if (ratingsError) {
             console.error('[getTranscriberRatings] Error fetching transcriber ratings:', ratingsError);
             throw ratingsError;
         }
 
-        // Format ratings to include rater's name, providing a default if missing
         const formattedRatings = ratings.map(r => ({
             ...r,
-            rater_name: r.rater?.full_name || 'Anonymous' // Default name if rater info is missing
+            rater_name: r.rater?.full_name || 'Anonymous'
         }));
 
-        // Respond with the average rating and the list of individual ratings
         res.status(200).json({
             message: 'Transcriber ratings retrieved successfully.',
-            averageRating: transcriberProfile.average_rating,
+            averageRating: userProfile.transcriber_average_rating, // Use transcriber_average_rating
             ratings: formattedRatings
         });
 
@@ -228,24 +205,23 @@ const getClientRating = async (req, res) => {
     const { clientId } = req.params;
 
     try {
-        // 1. Fetch the client's average rating from their profile
-        const { data: clientProfile, error: profileError } = await supabase
-            .from('clients')
-            .select('average_rating') // FIX: Select 'average_rating' directly
+        // FIX: Fetch the client's average rating directly from the 'users' table
+        const { data: userProfile, error: profileError } = await supabase
+            .from('users')
+            .select('client_average_rating') // Select the specific client rating column
             .eq('id', clientId)
+            .eq('user_type', 'client') // Ensure it's a client
             .single();
 
-        if (profileError || !clientProfile) {
-            console.warn(`[getClientRating] Client profile for ID ${clientId} not found. Defaulting rating to 5.0.`);
-            // Return default 5.0 if client not found or no profile, so it doesn't break UI
+        if (profileError || !userProfile) {
+            console.warn(`[getClientRating] Client user profile for ID ${clientId} not found. Defaulting rating to 5.0.`);
             return res.status(200).json({
                 message: 'Client not found or no rating available, defaulting to 5.0.',
                 averageRating: 5.0,
                 ratings: []
             });
         }
-        console.log(`[getClientRating] Raw client profile data for ${clientId}:`, clientProfile);
-
+        console.log(`[getClientRating] Raw client user profile data for ${clientId}:`, userProfile);
 
         // 2. Fetch detailed ratings for the client (e.g., from admin ratings)
         const { data: ratings, error: ratingsError } = await supabase
@@ -255,27 +231,25 @@ const getClientRating = async (req, res) => {
                 score,
                 comment,
                 created_at,
-                rater:users!rater_id(full_name) -- Join to get the rater's name (likely admin)
+                rater:users!rater_id(full_name)
             `)
-            .eq('rated_user_id', clientId) // Filter by the client being rated
-            .eq('rated_user_type', 'client') // Ensure it's a rating for a client
-            .order('created_at', { ascending: false }); // Order ratings by date
+            .eq('rated_user_id', clientId)
+            .eq('rated_user_type', 'client')
+            .order('created_at', { ascending: false });
 
         if (ratingsError) {
             console.error('[getClientRating] Error fetching client ratings:', ratingsError);
             throw ratingsError;
         }
 
-        // Format ratings to include rater's name, providing a default
         const formattedRatings = ratings.map(r => ({
             ...r,
-            rater_name: r.rater?.full_name || 'Admin' // Default name if rater info is missing
+            rater_name: r.rater?.full_name || 'Admin'
         }));
 
-        // Respond with the average rating and detailed ratings
         res.status(200).json({
             message: 'Client rating retrieved successfully.',
-            averageRating: clientProfile.average_rating, // FIX: Use average_rating directly
+            averageRating: userProfile.client_average_rating, // Use client_average_rating
             ratings: formattedRatings
         });
 

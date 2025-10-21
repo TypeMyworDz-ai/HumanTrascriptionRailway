@@ -79,6 +79,7 @@ const getTotalUsersCount = async (req, res) => {
 // Get all transcriber test submissions with related user info
 const getAllTranscriberTestSubmissions = async (req, res) => {
     try {
+        // FIX: Select transcriber profile data directly from the 'users' table
         const { data: submissions, error } = await supabase
             .from('test_submissions')
             .select(`
@@ -91,7 +92,9 @@ const getAllTranscriberTestSubmissions = async (req, res) => {
                 rejection_reason,
                 users (
                     full_name,
-                    email
+                    email,
+                    transcriber_status,
+                    transcriber_user_level
                 )
             `)
             .order('created_at', { ascending: false }); // Order by creation date, newest first
@@ -108,6 +111,7 @@ const getAllTranscriberTestSubmissions = async (req, res) => {
 const getTranscriberTestSubmissionById = async (req, res) => {
     try {
         const { submissionId } = req.params;
+        // FIX: Select transcriber profile data directly from the 'users' table
         const { data: submission, error } = await supabase
             .from('test_submissions')
             .select(`
@@ -120,7 +124,9 @@ const getTranscriberTestSubmissionById = async (req, res) => {
                 rejection_reason,
                 users (
                     full_name,
-                    email
+                    email,
+                    transcriber_status,
+                    transcriber_user_level
                 )
             `)
             .eq('id', submissionId) // Filter by the submission ID
@@ -133,7 +139,7 @@ const getTranscriberTestSubmissionById = async (req, res) => {
         }
         res.json({ submission });
     } catch (error) {
-        console.error('Error fetching transcriber test submission by ID:', error);
+        console.error('Error fetching transcriber test submission by ID::', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -152,21 +158,13 @@ const approveTranscriberTest = async (req, res) => {
 
         if (submissionUpdateError) throw submissionUpdateError;
 
-        // Update the transcriber's status in the 'transcribers' table to 'active_transcriber'
-        const { error: transcriberProfileError } = await supabase
-            .from('transcribers')
-            .update({ status: 'active_transcriber', updated_at: new Date().toISOString() })
-            .eq('id', transcriberId);
-
-        if (transcriberProfileError) throw transcriberProfileError;
-
-        // Also update the status in the 'users' table for consistency
+        // FIX: Update the transcriber's status in the 'users' table to 'active_transcriber'
         const { error: userStatusError } = await supabase
             .from('users')
-            .update({ status: 'active_transcriber', updated_at: new Date().toISOString() })
+            .update({ transcriber_status: 'active_transcriber', updated_at: new Date().toISOString() })
             .eq('id', transcriberId);
 
-        if (userStatusError) console.error('Error updating user status after test approval:', userStatusError);
+        if (userStatusError) console.error('Error updating user transcriber_status after test approval:', userStatusError);
 
         // Fetch user details to send an approval email
         const { data: userDetails, error: userDetailsError } = await supabase
@@ -203,20 +201,13 @@ const rejectTranscriberTest = async (req, res) => {
 
         if (submissionUpdateError) throw submissionUpdateError;
 
-        // Update the transcriber's status to 'rejected' in both 'transcribers' and 'users' tables
-        const { error: transcriberProfileError } = await supabase
-            .from('transcribers')
-            .update({ status: 'rejected', updated_at: new Date().toISOString() })
-            .eq('id', transcriberId);
-
-        if (transcriberProfileError) throw transcriberProfileError;
-
+        // FIX: Update the transcriber's status to 'rejected' in the 'users' table
         const { error: userStatusError } = await supabase
             .from('users')
-            .update({ status: 'rejected', updated_at: new Date().toISOString() })
+            .update({ transcriber_status: 'rejected', updated_at: new Date().toISOString() })
             .eq('id', transcriberId);
 
-        if (userStatusError) console.error('Error updating user status after test rejection:', userStatusError);
+        if (userStatusError) console.error('Error updating user transcriber_status after test rejection:', userStatusError);
 
         // Fetch user details to send a rejection email
         const { data: userDetails, error: userDetailsError } = await supabase
@@ -245,15 +236,21 @@ const rejectTranscriberTest = async (req, res) => {
 const getAllUsersForAdmin = async (req, res) => {
     try {
         const { search } = req.query; // Get search query from query parameters
+        // FIX: Select all relevant profile data directly from the 'users' table
         let query = supabase.from('users').select(`
             id, 
             full_name, 
             email, 
             user_type, 
             created_at,
-            transcribers (average_rating),
-            clients (average_rating)
-        `);
+            transcriber_average_rating,
+            transcriber_completed_jobs,
+            client_average_rating,
+            client_completed_jobs,
+            client_comment,
+            transcriber_status,
+            transcriber_user_level
+        `); // ADDED: transcriber_status and transcriber_user_level
 
         // Apply search filter if provided
         if (search) {
@@ -265,17 +262,24 @@ const getAllUsersForAdmin = async (req, res) => {
 
         if (error) throw error;
 
-        // Format users to include average ratings directly
+        // Format users to include average ratings and completed jobs directly
         const formattedUsers = users.map(user => {
             const average_rating = user.user_type === 'transcriber' 
-                                ? (user.transcribers?.average_rating || 0) // FIX: Removed [0]
+                                ? (user.transcriber_average_rating || 0.0) 
                                 : (user.user_type === 'client' 
-                                   ? (user.clients?.average_rating || 0) // FIX: Removed [0]
-                                   : 0);
+                                   ? (user.client_average_rating || 5.0) 
+                                   : 0.0); // Default for admins or other types
+
+            const completed_jobs = user.user_type === 'transcriber'
+                                ? (user.transcriber_completed_jobs || 0)
+                                : (user.user_type === 'client'
+                                   ? (user.client_completed_jobs || 0)
+                                   : 0); // Default for admins or other types
             
             return {
                 ...user,
-                average_rating: average_rating // Assign the correctly calculated average_rating
+                average_rating: average_rating,
+                completed_jobs: completed_jobs
             };
         });
 
@@ -292,47 +296,34 @@ const getUserByIdForAdmin = async (req, res) => {
         const { userId } = req.params;
         console.log(`[getUserByIdForAdmin] Attempting to fetch user ID: ${userId}`);
 
-        // Fetch user details, including nested transcriber and client profiles
+        // FIX: Fetch all user and profile details directly from the 'users' table
         const { data: user, error } = await supabase
             .from('users')
-            .select(`
-                id, full_name, email, user_type, created_at, is_online, is_available, current_job_id,
-                transcribers (status, user_level, average_rating, completed_jobs, badges),
-                clients (average_rating)
-            `)
+            .select(`*`) // Select all columns from the 'users' table
             .eq('id', userId)
             .single();
 
         if (error) {
             console.error(`[getUserByIdForAdmin] Supabase error fetching user ${userId}:`, error);
-            // Return 404 if user not found, 500 for other errors
-            if (error.code === 'PGRST116') { // No rows found
+            if (error.code === 'PGRST116') {
                  console.warn(`[getUserByIdForAdmin] User ${userId} not found.`);
                  return res.status(404).json({ error: 'User not found.' });
             }
-            // Log the full error to understand what's happening
             console.error(`[getUserByIdForAdmin] Detailed Supabase error for user ${userId}:`, error);
-            throw error; // Re-throw other Supabase errors
+            throw error;
         }
-        if (!user) { // Defensive check
+        if (!user) {
             console.warn(`[getUserByIdForAdmin] User ${userId} not found (after initial check).`);
             return res.status(404).json({ error: 'User not found.' });
         }
 
-        // Format the user object to nest profile data and remove redundant arrays
-        const formattedUser = {
-            ...user,
-            transcriber_profile: user.transcribers?.[0] || null, // Nest transcriber profile or set to null
-            client_profile: user.clients?.[0] || null, // Nest client profile or set to null
-        };
-        // Clean up the original nested arrays
-        delete formattedUser.transcribers;
-        delete formattedUser.clients;
+        // The user object already contains all profile data directly from 'users' table
+        const { password_hash, ...userWithoutPasswordHash } = user; // Remove password_hash for security
 
         console.log(`[getUserByIdForAdmin] Successfully fetched and formatted user: ${userId}`);
-        res.json({ user: formattedUser });
+        res.json({ user: userWithoutPasswordHash });
     } catch (error) {
-        console.error('[getUserByIdForAdmin] Error fetching user by ID for admin: ', error.message); // Log full error message
+        console.error('[getUserByIdForAdmin] Error fetching user by ID for admin: ', error.message);
         res.status(500).json({ error: error.message || 'Server error fetching user details.' });
     }
 };
@@ -341,30 +332,31 @@ const getUserByIdForAdmin = async (req, res) => {
 const getAnyUserById = async (req, res) => {
     try {
         const { userId } = req.params;
+        // FIX: Select all relevant basic user info directly from the 'users' table
         const { data: user, error } = await supabase
             .from('users')
-            .select('id, full_name, email, user_type, is_online, is_available, current_job_id') // Added availability and job status
+            .select('id, full_name, email, user_type, is_online, is_available, current_job_id, phone, transcriber_status, transcriber_user_level, transcriber_average_rating, transcriber_completed_jobs, transcriber_mpesa_number, transcriber_paypal_email, client_average_rating, client_completed_jobs, client_comment')
             .eq('id', userId)
             .single();
 
         if (error) {
             console.error(`[getAnyUserById] Supabase error fetching user ${userId}:`, error);
-            // Return 404 if user not found, 500 for other errors
-            if (error.code === 'PGRST116') { // No rows found
+            if (error.code === 'PGRST116') {
                  console.warn(`[getAnyUserById] User ${userId} not found.`);
                  return res.status(404).json({ error: 'User not found.' });
             }
-            // Log the full error to understand what's happening
             console.error(`[getAnyUserById] Detailed Supabase error for user ${userId}:`, error);
-            throw error; // Re-throw other Supabase errors
+            throw error;
         }
-        if (!user) { // Defensive check
+        if (!user) {
             console.warn(`[getAnyUserById] User ${userId} not found (after initial check).`);
             return res.status(404).json({ error: 'User not found.' });
         }
-        res.json({ user });
+        // Remove password_hash if it was accidentally selected (though '*' usually excludes it if not explicitly requested)
+        const { password_hash, ...userWithoutPasswordHash } = user;
+        res.json({ user: userWithoutPasswordHash });
     } catch (error) {
-        console.error('[getAnyUserById] Error fetching any user by ID: ', error.message); // Log full error message
+        console.error('[getAnyUserById] Error fetching any user by ID: ', error.message);
         res.status(500).json({ error: error.message || 'Server error fetching user details.' });
     }
 };
@@ -405,7 +397,7 @@ const updateAdminSettings = async (req, res) => {
         const { id, pricing_rules } = req.body; // 'id' will be used for updating an existing row
 
         if (!pricing_rules || !Array.isArray(pricing_rules)) {
-            return res.status(400).json({ error: 'Pricing rules must be provided as an array.!' });
+            return res.status(400).json({ error: 'Pricing rules must be provided as an array!!' });
         }
 
         const updatePayload = {
@@ -506,16 +498,14 @@ const getJobByIdForAdmin = async (req, res) => {
 
         if (error) {
             console.error(`[getJobByIdForAdmin] Supabase error fetching job ${jobId}:`, error);
-            // Return 404 if job not found, 500 for other errors
-            if (error.code === 'PGRST116') { // No rows found
+            if (error.code === 'PGRST116') {
                  console.warn(`[getJobByIdForAdmin] Job ${jobId} not found.`);
                  return res.status(404).json({ error: 'Job not found.' });
             }
-            // Log the full error to understand what's happening
             console.error(`[getJobByIdForAdmin] Detailed Supabase error for job ${jobId}:`, error);
-            throw error; // Re-throw other Supabase errors
+            throw error;
         }
-        if (!negotiation) { // Defensive check
+        if (!negotiation) {
             console.warn(`[getJobByIdForAdmin] Job ${jobId} not found (after initial check).`);
             return res.status(404).json({ error: 'Job not found.' });
         }
@@ -529,7 +519,7 @@ const getJobByIdForAdmin = async (req, res) => {
 
         res.json(formattedJob); // Return the formatted job object directly
     } catch (error) {
-        console.error('Error fetching job by ID for admin: ', error.message); // Log full error message
+        console.error('Error fetching job by ID for admin: ', error.message);
         res.status(500).json({ error: error.message || 'Server error fetching job details.' });
     }
 };
@@ -589,6 +579,6 @@ module.exports = {
     getAdminSettings,
     updateAdminSettings,
     getAllJobsForAdmin,
-    getJobByIdForAdmin, // NEW: Export the new function
+    getJobByIdForAdmin,
     getAllDisputesForAdmin,
 };

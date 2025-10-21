@@ -1,15 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('..//database');
-const authMiddleware = require('..//middleware/authMiddleware');
+const supabase = require('../database');
+const authMiddleware = require('../middleware/authMiddleware');
 const fs = require('fs');
 const path = require('path');
 
 // IMPORTANT: Import functions from negotiationController.js
 const {
-  uploadNegotiationFiles, // This is the Multer middleware for negotiation files (still used for clientCounterBack)
-  uploadTempNegotiationFile, // NEW: Multer middleware for temporary negotiation file upload
-  tempUploadNegotiationFile, // NEW: Controller for temporary negotiation file upload
+  uploadNegotiationFiles,
+  uploadTempNegotiationFile,
+  tempUploadNegotiationFile,
   getAvailableTranscribers,
   createNegotiation,
   getClientNegotiations,
@@ -21,8 +21,8 @@ const {
   clientAcceptCounter,
   clientRejectCounter,
   clientCounterBack,
-  markJobCompleteByClient // NEW: Import the client-side job completion function
-} = require('..//controllers/negotiationController');
+  markJobCompleteByClient
+} = require('../controllers/negotiationController');
 
 // Import admin controller functions
 const {
@@ -40,9 +40,9 @@ const {
     getAdminSettings,
     updateAdminSettings,
     getAllJobsForAdmin,
-    getJobByIdForAdmin, // NEW: Import the new function
+    getJobByIdForAdmin,
     getAllDisputesForAdmin,
-} = require('..//controllers/adminController');
+} = require('../controllers/adminController');
 
 // Import chat controller functions
 const {
@@ -54,9 +54,9 @@ const {
     getAdminChatList,
     getNegotiationMessages,
     sendNegotiationMessage,
-    uploadChatAttachment, // This is the Multer middleware for chat attachments
-    handleChatAttachmentUpload // This is the controller function for chat attachments
-} = require('..//controllers/chatController');
+    uploadChatAttachment,
+    handleChatAttachmentUpload
+} = require('../controllers/chatController');
 
 // NEW: Import payment controller functions
 const {
@@ -64,44 +64,50 @@ const {
     verifyPayment,
     getTranscriberPaymentHistory,
     getClientPaymentHistory,
-    getAllPaymentHistoryForAdmin
-} = require('..//controllers/paymentController');
+    getAllPaymentHistoryForAdmin,
+    initializeTrainingPayment // NEW: Import initializeTrainingPayment
+} = require('../controllers/paymentController');
 
 // NEW: Import rating controller functions
 const {
-    // Removed rateTranscriber as per instructions
-    rateUserByAdmin, // UPDATED: Import the new generic admin rating function
+    rateUserByAdmin,
     getTranscriberRatings,
     getClientRating
-} = require('..//controllers/ratingController');
+} = require('../controllers/ratingController');
 
 // NEW: Import updateTranscriberProfile from transcriberController
-const { updateTranscriberProfile } = require('..//controllers/transcriberController');
+const { updateTranscriberProfile } = require('../controllers/transcriberController');
 // NEW: Import updateClientProfile from authController
-const { updateClientProfile } = require('..//controllers/authController');
+const { updateClientProfile } = require('../controllers/authController');
 
 // NEW: Import functions from directUploadController.js
 const {
-    uploadDirectFiles, // Multer middleware for direct uploads
+    uploadDirectFiles,
     createDirectUploadJob,
     getDirectUploadJobsForClient,
     getAvailableDirectUploadJobsForTranscriber,
     takeDirectUploadJob,
     completeDirectUploadJob,
     getAllDirectUploadJobsForAdmin,
-    handleQuoteCalculationRequest // NEW: Import the new controller for quote calculation
-} = require('..//controllers/directUploadController');
+    handleQuoteCalculationRequest
+} = require('../controllers/directUploadController');
+
+// NEW: Import training controller functions
+const {
+    getTraineeTrainingStatus,
+    getTrainingMaterials,
+    getTraineeTrainingRoomMessages,
+    sendTraineeTrainingRoomMessage,
+    uploadTrainingRoomAttachment // NEW: Import uploadTrainingRoomAttachment
+} = require('../controllers/trainingController');
 
 // Import multer for direct use in this file for error handling
 const multer = require('multer');
 
 // --- Multer Error Handling Middleware ---
-// This middleware will catch errors specifically thrown by Multer
 const multerErrorHandler = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
-    // Multer-specific errors (e.g., file size limit, unexpected field)
     console.error('Multer Error Caught in Route Handler:', err.message, 'Code:', err.code);
-    // Clean up any partially uploaded files
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlink(req.file.path, (unlinkErr) => {
         if (unlinkErr) console.error("Error deleting Multer error temp file (req.file):", unlinkErr);
@@ -120,9 +126,7 @@ const multerErrorHandler = (err, req, res, next) => {
     }
     return res.status(400).json({ error: err.message });
   } else if (err) {
-    // General file upload errors (e.g., from a custom fileFilter that throws a non-MulterError)
     console.error('General File Upload Error Caught in Route Handler:', err.message);
-    // Clean up any partially uploaded files
     if (req.file && fs.existsSync(req.file.path)) {
         fs.unlink(req.file.path, (unlinkErr) => {
           if (unlinkErr) console.error("Error deleting general file error temp file (req.file):", unlinkErr);
@@ -141,8 +145,48 @@ const multerErrorHandler = (err, req, res, next) => {
       }
     return res.status(400).json({ error: err.message });
   }
-  next(err); // Pass other errors (not related to Multer/file upload) to the next error handler
+  next(err);
 };
+
+// NEW: Multer configuration for Training Room attachments (allowing audio/video)
+const trainingRoomFileStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const uploadDir = 'uploads/training_room_attachments';
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        cb(null, uploadDir);
+    },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+const trainingRoomFileFilter = (req, file, cb) => {
+    const allowedTypes = [
+        'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/mp4', 'audio/m4a', 'audio/ogg',
+        'video/mp4', 'video/webm', 'video/ogg',
+        'application/pdf',
+        'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'text/plain',
+        'image/jpeg', 'image/jpg', 'image/png', 'image/gif'
+    ];
+    if (allowedTypes.includes(file.mimetype)) {
+        cb(null, true);
+    } else {
+        cb(new Error('Only audio, video, PDF, DOC, DOCX, TXT, and image files are allowed for training room attachments!'), false);
+    }
+};
+
+const uploadTrainingRoomAttachmentMiddleware = multer({
+    storage: trainingRoomFileStorage,
+    fileFilter: trainingRoomFileFilter,
+    limits: {
+        fileSize: 500 * 1024 * 1024 // 500MB limit for training materials
+    }
+}).single('trainingRoomAttachment');
+
 
 module.exports = (io) => {
   // --- CLIENT-SIDE NEGOTIATIONS ---
@@ -209,7 +253,6 @@ module.exports = (io) => {
 
   // CORRECTED: Allow admins to delete negotiations as well
   router.delete('/negotiations/:negotiationId', authMiddleware, (req, res, next) => {
-    // Allow both client and admin to delete negotiations
     if (req.user.userType !== 'client' && req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only clients or admins can cancel/delete negotiations.' });
     }
@@ -234,7 +277,6 @@ module.exports = (io) => {
   });
 
   // NEW: Chat Attachment Upload Route
-  // Apply Multer middleware and then the controller function
   router.post('/chat/upload-attachment', authMiddleware, uploadChatAttachment, handleChatAttachmentUpload, multerErrorHandler);
 
 
@@ -300,10 +342,8 @@ module.exports = (io) => {
     // Use uploadNegotiationFiles (from negotiationController) for file handling
     uploadNegotiationFiles(req, res, (multerErr) => {
       if (multerErr) {
-        // If Multer error occurs, pass it to the multerErrorHandler
         return multerErrorHandler(multerErr, req, res, next);
       }
-      // If no Multer error, proceed to the controller function
       clientCounterBack(req, res, io);
     });
   });
@@ -489,7 +529,6 @@ module.exports = (io) => {
   });
 
   // --- NEW: Admin Jobs Routes ---
-  // CORRECTED: Admin should be able to view all jobs
   router.get('/admin/jobs', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can view all jobs.' });
@@ -518,6 +557,14 @@ module.exports = (io) => {
       return res.status(403).json({ error: 'Access denied. Only clients can initiate payments.' });
     }
     initializePayment(req, res, io);
+  });
+
+  // NEW: Route for initializing training payment
+  router.post('/payment/initialize-training', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'trainee') {
+          return res.status(403).json({ error: 'Access denied. Only trainees can initiate training payments.' });
+      }
+      initializeTrainingPayment(req, res, io);
   });
 
   router.get('/payment/verify/:reference', authMiddleware, (req, res, next) => {
@@ -549,15 +596,6 @@ module.exports = (io) => {
   });
 
   // --- NEW: Rating Routes ---
-  // REMOVED: Client rating transcriber route
-  // router.post('/ratings/transcriber', authMiddleware, (req, res, next) => {
-  //   if (req.user.userType !== 'client') {
-  //     return res.status(403).json({ error: 'Access denied. Only clients can rate transcribers.' });
-  //   }
-  //   rateTranscriber(req, res, next);
-  // });
-
-  // UPDATED: Generic admin rating route for both clients and transcribers
   router.post('/admin/ratings', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only admins can rate users.' });
@@ -565,7 +603,6 @@ module.exports = (io) => {
     rateUserByAdmin(req, res, next);
   });
 
-  // Removed old client rating route
   router.get('/ratings/transcriber/:transcriberId', authMiddleware, (req, res, next) => {
     getTranscriberRatings(req, res, next);
   });
@@ -575,7 +612,6 @@ module.exports = (io) => {
   });
 
   // --- NEW: Direct Upload Job Routes ---
-  // Multer setup for direct upload files (moved from directUploadController for direct use here)
   const directUploadFileStorage = multer.diskStorage({
     destination: (req, file, cb) => {
       const uploadDir = 'uploads/direct_upload_files';
@@ -610,17 +646,15 @@ module.exports = (io) => {
     storage: directUploadFileStorage,
     fileFilter: directUploadFileFilter,
     limits: {
-      fileSize: 500 * 1024 * 1024 // 500MB limit
+      fileSize: 500 * 1024 * 1024
     }
   }).fields([
       { name: 'audioVideoFile', maxCount: 1 },
       { name: 'instructionFiles', maxCount: 5 }
   ]);
 
-  // Route to get an instant quote for a direct upload job
   router.post('/direct-upload/job/quote', authMiddleware, uploadDirectFilesMiddleware, (req, res, next) => {
     if (req.user.userType !== 'client') {
-      // Clean up uploaded files if access is denied
       if (req.files?.audioVideoFile?.[0]) {
         fs.unlink(req.files.audioVideoFile[0].path, (err) => { if (err) console.error("Error deleting temp audioVideoFile:", err); });
       }
@@ -631,12 +665,11 @@ module.exports = (io) => {
       }
       return res.status(403).json({ error: 'Access denied. Only clients can get quotes for direct upload jobs.' });
     }
-    handleQuoteCalculationRequest(req, res, io); // NEW: Call the dedicated controller function
-  }, multerErrorHandler); // Apply Multer error handler
+    handleQuoteCalculationRequest(req, res, io);
+  }, multerErrorHandler);
 
   router.post('/direct-upload/job', authMiddleware, uploadDirectFilesMiddleware, async (req, res, next) => {
     if (req.user.userType !== 'client') {
-      // Clean up uploaded files if access is denied
       if (req.files?.audioVideoFile?.[0]) {
         fs.unlink(req.files.audioVideoFile[0].path, (err) => { if (err) console.error("Error deleting temp audioVideoFile:", err); });
       }
@@ -648,7 +681,7 @@ module.exports = (io) => {
       return res.status(403).json({ error: 'Access denied. Only clients can create direct upload jobs.' });
     }
     createDirectUploadJob(req, res, io);
-  }, multerErrorHandler); // Apply Multer error handler here too
+  }, multerErrorHandler);
 
 
   router.get('/client/direct-jobs', authMiddleware, (req, res, next) => {
@@ -680,13 +713,44 @@ module.exports = (io) => {
     completeDirectUploadJob(req, res, io);
   });
 
-  // NEW: Admin Direct Upload Jobs History Route
   router.get('/admin/direct-upload-jobs', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only admins can view all direct upload jobs.' });
     }
     getAllDirectUploadJobsForAdmin(req, res, io);
   });
+
+  // --- NEW: Trainee Training Dashboard Routes ---
+  router.get('/trainee/status', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'trainee' && req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only trainees or admins can view trainee status.' });
+      }
+      getTraineeTrainingStatus(req, res, next);
+  });
+
+  router.get('/trainee/materials', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'trainee' && req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only trainees or admins can view training materials.' });
+      }
+      getTrainingMaterials(req, res, next);
+  });
+
+  router.get('/trainee/training-room/messages/:chatId', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'trainee' && req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only trainees or admins can view training room messages.' });
+      }
+      getTraineeTrainingRoomMessages(req, res, io);
+  });
+
+  router.post('/trainee/training-room/send-message', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'trainee' && req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only trainees or admins can send training room messages.' });
+      }
+      sendTraineeTrainingRoomMessage(req, res, io);
+  });
+
+  // NEW: Training Room Attachment Upload Route
+  router.post('/trainee/training-room/upload-attachment', authMiddleware, uploadTrainingRoomAttachmentMiddleware, uploadTrainingRoomAttachment, multerErrorHandler);
 
 
   return router;

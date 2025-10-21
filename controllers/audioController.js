@@ -2,8 +2,8 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const ffprobe = require('node-ffprobe'); // For getting audio/video metadata
-const supabase = require('../database');
-const emailService = require('../emailService'); // For sending notifications
+const supabase = require('..//database');
+const emailService = require('..//emailService'); // For sending notifications
 const util = require('util');
 
 // Promisify fs.unlink for async file deletion

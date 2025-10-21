@@ -2,11 +2,11 @@ const supabase = require('..//database');
 const path = require('path');
 const fs = require('fs');
 const emailService = require('..//emailService');
-const { updateAverageRating } = require('./ratingController');
+const { updateAverageRating } = require('./ratingController'); // This will also need updating later
 const { calculateTranscriberEarning } = require('..//utils/paymentUtils'); // Import calculateTranscriberEarning
 const { getNextFriday } = require('..//utils/paymentUtils'); // Import getNextFriday
 
-// Utility function to sync availability status between 'users' and 'transcribers' tables
+// Utility function to sync availability status (updates 'users' table only)
 const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) => {
     const updateData = {
         is_available: isAvailable,
@@ -15,7 +15,7 @@ const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) 
     };
 
     try {
-        // Update 'users' table (primary source for availability status)
+        // FIX: Only update 'users' table for availability flags
         const { error: userError } = await supabase
             .from('users')
             .update(updateData)
@@ -25,42 +25,34 @@ const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) 
             console.error(`Supabase error updating user availability in 'users' table for ${userId}:`, userError);
             throw userError;
         }
-
-        // Also update 'transcribers' table for consistency
-        const { error: transcriberError } = await supabase
-            .from('transcribers')
-            .update(updateData)
-            .eq('id', userId);
-
-        if (transcriberError) {
-            console.warn(`Transcribers table availability sync warning for ${userId}:`, transcriberError);
-        }
-        console.log(`Transcriber ${userId} availability synced: is_available=${isAvailable}, current_job_id=${currentJobId}`);
+        console.log(`User ${userId} availability synced: is_available=${isAvailable}, current_job_id=${currentJobId}`);
     } catch (error) {
         console.error(`syncAvailabilityStatus: Uncaught error for user ${userId}:`, error);
         throw error;
     }
 };
 
-// NEW: Function to set a transcriber's online status in the 'users' table
+// Function to set a user's online status (updates 'users' table only)
 const setOnlineStatus = async (userId, isOnline) => {
+    console.log(`[setOnlineStatus] Attempting to set user ${userId} is_online to ${isOnline}`);
     try {
-        const { error } = await supabase
+        // FIX: Only update 'users' table for is_online
+        const { data, error } = await supabase
             .from('users')
             .update({ is_online: isOnline, updated_at: new Date().toISOString() })
             .eq('id', userId)
             .eq('user_type', 'transcriber'); // Ensure this only affects transcriber records
 
         if (error) {
-            console.error(`Error setting online status for user ${userId} to ${isOnline}:`, error);
+            console.error(`[setOnlineStatus] Supabase error setting online status for user ${userId} to ${isOnline}:`, error);
             throw error;
         }
-        console.log(`User ${userId} is_online status set to ${isOnline}.`);
+        console.log(`[setOnlineStatus] User ${userId} is_online status successfully set to ${isOnline}. Supabase response data:`, data);
 
         // NEW LOGIC: When a transcriber goes online, ensure their availability status is correct.
         // If they are online and not assigned to a job, they should be available.
         if (isOnline) {
-            // Fetch current availability status
+            // Fetch current availability status from the USERS table
             const { data: userProfile, error: fetchUserError } = await supabase
                 .from('users')
                 .select('is_available, current_job_id') // Check primary availability flags
@@ -68,20 +60,20 @@ const setOnlineStatus = async (userId, isOnline) => {
                 .single();
 
             if (fetchUserError) {
-                console.error(`Error fetching user profile for availability check on login for ${userId}:`, fetchUserError);
+                console.error(`[setOnlineStatus] Error fetching user profile for availability check on login for ${userId}:`, fetchUserError);
                 // Don't throw, just log and continue, as setting online status was successful.
             } else if (userProfile) {
                 // If they are not available AND not assigned to a job (inconsistent state), make them available.
                 // This handles cases where is_available was incorrectly left as FALSE from a previous session or bug.
                 if (!userProfile.is_available && !userProfile.current_job_id) {
                     await syncAvailabilityStatus(userId, true, null);
-                    console.log(`Corrected inconsistent availability status for user ${userId} on login: set is_available=TRUE, current_job_id=NULL.`);
+                    console.log(`[setOnlineStatus] Corrected inconsistent availability status for user ${userId} on login: set is_available=TRUE, current_job_id=NULL.`);
                 }
             }
         }
 
     } catch (error) {
-        console.error('setOnlineStatus error:', error);
+        console.error('[setOnlineStatus] Uncaught error:', error);
         throw error;
     }
 };
@@ -160,23 +152,23 @@ const checkTestStatus = async (req, res) => {
         return res.status(400).json({ error: 'User ID is required.' });
     }
 
-    // Fetch transcriber status and profile details from the 'transcribers' table
-    const { data: transcriberProfile, error: profileError } = await supabase
-      .from('transcribers') // Query the 'transcribers' table
-      .select('status, user_level, mpesa_number, paypal_email') // Include payment details
-      .eq('id', userId) // The 'id' in transcribers table corresponds to the user's ID
+    // FIX: Fetch transcriber profile details directly from the 'users' table
+    const { data: userProfile, error: profileError } = await supabase
+      .from('users') // Query the 'users' table
+      .select('transcriber_status, transcriber_user_level, transcriber_mpesa_number, transcriber_paypal_email') // Select specific transcriber fields
+      .eq('id', userId) // The 'id' in users table
+      .eq('user_type', 'transcriber') // Ensure it's a transcriber
       .single();
 
     if (profileError) {
         console.error(`[checkTestStatus] Supabase error fetching transcriber profile for user ${userId}:`, profileError);
-        // Return 404 if profile not found, 500 for other errors
         if (profileError.code === 'PGRST116') { // No rows found
              console.warn(`[checkTestStatus] Transcriber profile not found for user ${userId}.`);
              return res.status(404).json({ error: 'Transcriber profile not found for this user.' });
         }
-        throw profileError; // Re-throw other Supabase errors
+        throw profileError;
     }
-    if (!transcriberProfile) { // Defensive check
+    if (!userProfile) { // Defensive check
         console.warn(`[checkTestStatus] Transcriber profile not found for user ${userId} (after initial check).`);
         return res.status(404).json({ error: 'Transcriber profile not found for this user.' });
     }
@@ -184,42 +176,41 @@ const checkTestStatus = async (req, res) => {
     // Fetch the latest test submission for the user
     const { data: testSubmission, error: testSubmissionError } = await supabase
       .from('test_submissions')
-      .select('*') // Select all columns for the submission
-      .eq('user_id', userId) // Correctly query by user_id in test_submissions
-      .order('created_at', { ascending: false }) // Get the latest submission
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
       .limit(1)
       .single();
 
-    // Handle case where no test submission is found (PGRST116 is the Supabase error code for "no rows found")
     if (testSubmissionError && testSubmissionError.code !== 'PGRST116') {
         console.error(`[checkTestStatus] Supabase error fetching test submission for user ${userId}:`, testSubmissionError);
-        throw testSubmissionError; // Throw error if it's not a "not found" error
+        throw testSubmissionError;
     }
 
     // Return the combined information
     res.json({
-      user_status: transcriberProfile.status, // Status from transcriber profile (e.g., pending_assessment, active_transcriber)
-      user_level: transcriberProfile.user_level, // e.g., 'transcriber'
-      mpesa_number: transcriberProfile.mpesa_number, // Include payment details
-      paypal_email: transcriberProfile.paypal_email, // Include payment details
-      test_submission: testSubmission || null, // Ensure it's null if no submission found
-      has_submitted_test: !!testSubmission // Boolean indicating if a test has been submitted
+      user_status: userProfile.transcriber_status, // Status from users table
+      user_level: userProfile.transcriber_user_level, // Level from users table
+      mpesa_number: userProfile.transcriber_mpesa_number, // Payment details from users table
+      paypal_email: userProfile.transcriber_paypal_email, // Payment details from users table
+      test_submission: testSubmission || null,
+      has_submitted_test: !!testSubmission
     });
 
   } catch (error) {
-    console.error('[checkTestStatus] Error checking test status: ', error.message || error); // Log full error message
+    console.error('[checkTestStatus] Error checking test status: ', error.message || error);
     res.status(500).json({ error: error.message || 'Server error checking transcriber status.' });
   }
 };
 
-// Get transcriber's negotiations - FIXED VERSION
+// Get transcriber's negotiations - FIXED VERSION (will need further updates for nested client/transcriber data)
 const getTranscriberNegotiations = async (req, res) => {
   try {
     const transcriberId = req.user.userId;
 
     console.log('Get transcriber negotiations for:', transcriberId);
 
-    // Fetch negotiations associated with the transcriber, joining with client details from the 'users' table
+    // FIX: Join with 'users' table to get all client and transcriber profile data
     const { data: negotiations, error: negotiationsError } = await supabase
       .from('negotiations')
       .select(`
@@ -228,6 +219,7 @@ const getTranscriberNegotiations = async (req, res) => {
         agreed_price_usd,
         requirements,
         deadline_hours,
+        due_date,
         client_message,
         transcriber_response,
         negotiation_files,
@@ -236,18 +228,33 @@ const getTranscriberNegotiations = async (req, res) => {
         client:users!client_id (
             id,
             full_name,
-            email
+            email,
+            phone,
+            client_average_rating,
+            client_completed_jobs,
+            client_comment
+        ),
+        transcriber:users!transcriber_id (
+            id,
+            full_name,
+            email,
+            phone,
+            transcriber_status,
+            transcriber_user_level,
+            transcriber_average_rating,
+            transcriber_completed_jobs,
+            transcriber_mpesa_number,
+            transcriber_paypal_email
         )
       `)
       .eq('transcriber_id', transcriberId)
-      .order('created_at', { ascending: false }); // Order by creation date, newest first
+      .order('created_at', { ascending: false });
 
     if (negotiationsError) {
       console.error('Transcriber negotiations query error:', negotiationsError);
       throw negotiationsError;
     }
 
-    // Handle case where no negotiations are found
     if (!negotiations || negotiations.length === 0) {
       return res.json({
         message: 'No negotiations found',
@@ -255,22 +262,39 @@ const getTranscriberNegotiations = async (req, res) => {
       });
     }
 
-    // Restructure data to match frontend's expected format, ensuring client info is nested correctly
+    // Restructure data to match frontend's expected format
     const negotiationsWithClients = negotiations.map(negotiation => {
-        const { client, ...rest } = negotiation; // Destructure to separate client info
+        const { client, transcriber, ...rest } = negotiation; // Destructure client and transcriber data
         return {
-            ...rest, // Include all negotiation details
-            client_info: client ? { // Nest client details under 'client_info'
+            ...rest,
+            client_info: client ? {
                 id: client.id,
                 full_name: client.full_name,
-                client_rating: 5.0, // Default rating since we don't have this in users table here
                 email: client.email,
-            } : { // Fallback if client data is missing
+                phone: client.phone,
+                client_rating: client.client_average_rating || 5.0, // Use client_average_rating
+                client_completed_jobs: client.client_completed_jobs || 0, // NEW: client_completed_jobs
+                client_comment: client.client_comment || null, // NEW: client_comment
+            } : {
                 id: negotiation.client_id,
                 full_name: 'Unknown Client',
-                client_rating: 5.0,
                 email: 'unknown@example.com',
-            }
+                client_rating: 5.0,
+                client_completed_jobs: 0,
+                client_comment: null,
+            },
+            transcriber_info: transcriber ? { // Include transcriber's own profile info if needed
+                id: transcriber.id,
+                full_name: transcriber.full_name,
+                email: transcriber.email,
+                phone: transcriber.phone,
+                status: transcriber.transcriber_status,
+                user_level: transcriber.transcriber_user_level,
+                average_rating: transcriber.transcriber_average_rating || 0.0,
+                completed_jobs: transcriber.transcriber_completed_jobs || 0,
+                mpesa_number: transcriber.transcriber_mpesa_number,
+                paypal_email: transcriber.transcriber_paypal_email,
+            } : null // Transcriber info should always be present for transcriber's own negotiation list
         };
     });
 
@@ -298,7 +322,7 @@ const acceptNegotiation = async (req, res, next, io) => {
         // Fetch transcriber's current availability status from the 'users' table
         const { data: userProfile, error: fetchUserError } = await supabase
             .from('users')
-            .select('is_available, current_job_id') // Check primary availability flags
+            .select('is_available, current_job_id, transcriber_status') // FIX: Select transcriber_status for checks
             .eq('id', transcriberId)
             .eq('user_type', 'transcriber')
             .single();
@@ -308,7 +332,10 @@ const acceptNegotiation = async (req, res, next, io) => {
             return res.status(404).json({ error: 'User profile not found.' });
         }
 
-        // Check if the transcriber is already busy or manually unavailable
+        // Check if the transcriber is active and available
+        if (userProfile.transcriber_status !== 'active_transcriber') { // FIX: Check transcriber_status from 'users'
+            return res.status(403).json({ error: 'You are not an active transcriber. Please complete your assessment.' });
+        }
         if (!userProfile.is_available || userProfile.current_job_id) {
              return res.status(409).json({ error: 'You are currently busy or have an ongoing job. Please update your status before accepting a new job.' });
         }
@@ -334,20 +361,19 @@ const acceptNegotiation = async (req, res, next, io) => {
         // Update the negotiation status to 'accepted_awaiting_payment'
         const { error: negError, count } = await supabase
             .from('negotiations')
-            .update({ status: 'accepted_awaiting_payment', updated_at: new Date().toISOString() }) // Changed status to 'accepted_awaiting_payment'
+            .update({ status: 'accepted_awaiting_payment', updated_at: new Date().toISOString() })
             .eq('id', negotiationId)
             .eq('transcriber_id', transcriberId)
-            .eq('status', 'pending') // Conditional update based on current status
-            .select('*', { count: 'exact' }); // Use select with count to check if update affected a row
+            .eq('status', 'pending')
+            .select('*', { count: 'exact' });
 
         if (negError) {
             console.error(`[acceptNegotiation] Supabase error updating negotiation ${negotiationId} status:`, negError);
             throw negError;
         }
 
-        // Check if the update actually affected a row (handles race conditions)
         if (count === 0) {
-            return res.status(409).json({ error: 'Negotiation was not found, or its status is no longer pending. This could be a race condition.' });
+            return res.status(409).json({ error: 'Negotiation was not found, or its status is no longer pending. This could be a race, or the negotiation was already accepted/deleted.' });
         }
 
         // Send a real-time notification to the client about the acceptance
@@ -356,13 +382,13 @@ const acceptNegotiation = async (req, res, next, io) => {
                 negotiationId: negotiationId,
                 transcriberId: transcriberId,
                 message: `Your negotiation request (ID: ${negotiationId}) was accepted by a transcriber. Awaiting payment.`,
-                newStatus: 'accepted_awaiting_payment' // CORRECTED: Inform frontend of the status change
+                newStatus: 'accepted_awaiting_payment'
             });
             console.log(`Emitted 'negotiation_accepted' to client ${negotiationToAccept.client_id}`);
         }
 
         res.status(200).json({
-            message: 'Negotiation accepted successfully. Awaiting client payment.', // CORRECTED: Transcriber-side message
+            message: 'Negotiation accepted successfully. Awaiting client payment.',
             jobId: negotiationId
         });
 
@@ -376,7 +402,7 @@ const acceptNegotiation = async (req, res, next, io) => {
 const rejectNegotiation = async (req, res, next, io) => {
     const { negotiationId } = req.params;
     const transcriberId = req.user.userId;
-    const transcriberResponse = req.body.transcriber_response || 'Transcriber rejected the offer.'; // Default rejection reason
+    const transcriberResponse = req.body.transcriber_response || 'Transcriber rejected the offer.';
 
     if (!negotiationId) {
         return res.status(400).json({ error: 'Negotiation ID is required.' });
@@ -388,7 +414,7 @@ const rejectNegotiation = async (req, res, next, io) => {
             .from('negotiations')
             .select('client_id, status')
             .eq('id', negotiationId)
-            .eq('transcriber_id', transcriberId) // Ensure it's assigned to this transcriber
+            .eq('transcriber_id', transcriberId)
             .single();
 
         if (fetchNegError || !negotiationToReject) {
@@ -396,22 +422,20 @@ const rejectNegotiation = async (req, res, next, io) => {
             return res.status(404).json({ error: 'Negotiation not found or not assigned to you.' });
         }
 
-        // Ensure the negotiation is in a 'pending' state before rejection
         if (negotiationToReject.status !== 'pending') {
             return res.status(409).json({ error: 'Negotiation is no longer pending. Current status: ' + negotiationToReject.status });
         }
 
-        // Update negotiation status to 'rejected' and store the transcriber's response
         const { error: negError, count } = await supabase
             .from('negotiations')
             .update({
                 status: 'rejected',
-                transcriber_response: transcriberResponse, // Store the rejection reason
+                transcriber_response: transcriberResponse,
                 updated_at: new Date().toISOString()
             })
             .eq('id', negotiationId)
             .eq('transcriber_id', transcriberId)
-            .eq('status', 'pending') // Conditional update
+            .eq('status', 'pending')
             .select('*', { count: 'exact' });
 
         if (negError) {
@@ -423,13 +447,12 @@ const rejectNegotiation = async (req, res, next, io) => {
             return res.status(404).json({ error: 'Negotiation not found or not in pending status. This could be a race condition.' });
         }
 
-        // Send a real-time notification to the client about the rejection
         if (io) {
             io.to(negotiationToReject.client_id).emit('negotiation_rejected', {
                 negotiationId: negotiationId,
                 transcriberId: transcriberId,
                 message: `Your negotiation request (ID: ${negotiationId}) was rejected by a transcriber. Reason: ${transcriberResponse}`,
-                newStatus: 'rejected' // Inform frontend of the status change
+                newStatus: 'rejected'
             });
             console.log(`Emitted 'negotiation_rejected' to client ${negotiationToReject.client_id}`);
         }
@@ -445,16 +468,14 @@ const rejectNegotiation = async (req, res, next, io) => {
 // Counter Negotiation
 const counterNegotiation = async (req, res, next, io) => {
     const { negotiationId } = req.params;
-    const { proposed_price_usd, deadline_hours, transcriber_response } = req.body; // Changed to proposed_price_usd
+    const { proposed_price_usd, deadline_hours, transcriber_response } = req.body;
     const transcriberId = req.user.userId;
 
-    // Validate input fields
-    if (!negotiationId || !proposed_price_usd || !deadline_hours) { // Changed to proposed_price_usd
+    if (!negotiationId || !proposed_price_usd || !deadline_hours) {
         return res.status(400).json({ error: 'Negotiation ID, proposed price, and deadline hours are required for a counter-offer.' });
     }
 
-    // Parse and validate numeric inputs
-    const parsedPrice = parseFloat(proposed_price_usd); // Changed to proposed_price_usd
+    const parsedPrice = parseFloat(proposed_price_usd);
     const parsedDeadline = parseInt(deadline_hours, 10);
 
     if (isNaN(parsedPrice) || parsedPrice <= 0 || isNaN(parsedDeadline) || parsedDeadline <= 0) {
@@ -462,12 +483,11 @@ const counterNegotiation = async (req, res, next, io) => {
     }
 
     try {
-        // Fetch negotiation details to verify assignment and current status
         const { data: negotiationToCounter, error: fetchNegError } = await supabase
             .from('negotiations')
             .select('client_id, status')
             .eq('id', negotiationId)
-            .eq('transcriber_id', transcriberId) // Ensure it's assigned to this transcriber
+            .eq('transcriber_id', transcriberId)
             .single();
 
         if (fetchNegError || !negotiationToCounter) {
@@ -475,24 +495,22 @@ const counterNegotiation = async (req, res, next, io) => {
             return res.status(404).json({ error: 'Negotiation not found or not assigned to you.' });
         }
 
-        // Ensure the negotiation is in a 'pending' state before countering
         if (negotiationToCounter.status !== 'pending') {
             return res.status(409).json({ error: 'Negotiation is no longer pending. Current status: ' + negotiationToCounter.status });
         }
 
-        // Update negotiation with counter-offer details and set status to 'transcriber_counter'
         const { error: negError, count } = await supabase
             .from('negotiations')
             .update({
-                status: 'transcriber_counter', // Status indicating transcriber's counter-offer
-                agreed_price_usd: parsedPrice, // Changed to agreed_price_usd
+                status: 'transcriber_counter',
+                agreed_price_usd: parsedPrice,
                 deadline_hours: parsedDeadline,
-                transcriber_response: transcriber_response || `Transcriber proposed USD ${parsedPrice} with a ${parsedDeadline} hour deadline.`, // Changed to USD
+                transcriber_response: transcriber_response || `Transcriber proposed USD ${parsedPrice} with a ${parsedDeadline} hour deadline.`,
                 updated_at: new Date().toISOString()
             })
             .eq('id', negotiationId)
             .eq('transcriber_id', transcriberId)
-            .eq('status', 'pending') // Conditional update
+            .eq('status', 'pending')
             .select('*', { count: 'exact' });
 
         if (negError) {
@@ -504,15 +522,14 @@ const counterNegotiation = async (req, res, next, io) => {
             return res.status(404).json({ error: 'Negotiation not found or not in pending status. This could be a race condition.' });
         }
 
-        // Send a real-time notification to the client about the counter-offer
         if (io) {
             io.to(negotiationToCounter.client_id).emit('negotiation_countered', {
                 negotiationId: negotiationId,
                 transcriberId: transcriberId,
                 newPrice: parsedPrice,
                 newDeadline: parsedDeadline,
-                message: `Your negotiation request (ID: ${negotiationId}) received a counter-offer: USD ${parsedPrice}, ${parsedDeadline} hours. ${transcriber_response ? `Transcriber's message: ${transcriber_response}` : ''}`, // Changed to USD
-                newStatus: 'transcriber_counter' // Indicate the new status
+                message: `Your negotiation request (ID: ${negotiationId}) received a counter-offer: USD ${parsedPrice}, ${parsedDeadline} hours. ${transcriber_response ? `Transcriber's message: ${transcriber_response}` : ''}`,
+                newStatus: 'transcriber_counter'
             });
             console.log(`Emitted 'negotiation_countered' to client ${negotiationToCounter.client_id}`);
         }
@@ -535,7 +552,6 @@ const completeJob = async (req, res, next, io) => {
     }
 
     try {
-        // Verify the negotiation belongs to this transcriber and is in an active state ('accepted' or 'hired')
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
             .select('client_id, status')
@@ -548,12 +564,10 @@ const completeJob = async (req, res, next, io) => {
             return res.status(404).json({ error: 'Job not found or not assigned to you.' });
         }
 
-        // Check if the job is in a state that can be completed
         if (negotiation.status !== 'accepted' && negotiation.status !== 'hired' && negotiation.status !== 'accepted_awaiting_payment') {
             return res.status(409).json({ error: 'Job is not in an active state. Only active jobs can be marked complete. Current status: ' + negotiation.status });
         }
 
-        // Update negotiation status to 'completed'
         const { error: updateError } = await supabase
             .from('negotiations')
             .update({
@@ -568,32 +582,28 @@ const completeJob = async (req, res, next, io) => {
         }
 
         // --- NEW: Create transcriber_payouts record upon job completion ---
-        // 1. Fetch the corresponding payment record to get transcriber_earning and other details
         const { data: paymentRecord, error: paymentFetchError } = await supabase
             .from('payments')
             .select('id, transcriber_id, negotiation_id, amount, transcriber_earning, currency')
             .eq('negotiation_id', negotiationId)
             .eq('transcriber_id', transcriberId)
-            .eq('payout_status', 'awaiting_completion') // Ensure we fetch the one awaiting payout
+            .eq('payout_status', 'awaiting_completion')
             .single();
 
         if (paymentFetchError || !paymentRecord) {
             console.error(`[completeJob] Error fetching payment record for negotiation ${negotiationId} to create payout:`, paymentFetchError);
-            // Even if payout record creation fails, proceed with other updates, but log error
-            // This might mean manual intervention is needed for this payout.
         } else {
-            // 2. Insert record into transcriber_payouts table
             const { data: payoutRecord, error: payoutError } = await supabase
                 .from('transcriber_payouts')
                 .insert([
                     {
                         transcriber_id: paymentRecord.transcriber_id,
-                        payment_id: paymentRecord.id, // Link to the existing payment record
+                        payment_id: paymentRecord.id,
                         negotiation_id: paymentRecord.negotiation_id,
-                        amount: paymentRecord.transcriber_earning, // Use the already calculated earning
-                        currency: paymentRecord.currency, // Use the currency from payment record (USD)
-                        status: 'pending', // Initial status for payout (ready to be paid)
-                        due_date: getNextFriday(), // Set due date for this payout
+                        amount: paymentRecord.transcriber_earning,
+                        currency: paymentRecord.currency,
+                        status: 'pending',
+                        due_date: getNextFriday(),
                     }
                 ])
                 .select()
@@ -603,7 +613,6 @@ const completeJob = async (req, res, next, io) => {
                 console.error(`[completeJob] Error recording transcriber payout for negotiation ${negotiationId}:`, payoutError);
             } else {
                 console.log(`[completeJob] Recorded payout for transcriber ${paymentRecord.transcriber_id}:`, payoutRecord);
-                // Optionally update the payment record's payout_status to 'pending' (ready for payout)
                 await supabase.from('payments').update({ payout_status: 'pending' }).eq('id', paymentRecord.id);
             }
         }
@@ -611,15 +620,14 @@ const completeJob = async (req, res, next, io) => {
 
 
         // UPDATED: Sync availability status - make transcriber available again and clear current job ID
-        await syncAvailabilityStatus(transcriberId, true, null); // Set is_available to true, clear current_job_id
+        await syncAvailabilityStatus(transcriberId, true, null);
 
-        // Send a real-time notification to the client that the job is completed
         if (io) {
             io.to(negotiation.client_id).emit('job_completed', {
                 negotiationId: negotiationId,
                 transcriberId: transcriberId,
                 message: `Your transcription job (ID: ${negotiationId}) has been completed!`,
-                newStatus: 'completed' // Indicate the new status
+                newStatus: 'completed'
             });
             console.log(`Emitted 'job_completed' to client ${negotiation.client_id}`);
         }
@@ -653,8 +661,8 @@ const getTranscriberUpcomingPayouts = async (req, res) => {
                 negotiation:negotiations(requirements, client_id, client:users!client_id(full_name))
             `)
             .eq('transcriber_id', transcriberId)
-            .eq('status', 'pending') // Only fetch pending payouts
-            .order('due_date', { ascending: true }); // Order by earliest due date
+            .eq('status', 'pending')
+            .order('due_date', { ascending: true });
 
         if (error) {
             console.error(`[getTranscriberUpcomingPayouts] Supabase error fetching payouts for transcriber ${transcriberId}:`, error);
@@ -666,7 +674,7 @@ const getTranscriberUpcomingPayouts = async (req, res) => {
         let totalUpcomingPayouts = 0;
 
         (payouts || []).forEach(payout => {
-            const weekEndDate = new Date(payout.due_date).toLocaleDateString(); // Use local date string for grouping
+            const weekEndDate = new Date(payout.due_date).toLocaleDateString();
             if (!groupedPayouts[weekEndDate]) {
                 groupedPayouts[weekEndDate] = {
                     date: weekEndDate,
@@ -706,35 +714,41 @@ const getTranscriberUpcomingPayouts = async (req, res) => {
 
 // NEW: Function for transcribers to update their profile (including payment details)
 const updateTranscriberProfile = async (req, res) => {
-    const { userId } = req.params; // ID of the profile to update
-    const { mpesa_number, paypal_email } = req.body;
-    const currentUserId = req.user.userId; // User making the request (from JWT)
+    const { userId } = req.params;
+    const { transcriber_mpesa_number, transcriber_paypal_email, transcriber_status, transcriber_user_level } = req.body; // FIX: Destructure new fields
+    const currentUserId = req.user.userId;
 
-    // Authorization check: User must be the owner or an admin
     if (userId !== currentUserId && req.user.userType !== 'admin') {
         return res.status(403).json({ error: 'Unauthorized to update this transcriber profile.' });
     }
 
     try {
-        // Prepare update data, including only fields that are provided
-        const updateData = { updated_at: new Date().toISOString() };
-        if (mpesa_number !== undefined) updateData.mpesa_number = mpesa_number;
-        if (paypal_email !== undefined) updateData.paypal_email = paypal_email;
+        // Prepare update data for the 'users' table
+        const userUpdateData = { updated_at: new Date().toISOString() };
+        if (transcriber_mpesa_number !== undefined) userUpdateData.transcriber_mpesa_number = transcriber_mpesa_number;
+        if (transcriber_paypal_email !== undefined) userUpdateData.transcriber_paypal_email = transcriber_paypal_email;
+        if (transcriber_status !== undefined) userUpdateData.transcriber_status = transcriber_status; // NEW: Update transcriber_status
+        if (transcriber_user_level !== undefined) userUpdateData.transcriber_user_level = transcriber_user_level; // NEW: Update transcriber_user_level
 
-        // Update the 'transcribers' table and select relevant fields to return
-        const { data, error } = await supabase
-            .from('transcribers')
-            .update(updateData)
+        // Update the 'users' table and select relevant fields to return
+        const { data: updatedUser, error } = await supabase
+            .from('users')
+            .update(userUpdateData)
             .eq('id', userId)
-            .select('id, mpesa_number, paypal_email, average_rating, completed_jobs, badges, user_level, status') // Select fields to return
+            .eq('user_type', 'transcriber') // Ensure this is for a transcriber
+            .select('*') // Select all updated columns to return the full user object
             .single();
 
         if (error) throw error;
-        if (!data) return res.status(404).json({ error: 'Transcriber profile not found.' });
+        if (!updatedUser) return res.status(404).json({ error: 'Transcriber user not found or not a transcriber.' });
+
+        // No need to update 'transcribers' table for profile data anymore.
+
+        const { password_hash, ...userWithoutPasswordHash } = updatedUser; // Remove password_hash for security
 
         res.status(200).json({
             message: 'Transcriber profile updated successfully.',
-            profile: data // Return the updated profile data
+            profile: userWithoutPasswordHash // Return the full updated user object
         });
 
     } catch (error) {
