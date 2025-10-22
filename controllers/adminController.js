@@ -361,6 +361,44 @@ const getAnyUserById = async (req, res) => {
     }
 };
 
+// NEW: Function to delete a user
+const deleteUser = async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        // First, check if the user exists
+        const { data: existingUser, error: fetchError } = await supabase
+            .from('users')
+            .select('id, full_name')
+            .eq('id', userId)
+            .single();
+
+        if (fetchError || !existingUser) {
+            console.error(`Error finding user ${userId} for deletion:`, fetchError);
+            return res.status(404).json({ error: 'User not found.' });
+        }
+
+        // Delete the user from the 'users' table
+        // IMPORTANT: Ensure your Supabase foreign key constraints are set to ON DELETE CASCADE
+        // for all related tables (e.g., test_submissions, negotiations, messages, payments, ratings, transcribers, clients)
+        // to prevent orphaned records and maintain data integrity.
+        const { error: deleteError } = await supabase
+            .from('users')
+            .delete()
+            .eq('id', userId);
+
+        if (deleteError) {
+            console.error(`Error deleting user ${userId}:`, deleteError);
+            throw deleteError;
+        }
+
+        res.status(200).json({ message: `User '${existingUser.full_name}' (ID: ${userId}) deleted successfully.` });
+    } catch (error) {
+        console.error('Error in deleteUser:', error);
+        res.status(500).json({ error: error.message || 'Server error deleting user.' });
+    }
+};
+
 // --- Admin Global Settings ---
 
 // Get admin settings (e.g., default prices, deadlines)
@@ -576,6 +614,7 @@ module.exports = {
     getAllUsersForAdmin,
     getUserByIdForAdmin,
     getAnyUserById,
+    deleteUser, // NEW: Export the deleteUser function
     getAdminSettings,
     updateAdminSettings,
     getAllJobsForAdmin,

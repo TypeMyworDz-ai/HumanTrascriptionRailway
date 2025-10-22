@@ -37,6 +37,7 @@ const {
     getAnyUserById,
     approveTranscriberTest,
     rejectTranscriberTest,
+    deleteUser, // NEW: Import deleteUser
     getAdminSettings,
     updateAdminSettings,
     getAllJobsForAdmin,
@@ -96,9 +97,14 @@ const {
 const {
     getTraineeTrainingStatus,
     getTrainingMaterials,
+    createTrainingMaterial, // NEW: Import createTrainingMaterial
+    updateTrainingMaterial, // NEW: Import updateTrainingMaterial
+    deleteTrainingMaterial, // NEW: Import deleteTrainingMaterial
     getTraineeTrainingRoomMessages,
     sendTraineeTrainingRoomMessage,
-    uploadTrainingRoomAttachment // NEW: Import uploadTrainingRoomAttachment
+    uploadTrainingRoomAttachment, // NEW: Import uploadTrainingRoomAttachment
+    handleTrainingRoomAttachmentUpload, // NEW: Import handleTrainingRoomAttachmentUpload
+    completeTraining // NEW: Import completeTraining
 } = require('../controllers/trainingController');
 
 // Import multer for direct use in this file for error handling
@@ -471,6 +477,13 @@ module.exports = (io) => {
       getUserByIdForAdmin(req, res, next);
   });
 
+  router.delete('/admin/users/:userId', authMiddleware, (req, res, next) => { // NEW: Delete user route
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can delete users.' });
+      }
+      deleteUser(req, res, next);
+  });
+
   router.get('/users/:userId', authMiddleware, (req, res, next) => {
       getAnyUserById(req, res, next);
   });
@@ -729,10 +742,33 @@ module.exports = (io) => {
   });
 
   router.get('/trainee/materials', authMiddleware, (req, res, next) => {
+      // Allow trainees and admins to view materials
       if (req.user.userType !== 'trainee' && req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only trainees or admins can view training materials.' });
       }
       getTrainingMaterials(req, res, next);
+  });
+
+  // NEW: Admin routes for managing training materials (Knowledge Base)
+  router.post('/admin/training-materials', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can create training materials.' });
+      }
+      createTrainingMaterial(req, res, next);
+  });
+
+  router.put('/admin/training-materials/:materialId', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can update training materials.' });
+      }
+      updateTrainingMaterial(req, res, next);
+  });
+
+  router.delete('/admin/training-materials/:materialId', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can delete training materials.' });
+      }
+      deleteTrainingMaterial(req, res, next);
   });
 
   router.get('/trainee/training-room/messages/:chatId', authMiddleware, (req, res, next) => {
@@ -750,8 +786,15 @@ module.exports = (io) => {
   });
 
   // NEW: Training Room Attachment Upload Route
-  router.post('/trainee/training-room/upload-attachment', authMiddleware, uploadTrainingRoomAttachmentMiddleware, uploadTrainingRoomAttachment, multerErrorHandler);
+  router.post('/trainee/training-room/upload-attachment', authMiddleware, uploadTrainingRoomAttachmentMiddleware, handleTrainingRoomAttachmentUpload, multerErrorHandler);
 
+  // NEW: Admin route to complete trainee training
+  router.put('/admin/trainee/:traineeId/complete-training', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'admin') {
+          return res.status(403).json({ error: 'Access denied. Only admins can complete trainee training.' });
+      }
+      completeTraining(req, res, next);
+  });
 
   return router;
 };

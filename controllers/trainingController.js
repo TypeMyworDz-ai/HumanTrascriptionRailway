@@ -125,6 +125,86 @@ const getTrainingMaterials = async (req, res) => {
     }
 };
 
+// NEW: Admin function to create a new training material
+const createTrainingMaterial = async (req, res) => {
+    try {
+        const { title, description, link, order_index } = req.body;
+
+        if (!title || !link) {
+            return res.status(400).json({ error: 'Title and link are required for a new training material.' });
+        }
+
+        const { data, error } = await supabase
+            .from('training_materials')
+            .insert([{ title, description, link, order_index }])
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.status(201).json({ message: 'Training material created successfully.', material: data });
+    } catch (error) {
+        console.error('Error in createTrainingMaterial:', error);
+        res.status(500).json({ error: error.message || 'Server error creating training material.' });
+    }
+};
+
+// NEW: Admin function to update an existing training material
+const updateTrainingMaterial = async (req, res) => {
+    try {
+        const { materialId } = req.params;
+        const { title, description, link, order_index } = req.body;
+
+        if (!title || !link) {
+            return res.status(400).json({ error: 'Title and link are required for a training material update.' });
+        }
+
+        const { data, error } = await supabase
+            .from('training_materials')
+            .update({ title, description, link, order_index, updated_at: new Date().toISOString() })
+            .eq('id', materialId)
+            .select()
+            .single();
+
+        if (error) {
+            if (error.code === 'PGRST116') { // No rows found to update
+                return res.status(404).json({ error: 'Training material not found.' });
+            }
+            throw error;
+        }
+
+        res.status(200).json({ message: 'Training material updated successfully.', material: data });
+    } catch (error) {
+        console.error('Error in updateTrainingMaterial:', error);
+        res.status(500).json({ error: error.message || 'Server error updating training material.' });
+    }
+};
+
+// NEW: Admin function to delete a training material
+const deleteTrainingMaterial = async (req, res) => {
+    try {
+        const { materialId } = req.params;
+
+        const { error } = await supabase
+            .from('training_materials')
+            .delete()
+            .eq('id', materialId);
+
+        if (error) {
+            if (error.code === 'PGRST116') { // No rows found to delete
+                return res.status(404).json({ error: 'Training material not found.' });
+            }
+            throw error;
+        }
+
+        res.status(200).json({ message: 'Training material deleted successfully.' });
+    } catch (error) {
+        console.error('Error in deleteTrainingMaterial:', error);
+        res.status(500).json({ error: error.message || 'Server error deleting training material.' });
+    }
+};
+
+
 // Get messages for the training room
 const getTraineeTrainingRoomMessages = async (req, res, io) => {
     try {
@@ -311,7 +391,7 @@ const completeTraining = async (req, res) => {
 
     } catch (error) {
         console.error('Error in completeTraining:', error);
-        res.status(500).json({ error: error.message || 'Server error completing training.' });
+        res.status(500).json({ error: error.message || 'Server error completing training.!' });
     }
 };
 
@@ -319,6 +399,9 @@ const completeTraining = async (req, res) => {
 module.exports = {
     getTraineeTrainingStatus,
     getTrainingMaterials,
+    createTrainingMaterial, // NEW: Export createTrainingMaterial
+    updateTrainingMaterial, // NEW: Export updateTrainingMaterial
+    deleteTrainingMaterial, // NEW: Export deleteTrainingMaterial
     getTraineeTrainingRoomMessages,
     sendTraineeTrainingRoomMessage,
     uploadTrainingRoomAttachment, // Export Multer middleware
