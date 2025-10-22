@@ -391,6 +391,7 @@ const createNegotiation = async (req, res, next, io) => {
         full_name: req.user.full_name,
         email: req.user.email
     };
+    // FIX: Directly use transcriberUser which is already fetched and is the object
     const transcriberDetailsForEmail = {
         full_name: transcriberUser.full_name,
         email: transcriberUser.email
@@ -431,9 +432,10 @@ const getClientNegotiations = async (req, res) => {
         transcriber_response,
         negotiation_files,
         created_at,
-        completed_at,           // NEW: Select completed_at
-        client_feedback_comment, // NEW: Select client_feedback_comment
-        client_feedback_rating,  // NEW: Select client_feedback_rating
+        completed_at,           
+        client_feedback_comment, 
+        client_feedback_rating,  
+        client_id,
         transcriber_id,
         transcriber:users!transcriber_id (
             id,
@@ -517,9 +519,9 @@ const getTranscriberNegotiations = async (req, res) => {
         transcriber_response,
         negotiation_files,
         created_at,
-        completed_at,           // NEW: Select completed_at
-        client_feedback_comment, // NEW: Select client_feedback_comment
-        client_feedback_rating,  // NEW: Select client_feedback_rating
+        completed_at,           
+        client_feedback_comment, 
+        client_feedback_rating,  
         client_id,
         client:users!client_id (
             id,
@@ -935,7 +937,7 @@ const clientAcceptCounter = async (req, res, io) => {
             io.to(negotiation.transcriber_id).emit('negotiation_accepted', {
                 negotiationId: updatedNegotiation.id,
                 message: `Client ${req.user.full_name} accepted your counter-offer!`,
-                newStatus: 'accepted_awaitas_payment'
+                newStatus: 'accepted_awaiting_payment'
             });
             console.log(`Emitted 'negotiation_accepted' to transcriber ${negotiation.transcriber_id}`);
         }
@@ -1264,7 +1266,7 @@ const markJobCompleteByClient = async (req, res, io) => {
 
         // 9. Send email notifications
         const { data: transcriberUser, error: transcriberUserError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
-        if (transcriberUserError) console.error('Error fetching transcriber for job completed email:', transcriberUserError); // FIX: Removed extra comma
+        if (transcriberUserError) console.error('Error fetching transcriber for job completed email:', transcriberUserError);
 
         if (transcriberUser) {
             await emailService.sendJobCompletedEmailToTranscriber(transcriberUser, req.user, updatedNegotiation);
