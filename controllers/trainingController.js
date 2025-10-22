@@ -87,7 +87,18 @@ const getTraineeTrainingStatus = async (req, res) => {
             return res.status(404).json({ error: 'Trainee not found or access denied.' });
         }
 
-        res.json({ status: trainee.transcriber_status, user_level: trainee.transcriber_user_level });
+        // MODIFIED: Fetch ADMIN_USER_ID and include it as trainer_id
+        const adminId = process.env.ADMIN_USER_ID;
+        if (!adminId) {
+            console.error('ADMIN_USER_ID is not configured in backend environment variables.');
+            return res.status(500).json({ error: 'Training admin ID not configured. Please contact support.' });
+        }
+
+        res.json({
+            status: trainee.transcriber_status,
+            user_level: trainee.transcriber_user_level,
+            trainer_id: adminId // Include the adminId as the trainer_id
+        });
     } catch (error) {
         console.error('Error in getTraineeTrainingStatus:', error);
         res.status(500).json({ error: 'Server error fetching training status.' });
@@ -225,7 +236,7 @@ const getTraineeTrainingRoomMessages = async (req, res, io) => {
         // Fetch messages where negotiation_id is null AND training_room_id is the trainee's ID
         const { data: messages, error } = await supabase
             .from('messages')
-            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name')
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, training_room_id') // Ensure training_room_id is selected
             .eq('training_room_id', chatId) // Filter by training_room_id
             .order('timestamp', { ascending: true });
 
@@ -306,6 +317,10 @@ const sendTraineeTrainingRoomMessage = async (req, res, io) => {
                 ...newMessage,
                 sender_name: senderFullName,
             };
+
+            // --- START DEBUGGING LOG ---
+            console.log("[sendTraineeTrainingRoomMessage] Emitting messagePayload:", messagePayload);
+            // --- END DEBUGGING LOG ---
 
             // Emit to both sender and receiver rooms for real-time update
             io.to(receiverId).emit('newChatMessage', messagePayload);
@@ -391,7 +406,7 @@ const completeTraining = async (req, res) => {
 
     } catch (error) {
         console.error('Error in completeTraining:', error);
-        res.status(500).json({ error: error.message || 'Server error completing training.!' });
+        res.status(500).json({ error: error.message || 'Server error completing training.! ' });
     }
 };
 

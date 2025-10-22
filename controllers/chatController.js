@@ -78,19 +78,22 @@ const handleChatAttachmentUpload = async (req, res) => {
 
 const getAdminDirectMessages = async (req, res, io) => {
     try {
-        const { userId } = req.params;
-        const adminId = req.user.userId;
+        const { userId } = req.params; // This userId is the target user (trainee or client)
+        const adminId = req.user.userId; // The current authenticated admin user
 
         console.log(`[getAdminDirectMessages] Admin ID: ${adminId}, Target User ID: ${userId}`);
 
+        // MODIFIED: This filter needs to cover both direct messages and training room messages
+        // if this is the endpoint handling them. The frontend will then differentiate.
         const orFilter = `and(sender_id.eq."${adminId}",receiver_id.eq."${userId}"),and(sender_id.eq."${userId}",receiver_id.eq."${adminId}")`;
 
         const { data: messages, error } = await supabase
             .from('messages')
-            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name')
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, negotiation_id, training_room_id') // NEW: Include training_room_id
             .or(orFilter)
-            .is('negotiation_id', null)
-            .is('training_room_id', null) // NEW: Exclude training room messages
+            // Removed .is('negotiation_id', null) and .is('training_room_id', null)
+            // as this endpoint now serves as the general chat history for admin-user conversations,
+            // including training rooms. Frontend will filter/display based on context.
             .order('timestamp', { ascending: true });
 
         if (error) {
@@ -130,9 +133,13 @@ const getAdminDirectMessages = async (req, res, io) => {
 
 const sendAdminDirectMessage = async (req, res, io) => {
     try {
-        const { receiverId, messageText, fileUrl, fileName } = req.body;
+        const { receiverId, messageText, fileUrl, fileName, trainingRoomId } = req.body; // NEW: Added trainingRoomId
         const senderId = req.user.userId;
         const senderFullName = req.user.full_name || 'Admin';
+
+        // --- START DEBUGGING LOGS ---
+        console.log(`[sendAdminDirectMessage] Incoming req.body.trainingRoomId: ${trainingRoomId}`);
+        // --- END DEBUGGING LOGS ---
 
         if (!receiverId || (!messageText && !fileUrl)) {
             return res.status(400).json({ error: 'Receiver ID and either message text or a file are required.' });
@@ -145,21 +152,29 @@ const sendAdminDirectMessage = async (req, res, io) => {
                 receiver_id: receiverId,
                 content: messageText,
                 negotiation_id: null,
-                training_room_id: null, // NEW: Ensure this is null for direct messages
+                training_room_id: trainingRoomId || null, // MODIFIED: Store trainingRoomId if provided
                 is_read: false,
                 file_url: fileUrl,
                 file_name: fileName
             })
-            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name')
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, training_room_id') // NEW: Include training_room_id in select
             .single();
 
         if (error) throw error;
+
+        // --- START DEBUGGING LOGS ---
+        console.log("[sendAdminDirectMessage] newMessage from Supabase:", newMessage);
+        // --- END DEBUGGING LOGS ---
 
         if (io) {
             const messagePayload = {
                 ...newMessage,
                 sender_name: senderFullName,
             };
+
+            // --- START DEBUGGING LOG ---
+            console.log("[sendAdminDirectMessage] Emitting messagePayload:", messagePayload);
+            // --- END DEBUGGING LOG ---
 
             io.to(receiverId).emit('newChatMessage', messagePayload);
             io.to(senderId).emit('newChatMessage', messagePayload);
@@ -176,17 +191,18 @@ const sendAdminDirectMessage = async (req, res, io) => {
 
 const getUserDirectMessages = async (req, res, io) => {
     try {
-        const { chatId } = req.params;
-        const userId = req.user.userId;
-        
+        const { chatId } = req.params; // This chatId is the partner (admin or other user)
+        const userId = req.user.userId; // The current authenticated user
+
         const orFilter = `and(sender_id.eq."${userId}",receiver_id.eq."${chatId}"),and(sender_id.eq."${chatId}",receiver_id.eq."${userId}")`;
 
         const { data: messages, error } = await supabase
             .from('messages')
-            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name')
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, negotiation_id, training_room_id') // NEW: Include training_room_id
             .or(orFilter)
-            .is('negotiation_id', null)
-            .is('training_room_id', null) // NEW: Exclude training room messages
+            // Removed .is('negotiation_id', null) and .is('training_room_id', null)
+            // as this endpoint now serves as the general chat history for user-partner conversations,
+            // including training rooms. Frontend will filter/display based on context.
             .order('timestamp', { ascending: true });
 
         if (error) throw error;
@@ -218,9 +234,13 @@ const getUserDirectMessages = async (req, res, io) => {
 
 const sendUserDirectMessage = async (req, res, io) => {
     try {
-        const { receiverId, messageText, fileUrl, fileName } = req.body;
+        const { receiverId, messageText, fileUrl, fileName, trainingRoomId } = req.body; // NEW: Added trainingRoomId
         const senderId = req.user.userId;
         const senderFullName = req.user.full_name || 'User';
+
+        // --- START DEBUGGING LOGS ---
+        console.log(`[sendUserDirectMessage] Incoming req.body.trainingRoomId: ${trainingRoomId}`);
+        // --- END DEBUGGING LOGS ---
 
         console.log(`[sendUserDirectMessage] Attempting to send message. Sender: ${senderId}, Receiver: ${receiverId}`);
         console.log(`[sendUserDirectMessage] Message content: "${messageText}", File: ${fileName || 'None'}`);
@@ -236,12 +256,12 @@ const sendUserDirectMessage = async (req, res, io) => {
                 receiver_id: receiverId,
                 content: messageText,
                 negotiation_id: null,
-                training_room_id: null, // NEW: Ensure this is null for direct messages
+                training_room_id: trainingRoomId || null, // MODIFIED: Store trainingRoomId if provided
                 is_read: false,
                 file_url: fileUrl,
                 file_name: fileName
             })
-            .select('id, sender_id, receiver_id, negotiation_id, content, timestamp, is_read, file_url, file_name')
+            .select('id, sender_id, receiver_id, negotiation_id, content, timestamp, is_read, file_url, file_name, training_room_id') // NEW: Include training_room_id in select
             .single();
 
         if (error) {
@@ -249,11 +269,19 @@ const sendUserDirectMessage = async (req, res, io) => {
             throw error;
         }
 
+        // --- START DEBUGGING LOGS ---
+        console.log("[sendUserDirectMessage] newMessage from Supabase:", newMessage);
+        // --- END DEBUGGING LOGS ---
+
         if (io) {
             const messagePayload = {
                 ...newMessage,
                 sender_name: senderFullName,
             };
+
+            // --- START DEBUGGING LOG ---
+            console.log("[sendUserDirectMessage] Emitting messagePayload:", messagePayload);
+            // --- END DEBUGGING LOG ---
 
             console.log(`[sendUserDirectMessage] Emitting 'newChatMessage' to receiver room: ${receiverId}`);
             io.to(receiverId).emit('newChatMessage', messagePayload);
@@ -281,14 +309,14 @@ const getUnreadMessageCount = async (req, res) => {
             return res.json({ count: 0 });
         }
 
-        // ADDED: Filter out messages belonging to the training room
+        // MODIFIED: Filter out messages belonging to the training room
         const { count, error } = await supabase
             .from('messages')
             .select('*', { count: 'exact', head: true })
             .eq('receiver_id', userId)
             .eq('is_read', false)
             .is('negotiation_id', null)
-            .is('training_room_id', null); // NEW: Exclude training room messages from general unread count
+            .is('training_room_id', null); // Keep this to exclude training room messages from the *general* unread count
 
         if (error) {
             console.error(`[getUnreadMessageCount] Supabase error fetching unread message count for user ${userId}:`, error);
@@ -298,7 +326,7 @@ const getUnreadMessageCount = async (req, res) => {
         res.json({ count });
     } catch (error) {
         console.error('[getUnreadMessageCount] Error fetching unread message count: ', error);
-        res.status(500).json({ error: error.message || 'Server error fetching unread message count.', count: 0 });
+        res.status(500).json({ error: error.message || 'Server error fetching unread message count.' });
     }
 };
 
@@ -325,7 +353,7 @@ const getNegotiationMessages = async (req, res, io) => {
 
         const { data: messages, error } = await supabase
             .from('messages')
-            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name')
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, training_room_id') // NEW: Include training_room_id
             .eq('negotiation_id', negotiationId)
             .order('timestamp', { ascending: true });
 
@@ -401,12 +429,12 @@ const sendNegotiationMessage = async (req, res, io) => {
                 receiver_id: receiverId,
                 negotiation_id: negotiationId,
                 content: messageText,
-                training_room_id: null, // NEW: Ensure this is null for negotiation messages
+                training_room_id: null, // Ensure this is null for negotiation messages
                 is_read: false,
                 file_url: fileUrl,
                 file_name: fileName
             })
-            .select('id, sender_id, receiver_id, negotiation_id, content, timestamp, is_read, file_url, file_name')
+            .select('id, sender_id, receiver_id, negotiation_id, content, timestamp, is_read, file_url, file_name, training_room_id') // NEW: Include training_room_id in select
             .single();
 
         if (error) throw error;
@@ -466,7 +494,7 @@ const getAdminChatList = async (req, res) => {
                 .eq('receiver_id', adminId)
                 .eq('is_read', false)
                 .is('negotiation_id', null)
-                .is('training_room_id', null); // NEW: Exclude training room messages
+                .is('training_room_id', null); // Keep this to exclude training room messages from *general* unread count
 
             if (unreadError) console.error(`Error fetching unread count for partner ${partnerId}:`, unreadError);
 

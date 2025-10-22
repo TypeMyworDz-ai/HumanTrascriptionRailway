@@ -490,7 +490,12 @@ module.exports = (io) => {
   });
 
   // NEW: Route to get the ADMIN_USER_ID for frontend
-  router.get('/admin/trainer-id', authMiddleware, authMiddleware.checkAdmin, getAdminUserId); // MODIFIED: Pass function reference directly
+  router.get('/admin/trainer-id', authMiddleware, (req, res, next) => { // MODIFIED: Replaced authMiddleware.checkAdmin with inline function
+    if (req.user.userType !== 'admin') {
+      return res.status(403).json({ error: 'Access denied. Only admins can access trainer ID.' });
+    }
+    next(); // Pass control to the next middleware/handler (getAdminUserId)
+  }, getAdminUserId);
 
 
   // --- Admin Direct Chat Routes ---

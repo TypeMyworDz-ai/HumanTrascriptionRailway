@@ -16,4 +16,12 @@ const authMiddleware = (req, res, next) => {
   }
 };
 
+const checkAdmin = (req, res, next) => {
+  if (req.user.userType !== 'admin') {
+    return res.status(403).json({ error: 'Access denied. Admin privileges required.' });
+  }
+  next();
+};
+
 module.exports = authMiddleware;
+module.exports.checkAdmin = checkAdmin;
