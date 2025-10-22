@@ -1,8 +1,8 @@
 const axios = require('axios');
-const supabase = require('../database');
-const { syncAvailabilityStatus } = require('./transcriberController');
-const emailService = require('../emailService');
-const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
+const supabase = require('..//database');
+const { syncAvailabilityStatus } = require('..//transcriberController');
+const emailService = require('..//emailService');
+const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
 
 // Paystack Secret Key from environment variables
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
@@ -158,8 +158,8 @@ const initializeTrainingPayment = async (req, res, io) => {
         return res.status(400).json({ error: 'Invalid training payment amount.' });
     }
 
-    // Expected training fee
-    const TRAINING_FEE_USD = 10.00; 
+    // NEW: Changed trainee fee to USD 0.5 for testing purposes
+    const TRAINING_FEE_USD = 0.50; 
     if (Math.round(parsedAmountUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
         console.error('Training payment amount mismatch. Provided USD:', parsedAmountUsd, 'Expected USD:', TRAINING_FEE_USD);
         return res.status(400).json({ error: `Training payment amount must be USD ${TRAINING_FEE_USD}.` });
@@ -259,7 +259,8 @@ const verifyPayment = async (req, res, io) => {
 
         // Handle specific logic for training payment verification
         if (jobType === 'training') {
-            const TRAINING_FEE_USD = 10.00;
+            // NEW: Changed trainee fee to USD 0.5 for testing purposes
+            const TRAINING_FEE_USD = 0.50;
             if (Math.round(metadataAgreedPrice * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
                 console.error('Training metadata amount mismatch. Agreed USD:', metadataAgreedPrice, 'Expected USD:', TRAINING_FEE_USD);
                 return res.status(400).json({ error: 'Invalid transaction metadata (training amount mismatch).' });
@@ -438,7 +439,7 @@ const verifyPayment = async (req, res, io) => {
                 message: 'A client has paid for your accepted job. The job is now active!', // FIX: Generic message
                 newStatus: 'hired'
             });
-            console.log(`Emitted 'payment_successful' to client ${metadataClientId} and 'job_hired' to transcriber ${metadataTranscriberId}`);
+            console.log(`Emitted 'payment_successful' to client ${metadataClientId} and 'job_hired' to transcriber \${metadataTranscriberId}`);
         }
 
         res.status(200).json({
