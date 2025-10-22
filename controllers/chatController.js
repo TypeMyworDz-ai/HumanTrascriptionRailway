@@ -236,7 +236,9 @@ const sendUserDirectMessage = async (req, res, io) => {
     try {
         const { receiverId, messageText, fileUrl, fileName, trainingRoomId } = req.body; // NEW: Added trainingRoomId
         const senderId = req.user.userId;
-        const senderFullName = req.user.full_name || 'User';
+        
+        // FIX: Determine senderFullName based on user type if available
+        const senderFullName = req.user.user_type === 'trainee' ? 'Test Trainee' : (req.user.full_name || 'User');
 
         // --- START DEBUGGING LOGS ---
         console.log(`[sendUserDirectMessage] Incoming req.body.trainingRoomId: ${trainingRoomId}`);
@@ -248,7 +250,6 @@ const sendUserDirectMessage = async (req, res, io) => {
         if (!receiverId || (!messageText && !fileUrl)) {
             return res.status(400).json({ error: 'Receiver ID and either message text or a file are required.' });
         }
-
         const { data: newMessage, error } = await supabase
             .from('messages')
             .insert({
@@ -309,14 +310,13 @@ const getUnreadMessageCount = async (req, res) => {
             return res.json({ count: 0 });
         }
 
-        // MODIFIED: Filter out messages belonging to the training room
+        // MODIFIED: Removed .is('training_room_id', null) filter to include training room messages in count
         const { count, error } = await supabase
             .from('messages')
             .select('*', { count: 'exact', head: true })
             .eq('receiver_id', userId)
             .eq('is_read', false)
-            .is('negotiation_id', null)
-            .is('training_room_id', null); // Keep this to exclude training room messages from the *general* unread count
+            .is('negotiation_id', null); // Keep this to exclude negotiation messages
 
         if (error) {
             console.error(`[getUnreadMessageCount] Supabase error fetching unread message count for user ${userId}:`, error);
@@ -486,15 +486,14 @@ const getAdminChatList = async (req, res) => {
 
             if (partnerError) console.error(`Error fetching partner ${partnerId}:`, partnerError);
 
-            // UPDATED: Exclude messages belonging to the training room from the general unread count
+            // MODIFIED: Removed .is('training_room_id', null) filter to include training room messages in count
             const { count: unreadCount, error: unreadError } = await supabase
                 .from('messages')
                 .select('*', { count: 'exact', head: true })
                 .eq('sender_id', partnerId)
                 .eq('receiver_id', adminId)
                 .eq('is_read', false)
-                .is('negotiation_id', null)
-                .is('training_room_id', null); // Keep this to exclude training room messages from *general* unread count
+                .is('negotiation_id', null); // Keep this to exclude negotiation messages
 
             if (unreadError) console.error(`Error fetching unread count for partner ${partnerId}:`, unreadError);
 
