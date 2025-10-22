@@ -1,6 +1,6 @@
 const axios = require('axios');
 const supabase = require('../database');
-const { syncAvailabilityStatus } = require('./transcriberController');
+const { syncAvailabilityStatus } = require('../controllers/transcriberController'); // CORRECTED IMPORT PATH
 const emailService = require('../emailService');
 const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
 
@@ -294,6 +294,7 @@ const verifyPayment = async (req, res, io) => {
                         related_job_id: metadataRelatedJobId,
                         related_job_type: 'training',
                         client_id: metadataClientId,
+                        transcriber_id: metadataClientId, // ADDED: For training payments, client_id is the trainee_id, which also serves as the transcriber_id for this payment type.
                         amount: actualAmountPaidUsd,
                         currency: 'USD',
                         paystack_reference: transaction.reference,
