@@ -742,9 +742,9 @@ module.exports = (io) => {
   });
 
   router.get('/trainee/materials', authMiddleware, (req, res, next) => {
-      // Allow trainees and admins to view materials
-      if (req.user.userType !== 'trainee' && req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only trainees or admins can view training materials.' });
+      // UPDATED: Allow trainees, transcribers, and admins to view materials
+      if (req.user.userType !== 'trainee' && req.user.userType !== 'admin' && req.user.userType !== 'transcriber') {
+          return res.status(403).json({ error: 'Access denied. Only trainees, transcribers, or admins can view training materials.' });
       }
       getTrainingMaterials(req, res, next);
   });
