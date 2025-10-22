@@ -291,10 +291,10 @@ const verifyPayment = async (req, res, io) => {
                 .from('payments')
                 .insert([
                     {
-                        related_job_id: metadataRelatedJobId,
+                        related_job_id: null, // MODIFIED: Set related_job_id to null for training payments
                         related_job_type: 'training',
                         client_id: metadataClientId,
-                        transcriber_id: metadataClientId, // ADDED: For training payments, client_id is the trainee_id, which also serves as the transcriber_id for this payment type.
+                        transcriber_id: metadataClientId, 
                         amount: actualAmountPaidUsd,
                         currency: 'USD',
                         paystack_reference: transaction.reference,

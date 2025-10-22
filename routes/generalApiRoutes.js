@@ -43,6 +43,7 @@ const {
     getAllJobsForAdmin,
     getJobByIdForAdmin,
     getAllDisputesForAdmin,
+    getAdminUserId // NEW: Import getAdminUserId
 } = require('../controllers/adminController');
 
 // Import chat controller functions
@@ -487,6 +488,12 @@ module.exports = (io) => {
   router.get('/users/:userId', authMiddleware, (req, res, next) => {
       getAnyUserById(req, res, next);
   });
+
+  // NEW: Route to get the ADMIN_USER_ID for frontend
+  router.get('/admin/trainer-id', authMiddleware, authMiddleware.checkAdmin, (req, res, next) => {
+      getAdminUserId(req, res, next);
+  });
+
 
   // --- Admin Direct Chat Routes ---
   router.get('/admin/chat/messages/:userId', authMiddleware, (req, res, next) => {

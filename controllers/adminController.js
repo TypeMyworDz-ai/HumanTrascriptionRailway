@@ -609,6 +609,17 @@ const getAllDisputesForAdmin = async (req, res) => {
     }
 };
 
+// NEW: Function to provide the ADMIN_USER_ID to the frontend
+const getAdminUserId = async (req, res) => {
+    const adminId = process.env.ADMIN_USER_ID;
+    if (!adminId) {
+        console.error('ADMIN_USER_ID is not set in backend environment variables.');
+        return res.status(500).json({ error: 'Admin ID not configured.' });
+    }
+    res.status(200).json({ adminId: adminId });
+};
+
+
 module.exports = {
     getPendingTranscriberTestsCount,
     getActiveJobsCount,
@@ -627,4 +638,5 @@ module.exports = {
     getAllJobsForAdmin,
     getJobByIdForAdmin,
     getAllDisputesForAdmin,
+    getAdminUserId, // NEW: Export the new function
 };
