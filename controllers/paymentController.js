@@ -1,6 +1,6 @@
 const axios = require('axios');
 const supabase = require('../database');
-const { syncAvailabilityStatus } = require('../controllers/transcriberController'); // FIX: Corrected import path
+const { syncAvailabilityStatus } = require('./transcriberController');
 const emailService = require('../emailService');
 const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
 
@@ -158,7 +158,7 @@ const initializeTrainingPayment = async (req, res, io) => {
         return res.status(400).json({ error: 'Invalid training payment amount.' });
     }
 
-    // NEW: Changed trainee fee to USD 0.5 for testing purposes
+    // Expected training fee
     const TRAINING_FEE_USD = 0.50; 
     if (Math.round(parsedAmountUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
         console.error('Training payment amount mismatch. Provided USD:', parsedAmountUsd, 'Expected USD:', TRAINING_FEE_USD);
@@ -259,7 +259,6 @@ const verifyPayment = async (req, res, io) => {
 
         // Handle specific logic for training payment verification
         if (jobType === 'training') {
-            // NEW: Changed trainee fee to USD 0.5 for testing purposes
             const TRAINING_FEE_USD = 0.50;
             if (Math.round(metadataAgreedPrice * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
                 console.error('Training metadata amount mismatch. Agreed USD:', metadataAgreedPrice, 'Expected USD:', TRAINING_FEE_USD);
@@ -451,6 +450,234 @@ const verifyPayment = async (req, res, io) => {
         console.error('Error verifying Paystack payment:', error.response ? error.response.data : error.message);
         res.status(500).json({ error: 'Server error during payment verification. ' + (error.message || '') });
     }
+};
+
+// Function to get a transcriber's payment history
+const getTranscriberPaymentHistory = async (req, res) => {
+    const transcriberId = req.user.userId;
+
+    try {
+        // FIX: Select related_job_id and related_job_type from payments
+        const { data: payments, error } = await supabase
+            .from('payments')
+            .select(`
+                id,
+                related_job_id,
+                related_job_type,
+                client_id,
+                transcriber_id,
+                amount,
+                transcriber_earning,
+                currency,
+                paystack_reference,
+                paystack_status,
+                transaction_date,
+                payout_status,
+                currency_paid_by_client,
+                exchange_rate_used,
+                client:users!client_id(full_name, email)
+            `)
+            .eq('transcriber_id', transcriberId)
+            .order('transaction_date', { ascending: false });
+
+        if (error) {
+            console.error('Error fetching transcriber payment history:', error);
+            return res.status(500).json({ error: error.message });
+        }
+
+        // FIX: Dynamically fetch job details for each payment
+        const paymentsWithJobDetails = await Promise.all((payments || []).map(async (payment) => {
+            let jobDetails = {};
+            if (payment.related_job_type === 'negotiation') {
+                const { data: negotiation, error: negError } = await supabase
+                    .from('negotiations')
+                    .select('requirements, deadline_hours, agreed_price_usd')
+                    .eq('id', payment.related_job_id)
+                    .single();
+                jobDetails = { negotiation: negotiation || null };
+            } else if (payment.related_job_type === 'direct_upload') {
+                const { data: directJob, error: directJobError } = await supabase
+                    .from('direct_upload_jobs')
+                    .select('client_instructions, agreed_deadline_hours, quote_amount') // FIX: quote_amount
+                    .eq('id', payment.related_job_id)
+                    .single();
+                jobDetails = { direct_upload_job: directJob || null };
+            }
+            return { ...payment, ...jobDetails };
+        }));
+
+        const totalEarnings = (paymentsWithJobDetails || []).reduce((sum, p) => sum + p.transcriber_earning, 0);
+        const currentMonth = new Date().getMonth();
+        const currentYear = new Date().getFullYear();
+
+        const monthlyEarnings = (paymentsWithJobDetails || []).filter(p => {
+            const date = new Date(p.transaction_date);
+            return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+        }).reduce((sum, p) => sum + p.transcriber_earning, 0);
+
+        res.status(200).json({
+            message: 'Transcriber payment history retrieved successfully.',
+            payments: paymentsWithJobDetails,
+            summary: {
+                totalEarnings: totalEarnings,
+                monthlyEarnings: monthlyEarnings,
+            }
+        });
+
+    } catch (error) {
+        console.error('Server error fetching transcriber payment history: ', error);
+        res.status(500).json({ error: 'Server error fetching payment history.' });
+    }
+};
+
+// NEW: Function to get a client's payment history
+const getClientPaymentHistory = async (req, res) => {
+    const clientId = req.user.userId;
+
+    try {
+        // FIX: Select related_job_id and related_job_type from payments
+        const { data: payments, error } = await supabase
+            .from('payments')
+            .select(`
+                id,
+                related_job_id,
+                related_job_type,
+                client_id,
+                transcriber_id,
+                amount,
+                transcriber_earning,
+                currency,
+                paystack_reference,
+                paystack_status,
+                transaction_date,
+                payout_status,
+                currency_paid_by_client,
+                exchange_rate_used,
+                transcriber:users!transcriber_id(full_name, email)
+            `)
+            .eq('client_id', clientId)
+            .order('transaction_date', { ascending: false });
+
+        if (error) {
+            console.error('Error fetching client payment history:', error);
+            return res.status(500).json({ error: error.message });
+        }
+
+        // FIX: Dynamically fetch job details for each payment
+        const paymentsWithJobDetails = await Promise.all((payments || []).map(async (payment) => {
+            let jobDetails = {};
+            if (payment.related_job_type === 'negotiation') {
+                const { data: negotiation, error: negError } = await supabase
+                    .from('negotiations')
+                    .select('requirements, deadline_hours, agreed_price_usd')
+                    .eq('id', payment.related_job_id)
+                    .single();
+                jobDetails = { negotiation: negotiation || null };
+            } else if (payment.related_job_type === 'direct_upload') {
+                const { data: directJob, error: directJobError } = await supabase
+                    .from('direct_upload_jobs')
+                    .select('client_instructions, agreed_deadline_hours, quote_amount') // FIX: quote_amount
+                    .eq('id', payment.related_job_id)
+                    .single();
+                jobDetails = { direct_upload_job: directJob || null };
+            }
+            return { ...payment, ...jobDetails };
+        }));
+
+        const totalPayments = (paymentsWithJobDetails || []).reduce((sum, p) => sum + p.amount, 0);
+        const currentMonth = new Date().getMonth();
+        const currentYear = new Date().getFullYear();
+
+        const monthlyPayments = (paymentsWithJobDetails || []).filter(p => {
+            const date = new Date(p.transaction_date);
+            return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+        }).reduce((sum, p) => sum + p.amount, 0);
+
+        res.status(200).json({
+            message: 'Client payment history retrieved successfully.',
+            payments: paymentsWithJobDetails,
+            summary: {
+                totalPayments: totalPayments,
+                monthlyPayments: monthlyPayments,
+            }
+        });
+
+    } catch (error) {
+        console.error('Server error fetching client payment history: ', error);
+        res.status(500).json({ error: 'Server error fetching client payment history.' });
+    }
+};
+
+/**
+ * @route GET /api/admin/payments
+ * @desc Admin can view all payment transactions
+ * @access Private (Admin only)
+ */
+const getAllPaymentHistoryForAdmin = async (req, res) => {
+  try {
+    // FIX: Select related_job_id and related_job_type from payments
+    const { data: payments, error } = await supabase
+      .from('payments')
+      .select(`
+        id,
+        related_job_id,
+        related_job_type,
+        client_id,
+        transcriber_id,
+        amount,
+        transcriber_earning,
+        currency,
+        paystack_reference,
+        paystack_status,
+        transaction_date,
+        payout_status,
+        currency_paid_by_client,
+        exchange_rate_used,
+        client:users!client_id(full_name, email),
+        transcriber:users!transcriber_id(full_name, email)
+      `)
+      .order('transaction_date', { ascending: false });
+
+    if (error) {
+        console.error('Error fetching all payment history for admin:', error);
+        return res.status(500).json({ error: error.message });
+    }
+
+    // FIX: Dynamically fetch job details for each payment
+    const paymentsWithJobDetails = await Promise.all((payments || []).map(async (payment) => {
+        let jobDetails = {};
+        if (payment.related_job_type === 'negotiation') {
+            const { data: negotiation, error: negError } = await supabase
+                .from('negotiations')
+                .select('requirements, deadline_hours, agreed_price_usd')
+                .eq('id', payment.related_job_id)
+                .single();
+            jobDetails = { negotiation: negotiation || null };
+        } else if (payment.related_job_type === 'direct_upload') {
+            const { data: directJob, error: directJobError } = await supabase
+                .from('direct_upload_jobs')
+                .select('client_instructions, agreed_deadline_hours, quote_amount') // FIX: quote_amount
+                .eq('id', payment.related_job_id)
+                .single();
+            jobDetails = { direct_upload_job: directJob || null };
+        } else if (payment.related_job_type === 'training') { // NEW: Handle training payments
+            // For training payments, we might not have 'job details' in the same way,
+            // but we can fetch the trainee's name if needed.
+            const { data: traineeUser, error: traineeError } = await supabase
+                .from('users')
+                .select('full_name, email')
+                .eq('id', payment.client_id) // client_id in payments table is traineeId for training
+                .single();
+            jobDetails = { trainee_info: traineeUser || null };
+        }
+        return { ...payment, ...jobDetails };
+    }));
+
+    return res.status(200).json(paymentsWithJobDetails); // Return the array of all payments with job details
+  } catch (error) {
+    console.error('Server error fetching all payment history for admin: ', error);
+    return res.status(500).json({ error: 'Failed to fetch all payment history for admin.' });
+  }
 };
 
 
