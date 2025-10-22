@@ -762,18 +762,19 @@ const acceptNegotiation = async (req, res, io) => {
 const counterNegotiation = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
-        const { proposed_price_usd, deadline_hours, transcriber_response } = req.body;
+        // FIX: Only allow proposed_price_usd and transcriber_response to be countered
+        const { proposed_price_usd, transcriber_response } = req.body;
         const transcriberId = req.user.userId;
 
         // Validate input fields
-        if (!proposed_price_usd || !deadline_hours || !transcriber_response) {
-            return res.status(400).json({ error: 'Proposed price, deadline, and response are required for a counter-offer.' });
+        if (!proposed_price_usd || !transcriber_response) {
+            return res.status(400).json({ error: 'Proposed price and response are required for a counter-offer.' });
         }
 
         // Fetch negotiation details to verify status and authorization
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
-            .select('status, transcriber_id, client_id')
+            .select('status, transcriber_id, client_id, deadline_hours') // Fetch deadline_hours to retain it
             .eq('id', negotiationId)
             .single();
 
@@ -797,7 +798,8 @@ const counterNegotiation = async (req, res, io) => {
             .update({
                 status: 'transcriber_counter',
                 agreed_price_usd: proposed_price_usd,
-                deadline_hours: deadline_hours,
+                // FIX: Keep the original deadline_hours from the client's initial offer
+                deadline_hours: negotiation.deadline_hours, 
                 transcriber_response: transcriber_response,
                 updated_at: new Date().toISOString()
             })
@@ -811,7 +813,7 @@ const counterNegotiation = async (req, res, io) => {
         if (io) {
             io.to(negotiation.client_id).emit('negotiation_countered', {
                 negotiationId: updatedNegotiation.id,
-                message: `Client ${req.user.full_name} sent a counter offer!`,
+                message: `Transcriber ${req.user.full_name} sent a counter offer!`, // Changed message to reflect transcriber counter
                 newStatus: 'transcriber_counter'
             });
             console.log(`Emitted 'negotiation_countered' to client ${negotiation.client_id}`);
