@@ -490,9 +490,7 @@ module.exports = (io) => {
   });
 
   // NEW: Route to get the ADMIN_USER_ID for frontend
-  router.get('/admin/trainer-id', authMiddleware, authMiddleware.checkAdmin, (req, res, next) => {
-      getAdminUserId(req, res, next);
-  });
+  router.get('/admin/trainer-id', authMiddleware, authMiddleware.checkAdmin, getAdminUserId); // MODIFIED: Pass function reference directly
 
 
   // --- Admin Direct Chat Routes ---
