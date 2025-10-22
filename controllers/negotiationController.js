@@ -160,9 +160,8 @@ const getAvailableTranscribers = async (req, res) => {
         average_rating: user.transcriber_average_rating || 0.0, // Default to 0.0 if null
         completed_jobs: user.transcriber_completed_jobs || 0, // Default to 0 if null
         mpesa_number: user.transcriber_mpesa_number,
-        paypal_email: user.transcriber_paypal_email,
-        // Nest user details under a 'users' key for consistency with other responses
-        users: { 
+        paypal_email: user.paypal_email,
+        users: {
           id: user.id,
           full_name: user.full_name,
           email: user.email,
@@ -215,8 +214,8 @@ const getAvailableTranscribers = async (req, res) => {
             is_available: user.is_available,
             average_rating: user.transcriber_average_rating,
             completed_jobs: user.transcriber_completed_jobs,
-            mpesa_number: user.transcriber_mpesa_number,
-            paypal_email: user.transcriber_paypal_email,
+            mpesa_number: user.mpesa_number,
+            paypal_email: user.paypal_email,
             users: {
               id: user.id,
               full_name: user.full_name,
@@ -432,6 +431,9 @@ const getClientNegotiations = async (req, res) => {
         transcriber_response,
         negotiation_files,
         created_at,
+        completed_at,           // NEW: Select completed_at
+        client_feedback_comment, // NEW: Select client_feedback_comment
+        client_feedback_rating,  // NEW: Select client_feedback_rating
         transcriber_id,
         transcriber:users!transcriber_id (
             id,
@@ -515,6 +517,9 @@ const getTranscriberNegotiations = async (req, res) => {
         transcriber_response,
         negotiation_files,
         created_at,
+        completed_at,           // NEW: Select completed_at
+        client_feedback_comment, // NEW: Select client_feedback_comment
+        client_feedback_rating,  // NEW: Select client_feedback_rating
         client_id,
         client:users!client_id (
             id,
@@ -930,7 +935,7 @@ const clientAcceptCounter = async (req, res, io) => {
             io.to(negotiation.transcriber_id).emit('negotiation_accepted', {
                 negotiationId: updatedNegotiation.id,
                 message: `Client ${req.user.full_name} accepted your counter-offer!`,
-                newStatus: 'accepted_awaiting_payment'
+                newStatus: 'accepted_awaitas_payment'
             });
             console.log(`Emitted 'negotiation_accepted' to transcriber ${negotiation.transcriber_id}`);
         }
@@ -1140,6 +1145,8 @@ const clientCounterBack = async (req, res, io) => {
 const markJobCompleteByClient = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
+        // NEW: Extract clientFeedbackComment and clientFeedbackRating from the request body
+        const { clientFeedbackComment, clientFeedbackRating } = req.body; 
         const clientId = req.user.userId;
         const userType = req.user.userType;
 
@@ -1169,10 +1176,16 @@ const markJobCompleteByClient = async (req, res, io) => {
             return res.status(400).json({ error: `Job must be in 'hired' status to be marked as complete. Current status: ${negotiation.status}` });
         }
 
-        // 5. Update negotiation status to 'completed'
+        // 5. Update negotiation status to 'completed' and store feedback
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
-            .update({ status: 'completed', completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+            .update({ 
+                status: 'completed', 
+                completed_at: new Date().toISOString(), 
+                client_feedback_comment: clientFeedbackComment, // NEW: Store client feedback comment
+                client_feedback_rating: clientFeedbackRating,   // NEW: Store client feedback rating
+                updated_at: new Date().toISOString() 
+            })
             .eq('id', negotiationId)
             .select()
             .single();
@@ -1251,7 +1264,7 @@ const markJobCompleteByClient = async (req, res, io) => {
 
         // 9. Send email notifications
         const { data: transcriberUser, error: transcriberUserError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
-        if (transcriberUserError) console.error('Error fetching transcriber for job completed email:', transcriberUserError);
+        if (transcriberUserError) console.error('Error fetching transcriber for job completed email:', transcriberUserError); // FIX: Removed extra comma
 
         if (transcriberUser) {
             await emailService.sendJobCompletedEmailToTranscriber(transcriberUser, req.user, updatedNegotiation);

@@ -487,6 +487,9 @@ const getAllJobsForAdmin = async (req, res) => {
                 requirements,
                 deadline_hours,
                 created_at,
+                completed_at,           
+                client_feedback_comment, 
+                client_feedback_rating,  
                 client_id,
                 transcriber_id,
                 client:users!client_id (
@@ -496,7 +499,8 @@ const getAllJobsForAdmin = async (req, res) => {
                     full_name, email
                 )
             `)
-            .order('created_at', { ascending: false }); // Order by creation date
+            .order('completed_at', { ascending: false, nullsFirst: false }) // Order by completed_at (most recent first), nulls last
+            .order('created_at', { ascending: false }); // Fallback order by created_at
 
         if (error) throw error;
 
@@ -524,6 +528,9 @@ const getJobByIdForAdmin = async (req, res) => {
             .from('negotiations')
             .select(`
                 *,
+                completed_at,           
+                client_feedback_comment, 
+                client_feedback_rating,  
                 client:users!client_id (
                     id, full_name, email
                 ),
