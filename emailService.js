@@ -174,7 +174,7 @@ const sendNewNegotiationRequestEmail = async (transcriber, client) => {
         await transporter.sendMail({
             from: FROM_ADDRESS,
             to: transcriber.email,
-            subject: `New Negotiation Request from ${client.full_name}`,
+            subject: `New Negotiation Request from ${client.full_name || 'Client'}`,
             html: `
                 <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 20px auto; padding: 20px; border: 1px solid #eee; border-radius: 8px; background-color: #f9f9f9;">
                     <div style="text-align: center; margin-bottom: 20px;">
@@ -182,7 +182,7 @@ const sendNewNegotiationRequestEmail = async (transcriber, client) => {
                         <h1 style="color: #6a0dad; margin-top: 15px;">New Negotiation Request</h1>
                     </div>
                     <p style="font-size: 16px;">Hello ${transcriber.full_name || 'Transcriber'},</p>
-                    <p style="font-size: 16px;">You have received a new negotiation request from <strong>${client.full_name}</strong> (${client.email}).</p>
+                    <p style="font-size: 16px;">You have received a new negotiation request from <strong>${client.full_name || 'Client'}</strong> (${client.email}).</p>
                     <p style="font-size: 16px;">Please check your dashboard to review the details and respond.</p>
                     <p style="font-size: 16px;"><a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/transcriber-dashboard" style="color: #6a0dad; text-decoration: none; font-weight: bold;">Go to Dashboard</a></p>
                     <p style="font-size: 14px; color: #666;">Best regards,<br>The TypeMyworDz Team</p>
@@ -192,9 +192,9 @@ const sendNewNegotiationRequestEmail = async (transcriber, client) => {
                 </div>
             `,
         });
-        console.log(`New negotiation request email sent to ${transcriber.email} for client ${client.full_name}`);
+        console.log(`New negotiation request email sent to ${transcriber.email} for client ${client.full_name || 'Client'}`);
     } catch (error) {
-        console.error(`Error sending new negotiation request email to ${transcriber.email} for client ${client.full_name}:`, error);
+        console.error(`Error sending new negotiation request email to ${transcriber.email} for client ${client.full_name || 'Client'}:`, error);
     }
 };
 
@@ -211,10 +211,10 @@ const sendCounterOfferEmail = async (client, transcriber, negotiation) => {
                         <h1 style="color: #6a0dad; margin-top: 15px;">Counter Offer Received</h1>
                     </div>
                     <p style="font-size: 16px;">Hello ${client.full_name || 'Client'},</p>
-                    <p style="font-size: 16px;">You have received a counter offer from <strong>${transcriber.full_name}</strong> for negotiation #${negotiation.id}.</p>
+                    <p style="font-size: 16px;">You have received a counter offer from <strong>${transcriber.full_name || 'Transcriber'}</strong> for negotiation #${negotiation.id}.</p>
                     <p style="font-size: 16px;"><strong>Details:</strong></p>
                     <ul style="font-size: 16px;">
-                        <li>Proposed Price: KES ${negotiation.agreed_price_kes}</li>
+                        <li>Proposed Price: USD ${negotiation.agreed_price_usd ? negotiation.agreed_price_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'undefined'}</li>
                         <li>Proposed Deadline: ${negotiation.deadline_hours} hours</li>
                         ${negotiation.transcriber_response ? `<li>Transcriber's Message: ${negotiation.transcriber_response}</li>` : ''}
                     </ul>
@@ -247,11 +247,11 @@ const sendNegotiationAcceptedEmail = async (client, transcriber, negotiation) =>
                     </div>
                     <p style="font-size: 16px;">Hello,</p>
                     <p style="font-size: 16px;">The negotiation request (ID: <strong>${negotiation.id}</strong>) has been accepted!</p>
-                    <p style="font-size: 16px;">Client: <strong>${client.full_name}</strong> (${client.email})</p>
-                    <p style="font-size: 16px;">Transcriber: <strong>${transcriber.full_name}</strong> (${transcriber.email})</p>
+                    <p style="font-size: 16px;">Client: <strong>${client.full_name || 'Client'}</strong> (${client.email})</p>
+                    <p style="font-size: 16px;">Transcriber: <strong>${transcriber.full_name || 'Transcriber'}</strong> (${transcriber.email})</p>
                     <p style="font-size: 16px;"><strong>Job Details:</strong></p>
                     <ul style="font-size: 16px;">
-                        <li>Agreed Price: KES ${negotiation.agreed_price_kes}</li>
+                        <li>Agreed Price: USD ${negotiation.agreed_price_usd ? negotiation.agreed_price_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'undefined'}</li>
                         <li>Deadline: ${negotiation.deadline_hours} hours</li>
                     </ul>
                     <p style="font-size: 16px;">You can view the job details on your respective dashboards.</p>
@@ -278,13 +278,13 @@ const sendPaymentConfirmationEmail = async (client, transcriber, negotiation, pa
                     <h1 style="color: #6a0dad; margin-top: 15px;">Payment Confirmed!</h1>
                 </div>
                 <p style="font-size: 16px;">Hello ${client.full_name || 'Client'},</p>
-                <p style="font-size: 16px;">Your payment of KES ${payment.amount} for negotiation ID <strong>${negotiation.id}</strong> has been successfully processed.</p>
-                <p style="font-size: 16px;">Your job is now active, and <strong>${transcriber.full_name}</strong> has been notified.</p>
+                <p style="font-size: 16px;">Your payment of USD ${payment.amount ? payment.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'undefined'} for negotiation ID <strong>${negotiation.id}</strong> has been successfully processed.</p>
+                <p style="font-size: 16px;">Your job is now active, and <strong>${transcriber.full_name || 'Transcriber'}</strong> has been notified.</p>
                 <p style="font-size: 16px;"><strong>Job Details:</strong></p>
                 <ul style="font-size: 16px;">
                     <li>Negotiation ID: ${negotiation.id}</li>
-                    <li>Transcriber: ${transcriber.full_name} (${transcriber.email})</li>
-                    <li>Agreed Price: KES ${negotiation.agreed_price_kes}</li>
+                    <li>Transcriber: ${transcriber.full_name || 'Transcriber'} (${transcriber.email})</li>
+                    <li>Agreed Price: USD ${negotiation.agreed_price_usd ? negotiation.agreed_price_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'undefined'}</li>
                     <li>Deadline: ${negotiation.deadline_hours} hours</li>
                 </ul>
                 <p style="font-size: 16px;">You can track the progress of your job on your dashboard.</p>
@@ -304,13 +304,13 @@ const sendPaymentConfirmationEmail = async (client, transcriber, negotiation, pa
                     <h1 style="color: #6a0dad; margin-top: 15px;">New Job Hired!</h1>
                 </div>
                 <p style="font-size: 16px;">Hello ${transcriber.full_name || 'Transcriber'},</p>
-                <p style="font-size: 16px;">A client, <strong>${client.full_name}</strong> (${client.email}), has successfully paid for negotiation ID <strong>${negotiation.id}</strong>.</p>
+                <p style="font-size: 16px;">A client, <strong>${client.full_name || 'Client'}</strong> (${client.email}), has successfully paid for negotiation ID <strong>${negotiation.id}</strong>.</p>
                 <p style="font-size: 16px;">This job is now active. You have been marked as busy and will not receive new offers until this job is completed.</p>
                 <p style="font-size: 16px;"><strong>Job Details:</strong></p>
                 <ul style="font-size: 16px;">
                     <li>Negotiation ID: ${negotiation.id}</li>
-                    <li>Client: ${client.full_name} (${client.email})</li>
-                    <li>Agreed Price: KES ${negotiation.agreed_price_kes}</li>
+                    <li>Client: ${client.full_name || 'Client'} (${client.email})</li>
+                    <li>Agreed Price: USD ${negotiation.agreed_price_usd ? negotiation.agreed_price_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'undefined'}</li>
                     <li>Deadline: ${negotiation.deadline_hours} hours</li>
                 </ul>
                 <p style="font-size: 16px;">Please proceed with the transcription and mark the job as complete on your dashboard once finished.</p>
