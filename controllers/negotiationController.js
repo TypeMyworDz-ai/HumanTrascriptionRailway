@@ -764,9 +764,9 @@ const counterNegotiation = async (req, res, io) => {
         const { proposed_price_usd, transcriber_response } = req.body;
         const transcriberId = req.user.userId;
 
-        // Validate input fields
-        if (!proposed_price_usd || !transcriber_response) {
-            return res.status(400).json({ error: 'Proposed price and response are required for a counter-offer.' });
+        // Validate input fields - 'transcriber_response' is now optional
+        if (!proposed_price_usd) {
+            return res.status(400).json({ error: 'Proposed price is required for a counter-offer.' });
         }
 
         // Fetch negotiation details to verify status and authorization
@@ -798,7 +798,7 @@ const counterNegotiation = async (req, res, io) => {
                 agreed_price_usd: proposed_price_usd,
                 // FIX: Keep the original deadline_hours from the client's initial offer
                 deadline_hours: negotiation.deadline_hours, 
-                transcriber_response: transcriber_response,
+                transcriber_response: transcriber_response, // This can now be null/empty
                 updated_at: new Date().toISOString()
             })
             .eq('id', negotiationId)
@@ -1031,10 +1031,10 @@ const clientCounterBack = async (req, res, io) => {
         const clientId = req.user.userId;
 
         // Basic validation for required fields
-        // FIX: Removed deadline_hours from validation
-        if (!proposed_price_usd || !client_response) {
+        // FIX: Removed deadline_hours from validation, 'client_response' is now optional
+        if (!proposed_price_usd) {
             // FIX: Removed file cleanup logic as file is not expected
-            return res.status(400).json({ error: 'Proposed price and message are required for a counter-offer back.' });
+            return res.status(400).json({ error: 'Proposed price is required for a counter-offer back.' });
         }
 
         // FIX: Removed file handling logic entirely
@@ -1088,7 +1088,7 @@ const clientCounterBack = async (req, res, io) => {
                 agreed_price_usd: proposed_price_usd,
                 // FIX: Retain the original deadline_hours
                 deadline_hours: retainedDeadlineHours,
-                client_message: client_response,
+                client_message: client_response, // This can now be null/empty
                 // FIX: Retain the original negotiation_files
                 negotiation_files: fileToUpdate,
                 updated_at: new Date().toISOString()
