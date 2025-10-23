@@ -19,22 +19,20 @@ const getNextFriday = () => {
 
 
 const initializePayment = async (req, res, io) => {
-    // --- START CRITICAL DEBUGGING LOGS ---
     console.log('[initializePayment] Received request body:', req.body);
-    // --- END CRITICAL DEBUGGING LOGS ---
 
-    const { relatedJobId, amount, clientEmail, jobType } = req.body; 
+    // FIX: Changed 'relatedJobId' to 'jobId' to match the incoming request body
+    const { jobId, amount, clientEmail, jobType } = req.body; 
     const clientId = req.user.userId;
 
-    // --- START CRITICAL DEBUGGING LOGS ---
-    console.log(`[initializePayment] Destructured parameters - relatedJobId: ${relatedJobId}, amount: ${amount}, clientEmail: ${clientEmail}, jobType: ${jobType}, clientId: ${clientId}`);
-    // --- END CRITICAL DEBUGGING LOGS ---
+    console.log(`[initializePayment] Destructured parameters - jobId: ${jobId}, amount: ${amount}, clientEmail: ${clientEmail}, jobType: ${jobType}, clientId: ${clientId}`);
 
-    if (!relatedJobId || !amount || !clientEmail || !jobType) { 
+    // FIX: Use 'jobId' consistently in validation
+    if (!jobId || !amount || !clientEmail || !jobType) { 
         console.error('[initializePayment] Validation failed: Missing required parameters.');
         return res.status(400).json({ error: 'Job ID, amount, job type, and client email are required.' });
     }
-    if (!['negotiation', 'direct_upload', 'training'].includes(jobType)) { // FIX: Added 'training' as a valid jobType for robustness
+    if (!['negotiation', 'direct_upload', 'training'].includes(jobType)) {
         console.error(`[initializePayment] Validation failed: Invalid job type provided: ${jobType}`);
         return res.status(400).json({ error: 'Invalid job type provided for payment initialization.' });
     }
@@ -59,11 +57,11 @@ const initializePayment = async (req, res, io) => {
             const { data, error } = await supabase
                 .from('negotiations')
                 .select('id, client_id, transcriber_id, agreed_price_usd, status')
-                .eq('id', relatedJobId)
+                .eq('id', jobId) // FIX: Use 'jobId' here
                 .eq('client_id', clientId)
                 .single();
             if (error || !data) {
-                console.error(`[initializePayment] Error fetching negotiation ${relatedJobId} for payment:`, error);
+                console.error(`[initializePayment] Error fetching negotiation ${jobId} for payment:`, error);
                 return res.status(404).json({ error: 'Negotiation not found or not accessible.' });
             }
             jobDetails = data;
@@ -71,18 +69,18 @@ const initializePayment = async (req, res, io) => {
             agreedPriceUsd = data.agreed_price_usd;
             jobStatus = data.status;
             if (jobStatus !== 'accepted_awaiting_payment') {
-                console.error(`[initializePayment] Negotiation ${relatedJobId} status is ${jobStatus}, not 'accepted_awaiting_payment'.`);
+                console.error(`[initializePayment] Negotiation ${jobId} status is ${jobStatus}, not 'accepted_awaiting_payment'.`);
                 return res.status(400).json({ error: `Payment can only be initiated for accepted negotiations (status: accepted_awaiting_payment). Current status: ${jobStatus}` });
             }
         } else if (jobType === 'direct_upload') {
             const { data, error } = await supabase
                 .from('direct_upload_jobs')
                 .select('id, client_id, transcriber_id, quote_amount, status')
-                .eq('id', relatedJobId)
+                .eq('id', jobId) // FIX: Use 'jobId' here
                 .eq('client_id', clientId)
                 .single();
             if (error || !data) {
-                console.error(`[initializePayment] Error fetching direct upload job ${relatedJobId} for payment:`, error);
+                console.error(`[initializePayment] Error fetching direct upload job ${jobId} for payment:`, error);
                 return res.status(404).json({ error: 'Direct upload job not found or not accessible.' });
             }
             jobDetails = data;
@@ -90,30 +88,29 @@ const initializePayment = async (req, res, io) => {
             agreedPriceUsd = data.quote_amount;
             jobStatus = data.status;
             if (jobStatus !== 'pending_review' && jobStatus !== 'transcriber_assigned') {
-                console.error(`[initializePayment] Direct upload job ${relatedJobId} status is ${jobStatus}, not 'pending_review' or 'transcriber_assigned'.`);
+                console.error(`[initializePayment] Direct upload job ${jobId} status is ${jobStatus}, not 'pending_review' or 'transcriber_assigned'.`);
                 return res.status(400).json({ error: `Payment can only be initiated for direct upload jobs awaiting review or with assigned transcriber. Current status: ${jobStatus}` });
             }
-        } else if (jobType === 'training') { // NEW: Handle training payment initialization
+        } else if (jobType === 'training') {
             const { data: traineeUser, error } = await supabase
                 .from('users')
                 .select('id, email, transcriber_status')
-                .eq('id', relatedJobId) // relatedJobId is traineeId for training
+                .eq('id', jobId) // FIX: Use 'jobId' here
                 .eq('user_type', 'trainee')
                 .single();
             
             if (error || !traineeUser) {
-                console.error(`[initializePayment] Error fetching trainee ${relatedJobId} for training payment:`, error);
+                console.error(`[initializePayment] Error fetching trainee ${jobId} for training payment:`, error);
                 return res.status(404).json({ error: 'Trainee not found or not accessible for training payment.' });
             }
             if (traineeUser.transcriber_status === 'paid_training_fee') {
                 return res.status(400).json({ error: 'Trainee has already paid for training.' });
             }
             jobDetails = traineeUser;
-            transcriberId = traineeUser.id; // Trainee is also the 'transcriber' in this context
-            agreedPriceUsd = 0.50; // Hardcoded training fee
-            jobStatus = traineeUser.transcriber_status; // Current trainee status
+            transcriberId = traineeUser.id;
+            agreedPriceUsd = 0.50;
+            jobStatus = traineeUser.transcriber_status;
             
-            // Validate amount for training
             if (Math.round(parsedAmountUsd * 100) !== Math.round(agreedPriceUsd * 100)) {
                 console.error('[initializePayment] Training payment amount mismatch. Provided USD:', parsedAmountUsd, 'Expected USD:', agreedPriceUsd);
                 return res.status(400).json({ error: `Training payment amount must be USD ${agreedPriceUsd}.` });
@@ -137,11 +134,11 @@ const initializePayment = async (req, res, io) => {
             {
                 email: clientEmail,
                 amount: amountInCentsKes,
-                reference: `${relatedJobId}-${Date.now()}`,
-                callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${relatedJobId}&jobType=${jobType}`,
+                reference: `${jobId}-${Date.now()}`, // FIX: Use 'jobId' here
+                callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${jobId}&jobType=${jobType}`, // FIX: Use 'jobId' here
                 currency: 'KES',
                 metadata: {
-                    related_job_id: relatedJobId,
+                    related_job_id: jobId, // FIX: Use 'jobId' here
                     related_job_type: jobType,
                     client_id: clientId,
                     transcriber_id: transcriberId,
@@ -247,6 +244,7 @@ const initializeTrainingPayment = async (req, res, io) => {
 
 const verifyPayment = async (req, res, io) => {
     const { reference } = req.params;
+    // FIX: Use 'relatedJobId' and 'jobType' from query parameters consistently
     const { relatedJobId, jobType } = req.query;
 
     if (!reference || !relatedJobId || !jobType) {
