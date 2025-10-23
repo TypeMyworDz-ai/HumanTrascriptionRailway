@@ -1,8 +1,8 @@
 const axios = require('axios');
-const supabase = require('../database');
-const { syncAvailabilityStatus } = require('../controllers/transcriberController');
-const emailService = require('../emailService');
-const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
+const supabase = require('..//database');
+const { syncAvailabilityStatus } = require('..//controllers/transcriberController');
+const emailService = require('..//emailService');
+const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
@@ -496,7 +496,9 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 payout_status,
                 currency_paid_by_client,
                 exchange_rate_used,
-                client:users!client_id(full_name, email)
+                client:users!client_id(full_name, email),
+                negotiation:negotiations!related_job_id(status, requirements, deadline_hours, agreed_price_usd), // NEW: Fetch negotiation status
+                direct_upload_job:direct_upload_jobs!related_job_id(status, client_instructions, agreed_deadline_hours, quote_amount) // NEW: Fetch direct upload job status
             `)
             .eq('transcriber_id', transcriberId)
             // Filter to include only payments that are 'awaiting_completion' or 'paid_out'
@@ -510,20 +512,11 @@ const getTranscriberPaymentHistory = async (req, res) => {
 
         const paymentsWithJobDetails = await Promise.all((payments || []).map(async (payment) => {
             let jobDetails = {};
+            // The negotiation and direct_upload_job data is already joined by the select query
             if (payment.related_job_type === 'negotiation') {
-                const { data: negotiation, error: negError } = await supabase
-                    .from('negotiations')
-                    .select('requirements, deadline_hours, agreed_price_usd, status') // NEW: Select 'status'
-                    .eq('id', payment.related_job_id)
-                    .single();
-                jobDetails = { negotiation: negotiation || null };
+                jobDetails = { negotiation: payment.negotiation || null };
             } else if (payment.related_job_type === 'direct_upload') {
-                const { data: directJob, error: directJobError } = await supabase
-                    .from('direct_upload_jobs')
-                    .select('client_instructions, agreed_deadline_hours, quote_amount, status') // NEW: Select 'status'
-                    .eq('id', payment.related_job_id)
-                    .single();
-                jobDetails = { direct_upload_job: directJob || null };
+                jobDetails = { direct_upload_job: payment.direct_upload_job || null };
             }
             return { ...payment, ...jobDetails };
         }));
@@ -560,7 +553,8 @@ const getTranscriberPaymentHistory = async (req, res) => {
                     clientName: payout.client?.full_name || 'N/A',
                     jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || 'N/A',
                     amount: payout.transcriber_earning,
-                    status: payout.payout_status, // Use payout_status here
+                    status: payout.payout_status, // This is the payout_status
+                    job_status: payout.negotiation?.status || payout.direct_upload_job?.status || 'N/A', // NEW: Add the job's actual status
                     created_at: new Date(payout.transaction_date).toLocaleDateString()
                 });
                 totalUpcomingPayouts += payout.transcriber_earning;
