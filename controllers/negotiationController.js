@@ -527,7 +527,7 @@ const getTranscriberNegotiations = async (req, res) => {
             email,
             phone,
             client_average_rating,
-            client_completed_jobs,  // FIX: Added client_completed_jobs
+            client_completed_jobs,
             client_comment
         ),
         transcriber:users!transcriber_id (
@@ -569,14 +569,14 @@ const getTranscriberNegotiations = async (req, res) => {
                 full_name: client.full_name,
                 email: client.email,
                 phone: client.phone,
-                client_rating: client.client_average_rating || 5.0, // Use client_average_rating
-                client_completed_jobs: client.client_completed_jobs || 0, // Use client_completed_jobs
-                client_comment: client.client_comment || null, // Use client_comment
+                client_average_rating: client.client_average_rating || 0.0, // FIX: Default to 0.0 for client_average_rating
+                client_completed_jobs: client.client_completed_jobs || 0,
+                client_comment: client.client_comment || null,
             } : { // Fallback if client data is missing
                 id: negotiation.client_id,
                 full_name: 'Unknown Client',
                 email: 'unknown@example.com',
-                client_rating: 5.0,
+                client_average_rating: 0.0, // FIX: Default to 0.0 for client_average_rating
                 client_completed_jobs: 0,
                 client_comment: null,
             },
@@ -595,7 +595,7 @@ const getTranscriberNegotiations = async (req, res) => {
         };
     });
 
-    console.log('[getTranscriberNegotiations] Formatted negotiations sent to frontend:', negotiationsWithClients.map(n => ({ id: n.id, clientRating: n.client_info.client_rating, clientJobs: n.client_info.client_completed_jobs, dueDate: n.due_date }))); // FIX: Log clientJobs
+    console.log('[getTranscriberNegotiations] Formatted negotiations sent to frontend:', negotiationsWithClients.map(n => ({ id: n.id, clientRating: n.client_info.client_average_rating, clientJobs: n.client_info.client_completed_jobs, dueDate: n.due_date }))); // FIX: Log client_average_rating
     res.json({
       message: 'Transcriber negotiations retrieved successfully',
       negotiations: negotiationsWithClients
