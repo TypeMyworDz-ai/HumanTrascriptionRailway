@@ -1,8 +1,8 @@
-const supabase = require('../database');
+const supabase = require('..//database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const emailService = require('../emailService');
+const emailService = require('..//emailService');
 // Removed import for updateAverageRating as client rating is being removed.
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB limit
@@ -504,8 +504,6 @@ const getTranscriberNegotiations = async (req, res) => {
 
     console.log('Get transcriber negotiations for:', transcriberId);
 
-    // FIX: Fetch negotiations associated with the transcriber, joining with client details from the 'users' table
-    // Also, ensure transcriber's own profile data is available (from 'users' table)
     const { data: negotiations, error: negotiationsError } = await supabase
       .from('negotiations')
       .select(`
@@ -529,7 +527,7 @@ const getTranscriberNegotiations = async (req, res) => {
             email,
             phone,
             client_average_rating,
-            client_completed_jobs,
+            client_completed_jobs,  // FIX: Added client_completed_jobs
             client_comment
         ),
         transcriber:users!transcriber_id (
@@ -597,7 +595,7 @@ const getTranscriberNegotiations = async (req, res) => {
         };
     });
 
-    console.log('[getTranscriberNegotiations] Formatted negotiations sent to frontend:', negotiationsWithClients.map(n => ({ id: n.id, clientRating: n.client_info.client_rating, dueDate: n.due_date })));
+    console.log('[getTranscriberNegotiations] Formatted negotiations sent to frontend:', negotiationsWithClients.map(n => ({ id: n.id, clientRating: n.client_info.client_rating, clientJobs: n.client_info.client_completed_jobs, dueDate: n.due_date }))); // FIX: Log clientJobs
     res.json({
       message: 'Transcriber negotiations retrieved successfully',
       negotiations: negotiationsWithClients

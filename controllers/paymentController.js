@@ -21,13 +21,11 @@ const getNextFriday = () => {
 const initializePayment = async (req, res, io) => {
     console.log('[initializePayment] Received request body:', req.body);
 
-    // FIX: Changed 'relatedJobId' to 'jobId' to match the incoming request body
     const { jobId, amount, clientEmail, jobType } = req.body; 
     const clientId = req.user.userId;
 
     console.log(`[initializePayment] Destructured parameters - jobId: ${jobId}, amount: ${amount}, clientEmail: ${clientEmail}, jobType: ${jobType}, clientId: ${clientId}`);
 
-    // FIX: Use 'jobId' consistently in validation
     if (!jobId || !amount || !clientEmail || !jobType) { 
         console.error('[initializePayment] Validation failed: Missing required parameters.');
         return res.status(400).json({ error: 'Job ID, amount, job type, and client email are required.' });
@@ -43,7 +41,6 @@ const initializePayment = async (req, res, io) => {
 
     const parsedAmountUsd = parseFloat(amount);
     if (isNaN(parsedAmountUsd) || parsedAmountUsd <= 0) {
-        console.error(`[initializePayment] Validation failed: Invalid payment amount: ${amount}`);
         return res.status(400).json({ error: 'Invalid payment amount.' });
     }
 
@@ -57,7 +54,7 @@ const initializePayment = async (req, res, io) => {
             const { data, error } = await supabase
                 .from('negotiations')
                 .select('id, client_id, transcriber_id, agreed_price_usd, status')
-                .eq('id', jobId) // FIX: Use 'jobId' here
+                .eq('id', jobId)
                 .eq('client_id', clientId)
                 .single();
             if (error || !data) {
@@ -76,7 +73,7 @@ const initializePayment = async (req, res, io) => {
             const { data, error } = await supabase
                 .from('direct_upload_jobs')
                 .select('id, client_id, transcriber_id, quote_amount, status')
-                .eq('id', jobId) // FIX: Use 'jobId' here
+                .eq('id', jobId)
                 .eq('client_id', clientId)
                 .single();
             if (error || !data) {
@@ -95,7 +92,7 @@ const initializePayment = async (req, res, io) => {
             const { data: traineeUser, error } = await supabase
                 .from('users')
                 .select('id, email, transcriber_status')
-                .eq('id', jobId) // FIX: Use 'jobId' here
+                .eq('id', jobId)
                 .eq('user_type', 'trainee')
                 .single();
             
@@ -134,11 +131,11 @@ const initializePayment = async (req, res, io) => {
             {
                 email: clientEmail,
                 amount: amountInCentsKes,
-                reference: `${jobId}-${Date.now()}`, // FIX: Use 'jobId' here
-                callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${jobId}&jobType=${jobType}`, // FIX: Use 'jobId' here
+                reference: `${jobId}-${Date.now()}`,
+                callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${jobId}&jobType=${jobType}`,
                 currency: 'KES',
                 metadata: {
-                    related_job_id: jobId, // FIX: Use 'jobId' here
+                    related_job_id: jobId,
                     related_job_type: jobType,
                     client_id: clientId,
                     transcriber_id: transcriberId,
@@ -244,7 +241,6 @@ const initializeTrainingPayment = async (req, res, io) => {
 
 const verifyPayment = async (req, res, io) => {
     const { reference } = req.params;
-    // FIX: Use 'relatedJobId' and 'jobType' from query parameters consistently
     const { relatedJobId, jobType } = req.query;
 
     if (!reference || !relatedJobId || !jobType) {
@@ -499,6 +495,8 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 client:users!client_id(full_name, email)
             `)
             .eq('transcriber_id', transcriberId)
+            // Filter to include only payments that are 'awaiting_completion' or 'paid_out'
+            .or('payout_status.eq.awaiting_completion,payout_status.eq.paid_out') // NEW FILTER
             .order('transaction_date', { ascending: false });
 
         if (error) {
@@ -511,14 +509,14 @@ const getTranscriberPaymentHistory = async (req, res) => {
             if (payment.related_job_type === 'negotiation') {
                 const { data: negotiation, error: negError } = await supabase
                     .from('negotiations')
-                    .select('requirements, deadline_hours, agreed_price_usd')
+                    .select('requirements, deadline_hours, agreed_price_usd, status') // NEW: Select 'status'
                     .eq('id', payment.related_job_id)
                     .single();
                 jobDetails = { negotiation: negotiation || null };
             } else if (payment.related_job_type === 'direct_upload') {
                 const { data: directJob, error: directJobError } = await supabase
                     .from('direct_upload_jobs')
-                    .select('client_instructions, agreed_deadline_hours, quote_amount')
+                    .select('client_instructions, agreed_deadline_hours, quote_amount, status') // NEW: Select 'status'
                     .eq('id', payment.related_job_id)
                     .single();
                 jobDetails = { direct_upload_job: directJob || null };
@@ -526,18 +524,60 @@ const getTranscriberPaymentHistory = async (req, res) => {
             return { ...payment, ...jobDetails };
         }));
 
-        const totalEarnings = (paymentsWithJobDetails || []).reduce((sum, p) => sum + p.transcriber_earning, 0);
-        const currentMonth = new Date().getMonth();
-        const currentYear = new Date().getFullYear();
+        // Group payments by week ending Friday for upcoming payouts
+        const groupedUpcomingPayouts = {};
+        let totalUpcomingPayouts = 0;
+        let totalEarnings = 0; // Initialize total earnings for completed jobs
+        let monthlyEarnings = 0; // Initialize monthly earnings for completed jobs
 
-        const monthlyEarnings = (paymentsWithJobDetails || []).filter(p => {
-            const date = new Date(p.transaction_date);
-            return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
-        }).reduce((sum, p) => sum + p.transcriber_earning, 0);
+        paymentsWithJobDetails.forEach(payout => {
+            if (payout.payout_status === 'awaiting_completion') {
+                const transactionDate = new Date(payout.transaction_date);
+                const dayOfWeek = transactionDate.getDay(); // 0 for Sunday, 1 for Monday, ..., 6 for Saturday
+                const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
+                
+                const weekEndingDate = new Date(transactionDate);
+                weekEndingDate.setDate(transactionDate.getDate() + daysUntilFriday);
+                weekEndingDate.setHours(23, 59, 59, 999); // Set to end of Friday
+                const weekEndingString = weekEndingDate.toISOString().split('T')[0]; // YYYY-MM-DD
+
+                if (!groupedUpcomingPayouts[weekEndingString]) {
+                    groupedUpcomingPayouts[weekEndingString] = {
+                        date: weekEndingString,
+                        totalAmount: 0,
+                        payouts: []
+                    };
+                }
+                groupedUpcomingPayouts[weekEndingString].totalAmount += payout.transcriber_earning;
+                groupedUpcomingPayouts[weekEndingString].payouts.push({
+                    id: payout.id,
+                    related_job_id: payout.related_job_id,
+                    related_job_type: payout.related_job_type,
+                    clientName: payout.client?.full_name || 'N/A',
+                    jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || 'N/A',
+                    amount: payout.transcriber_earning,
+                    status: payout.payout_status, // Use payout_status here
+                    created_at: new Date(payout.transaction_date).toLocaleDateString()
+                });
+                totalUpcomingPayouts += payout.transcriber_earning;
+            } else if (payout.payout_status === 'paid_out') { // Calculate total and monthly earnings from 'paid_out' payments
+                totalEarnings += payout.transcriber_earning;
+                const date = new Date(payout.transaction_date);
+                const currentMonth = new Date().getMonth();
+                const currentYear = new Date().getFullYear();
+                if (date.getMonth() === currentMonth && date.getFullYear() === currentYear) {
+                    monthlyEarnings += payout.transcriber_earning;
+                }
+            }
+        });
+
+        const upcomingPayoutsArray = Object.values(groupedUpcomingPayouts).sort((a, b) => new Date(a.date) - new Date(b.date));
 
         res.status(200).json({
             message: 'Transcriber payment history retrieved successfully.',
-            payments: paymentsWithJobDetails,
+            payments: [], // No longer returning 'All Past Transactions' in this endpoint
+            upcomingPayouts: upcomingPayoutsArray,
+            totalUpcomingPayouts: totalUpcomingPayouts,
             summary: {
                 totalEarnings: totalEarnings,
                 monthlyEarnings: monthlyEarnings,
@@ -688,6 +728,190 @@ const getAllPaymentHistoryForAdmin = async (req, res) => {
   }
 };
 
+const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
+    const { transcriberId } = req.params;
+    const adminId = req.user.userId;
+
+    const { data: adminUser, error: adminError } = await supabase
+        .from('users')
+        .select('user_type')
+        .eq('id', adminId)
+        .single();
+
+    if (adminError || adminUser?.user_type !== 'admin') {
+        return res.status(403).json({ error: 'Unauthorized: Only administrators can view transcriber payouts.' });
+    }
+
+    try {
+        const { data: payments, error } = await supabase
+            .from('payments')
+            .select(`
+                id,
+                related_job_id,
+                related_job_type,
+                client_id,
+                transcriber_id,
+                amount,
+                transcriber_earning,
+                currency,
+                paystack_reference,
+                paystack_status,
+                transaction_date,
+                payout_status,
+                currency_paid_by_client,
+                exchange_rate_used,
+                client:users!client_id(full_name, email)
+            `)
+            .eq('transcriber_id', transcriberId)
+            .eq('payout_status', 'awaiting_completion')
+            .order('transaction_date', { ascending: true });
+
+        if (error) {
+            console.error(`Error fetching upcoming payouts for transcriber ${transcriberId}:`, error);
+            return res.status(500).json({ error: error.message });
+        }
+
+        const paymentsWithJobDetails = await Promise.all((payments || []).map(async (payment) => {
+            let jobDetails = {};
+            if (payment.related_job_type === 'negotiation') {
+                const { data: negotiation, error: negError } = await supabase
+                    .from('negotiations')
+                    .select('requirements, deadline_hours, agreed_price_usd, created_at')
+                    .eq('id', payment.related_job_id)
+                    .single();
+                jobDetails = { negotiation: negotiation || null };
+            } else if (payment.related_job_type === 'direct_upload') {
+                const { data: directJob, error: directJobError } = await supabase
+                    .from('direct_upload_jobs')
+                    .select('client_instructions, agreed_deadline_hours, quote_amount, created_at')
+                    .eq('id', payment.related_job_id)
+                    .single();
+                jobDetails = { direct_upload_job: directJob || null };
+            }
+            return { ...payment, ...jobDetails };
+        }));
+
+        const groupedPayouts = {};
+        let totalUpcomingPayouts = 0;
+
+        paymentsWithJobDetails.forEach(payout => {
+            const transactionDate = new Date(payout.transaction_date);
+            const dayOfWeek = transactionDate.getDay();
+            const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
+            
+            const weekEndingDate = new Date(transactionDate);
+            weekEndingDate.setDate(transactionDate.getDate() + daysUntilFriday);
+            weekEndingDate.setHours(23, 59, 59, 999);
+            const weekEndingString = weekEndingDate.toISOString().split('T')[0];
+
+            if (!groupedPayouts[weekEndingString]) {
+                groupedPayouts[weekEndingString] = {
+                    date: weekEndingString,
+                    totalAmount: 0,
+                    payouts: []
+                };
+            }
+            groupedPayouts[weekEndingString].totalAmount += payout.transcriber_earning;
+            groupedPayouts[weekEndingString].payouts.push({
+                id: payout.id,
+                related_job_id: payout.related_job_id,
+                related_job_type: payout.related_job_type,
+                clientName: payout.client?.full_name || 'N/A',
+                jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || 'N/A',
+                amount: payout.transcriber_earning,
+                status: payout.payout_status,
+                created_at: new Date(payout.transaction_date).toLocaleDateString()
+            });
+            totalUpcomingPayouts += payout.transcriber_earning;
+        });
+
+        const upcomingPayoutsArray = Object.values(groupedPayouts).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+        res.status(200).json({
+            message: `Upcoming payouts for transcriber ${transcriberId} retrieved successfully.`,
+            upcomingPayouts: upcomingPayoutsArray,
+            totalUpcomingPayouts: totalUpcomingPayouts
+        });
+
+    } catch (error) {
+        console.error(`Server error fetching upcoming payouts for transcriber ${transcriberId}:`, error);
+        res.status(500).json({ error: 'Server error fetching upcoming payouts.' });
+    }
+};
+
+const markPaymentAsPaidOut = async (req, res, io) => {
+    const { paymentId } = req.params;
+    const adminId = req.user.userId;
+
+    const { data: adminUser, error: adminError } = await supabase
+        .from('users')
+        .select('user_type')
+        .eq('id', adminId)
+        .single();
+
+    if (adminError || adminUser?.user_type !== 'admin') {
+        return res.status(403).json({ error: 'Unauthorized: Only administrators can mark payments as paid out.' });
+    }
+
+    try {
+        const { data: payment, error: fetchError } = await supabase
+            .from('payments')
+            .select('*')
+            .eq('id', paymentId)
+            .single();
+
+        if (fetchError || !payment) {
+            return res.status(404).json({ error: 'Payment record not found.' });
+        }
+
+        if (payment.payout_status !== 'awaiting_completion') {
+            return res.status(400).json({ error: `Payment status is '${payment.payout_status}'. Only payments 'awaiting_completion' can be marked as paid out.` });
+        }
+
+        const { data: updatedPayment, error: updateError } = await supabase
+            .from('payments')
+            .update({ payout_status: 'paid_out', paid_out_date: new Date().toISOString() })
+            .eq('id', paymentId)
+            .select()
+            .single();
+
+        if (updateError) {
+            console.error(`Error updating payment ${paymentId} to 'paid_out':`, updateError);
+            throw updateError;
+        }
+
+        if (io && payment.transcriber_id) {
+            io.to(payment.transcriber_id).emit('payout_processed', {
+                paymentId: updatedPayment.id,
+                amount: updatedPayment.transcriber_earning,
+                message: 'Your payment has been processed and disbursed!',
+                status: 'paid_out'
+            });
+        }
+        
+        const { data: transcriberUser, error: transcriberError } = await supabase
+            .from('users')
+            .select('full_name, email')
+            .eq('id', payment.transcriber_id)
+            .single();
+
+        if (transcriberError) console.error(`Error fetching transcriber ${payment.transcriber_id} for payout email:`, transcriberError);
+
+        if (transcriberUser) {
+            await emailService.sendPayoutConfirmationEmail(transcriberUser, updatedPayment);
+        }
+
+        res.status(200).json({
+            message: 'Payment marked as paid out successfully.',
+            payment: updatedPayment
+        });
+
+    } catch (error) {
+        console.error(`Server error marking payment ${paymentId} as paid out:`, error);
+        res.status(500).json({ error: 'Server error marking payment as paid out.' });
+    }
+};
+
 
 module.exports = {
     initializePayment,
@@ -695,5 +919,7 @@ module.exports = {
     verifyPayment,
     getTranscriberPaymentHistory,
     getClientPaymentHistory,
-    getAllPaymentHistoryForAdmin
+    getAllPaymentHistoryForAdmin,
+    getTranscriberUpcomingPayoutsForAdmin,
+    markPaymentAsPaidOut
 };

@@ -398,7 +398,6 @@ const sendTrainingCompletionEmail = async (user) => {
                     <p style="font-size: 16px;">You can now start receiving and accepting transcription jobs from clients. Make sure to keep your availability status updated on your dashboard.</p>
                     <p style="font-size: 16px;"><a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/transcriber-dashboard" style="color: #6a0dad; text-decoration: none; font-weight: bold;">Go to Your Transcriber Dashboard</a></p>
                     <p style="font-size: 16px; font-weight: bold; color: #6a0dad;">Welcome to the team!</p>
-                    <p style="font-size: 14px; color: #666;">Best regards,<br>The TypeMyworDz Team</p>
                     <div style="text-align: center; margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; font-size: 12px; color: #999;">
                         &copy; ${new Date().getFullYear()} TypeMyworDz. All rights reserved.
                     </div>
@@ -408,6 +407,36 @@ const sendTrainingCompletionEmail = async (user) => {
         console.log(`Training completion email sent to ${user.email}`);
     } catch (error) {
         console.error(`Error sending training completion email to ${user.email}:`, error);
+    }
+};
+
+// NEW: Function to send email when an admin marks a transcriber payment as paid out
+const sendPayoutConfirmationEmail = async (transcriber, payment) => {
+    try {
+        await transporter.sendMail({
+            from: FROM_ADDRESS,
+            to: transcriber.email,
+            subject: `Payout Confirmation - USD ${payment.transcriber_earning.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} from TypeMyworDz`,
+            html: `
+                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 20px auto; padding: 20px; border: 1px solid #eee; border-radius: 8px; background-color: #f9f9f9;">
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <img src="${LOGO_URL}" alt="TypeMyworDz Logo" style="max-width: 150px; height: auto; display: block; margin: 0 auto;">
+                        <h1 style="color: #6a0dad; margin-top: 15px;">Your Payout Has Been Processed!</h1>
+                    </div>
+                    <p style="font-size: 16px;">Hello ${transcriber.full_name || 'Transcriber'},</p>
+                    <p style="font-size: 16px;">We are pleased to confirm that your payout for the amount of <strong>USD ${payment.transcriber_earning.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong> has been processed.</p>
+                    <p style="font-size: 16px;">This payment is for job ID: <strong>${payment.related_job_id?.substring(0, 8) || 'N/A'}...</strong>, originally paid by the client on ${new Date(payment.transaction_date).toLocaleDateString()}.</p>
+                    <p style="font-size: 16px;">Please check your payment method (M-Pesa/PayPal) within 1-2 business days for the funds to reflect.</p>
+                    <p style="font-size: 16px;"><a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/transcriber-payments" style="color: #6a0dad; text-decoration: none; font-weight: bold;">View Your Payment History</a></p>
+                    <div style="text-align: center; margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; font-size: 12px; color: #999;">
+                        &copy; ${new Date().getFullYear()} TypeMyworDz. All rights reserved.
+                    </div>
+                </div>
+            `,
+        });
+        console.log(`Payout confirmation email sent to ${transcriber.email} for payment ID ${payment.id}`);
+    } catch (error) {
+        console.error(`Error sending payout confirmation email to ${transcriber.email} for payment ID ${payment.id}:`, error);
     }
 };
 
@@ -421,5 +450,6 @@ module.exports = {
     sendNegotiationAcceptedEmail,
     sendPaymentConfirmationEmail,
     sendNegotiationRejectedEmail,
-    sendTrainingCompletionEmail, // NEW: Export the new function
+    sendTrainingCompletionEmail,
+    sendPayoutConfirmationEmail, // NEW: Export the new payout confirmation function
 };

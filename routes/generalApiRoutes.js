@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('../database');
-const authMiddleware = require('../middleware/authMiddleware');
+const supabase = require('..//database');
+const authMiddleware = require('..//middleware/authMiddleware');
 const fs = require('fs');
 const path = require('path');
 
@@ -22,7 +22,7 @@ const {
   clientRejectCounter,
   clientCounterBack,
   markJobCompleteByClient
-} = require('../controllers/negotiationController');
+} = require('..//controllers/negotiationController');
 
 // Import admin controller functions
 const {
@@ -44,7 +44,7 @@ const {
     getJobByIdForAdmin,
     getAllDisputesForAdmin,
     getAdminUserId // NEW: Import getAdminUserId
-} = require('../controllers/adminController');
+} = require('..//controllers/adminController');
 
 // Import chat controller functions
 const {
@@ -58,7 +58,7 @@ const {
     sendNegotiationMessage,
     uploadChatAttachment,
     handleChatAttachmentUpload
-} = require('../controllers/chatController');
+} = require('..//controllers/chatController');
 
 // NEW: Import payment controller functions
 const {
@@ -67,20 +67,22 @@ const {
     getTranscriberPaymentHistory,
     getClientPaymentHistory,
     getAllPaymentHistoryForAdmin,
-    initializeTrainingPayment // NEW: Import initializeTrainingPayment
-} = require('../controllers/paymentController');
+    initializeTrainingPayment, // NEW: Import initializeTrainingPayment
+    getTranscriberUpcomingPayoutsForAdmin, // NEW: Import getTranscriberUpcomingPayoutsForAdmin
+    markPaymentAsPaidOut // NEW: Import markPaymentAsPaidOut
+} = require('..//controllers/paymentController');
 
 // NEW: Import rating controller functions
 const {
     rateUserByAdmin,
     getTranscriberRatings,
     getClientRating
-} = require('../controllers/ratingController');
+} = require('..//controllers/ratingController');
 
 // NEW: Import updateTranscriberProfile from transcriberController
-const { updateTranscriberProfile } = require('../controllers/transcriberController');
+const { updateTranscriberProfile } = require('..//controllers/transcriberController');
 // NEW: Import updateClientProfile from authController
-const { updateClientProfile } = require('../controllers/authController');
+const { updateClientProfile } = require('..//controllers/authController');
 
 // NEW: Import functions from directUploadController.js
 const {
@@ -92,7 +94,7 @@ const {
     completeDirectUploadJob,
     getAllDirectUploadJobsForAdmin,
     handleQuoteCalculationRequest
-} = require('../controllers/directUploadController');
+} = require('..//controllers/directUploadController');
 
 // NEW: Import training controller functions
 const {
@@ -106,7 +108,7 @@ const {
     uploadTrainingRoomAttachment, // NEW: Import uploadTrainingRoomAttachment
     handleTrainingRoomAttachmentUpload, // NEW: Import handleTrainingRoomAttachmentUpload
     completeTraining // NEW: Import completeTraining
-} = require('../controllers/trainingController');
+} = require('..//controllers/trainingController');
 
 // Import multer for direct use in this file for error handling
 const multer = require('multer');
@@ -576,19 +578,19 @@ module.exports = (io) => {
 
   // --- NEW: Paystack Payment Routes ---
   router.post('/payment/initialize', authMiddleware, (req, res, next) => {
-    if (req.user.userType !== 'client') {
-      return res.status(403).json({ error: 'Access denied. Only clients can initiate payments.' });
+    if (req.user.userType !== 'client' && req.user.userType !== 'trainee') { // FIX: Allow trainees to initiate payment
+      return res.status(403).json({ error: 'Access denied. Only clients or trainees can initiate payments.' });
     }
     initializePayment(req, res, io);
   });
 
-  // NEW: Route for initializing training payment
-  router.post('/payment/initialize-training', authMiddleware, (req, res, next) => {
-      if (req.user.userType !== 'trainee') {
-          return res.status(403).json({ error: 'Access denied. Only trainees can initiate training payments.' });
-      }
-      initializeTrainingPayment(req, res, io);
-  });
+  // NEW: Route for initializing training payment (this is now redundant as initializePayment handles training)
+  // router.post('/payment/initialize-training', authMiddleware, (req, res, next) => {
+  //     if (req.user.userType !== 'trainee') {
+  //         return res.status(403).json({ error: 'Access denied. Only trainees can initiate training payments.' });
+  //     }
+  //     initializeTrainingPayment(req, res, io);
+  // });
 
   router.get('/payment/verify/:reference', authMiddleware, (req, res, next) => {
     verifyPayment(req, res, io);
@@ -617,6 +619,23 @@ module.exports = (io) => {
     }
     getAllPaymentHistoryForAdmin(req, res, io);
   });
+  
+  // NEW: Admin route to get a specific transcriber's upcoming payouts
+  router.get('/admin/transcriber/:transcriberId/upcoming-payouts', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'admin') {
+      return res.status(403).json({ error: 'Access denied. Only admins can view transcriber upcoming payouts.' });
+    }
+    getTranscriberUpcomingPayoutsForAdmin(req, res, io); // Pass io for potential future use
+  });
+
+  // NEW: Admin route to mark a payment as 'paid out'
+  router.put('/admin/payments/:paymentId/mark-paid', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'admin') {
+      return res.status(403).json({ error: 'Access denied. Only admins can mark payments as paid out.' });
+    }
+    markPaymentAsPaidOut(req, res, io); // Pass io for potential future use
+  });
+
 
   // --- NEW: Rating Routes ---
   router.post('/admin/ratings', authMiddleware, (req, res, next) => {
