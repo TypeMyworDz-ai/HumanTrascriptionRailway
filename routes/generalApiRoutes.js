@@ -584,13 +584,13 @@ module.exports = (io) => {
     initializePayment(req, res, io);
   });
 
-  // NEW: Route for initializing training payment (this is now redundant as initializePayment handles training)
-  // router.post('/payment/initialize-training', authMiddleware, (req, res, next) => {
-  //     if (req.user.userType !== 'trainee') {
-  //         return res.status(403).json({ error: 'Access denied. Only trainees can initiate training payments.' });
-  //     }
-  //     initializeTrainingPayment(req, res, io);
-  // });
+  // NEW: Route for initializing training payment (this is now active)
+  router.post('/payment/initialize-training', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'trainee') {
+          return res.status(403).json({ error: 'Access denied. Only trainees can initiate training payments.' });
+      }
+      initializeTrainingPayment(req, res, io);
+  });
 
   router.get('/payment/verify/:reference', authMiddleware, (req, res, next) => {
     verifyPayment(req, res, io);
