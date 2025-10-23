@@ -134,7 +134,7 @@ const initializePayment = async (req, res, io) => {
                 reference: `${jobId}-${Date.now()}`,
                 callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${jobId}&jobType=${jobType}`,
                 currency: 'KES',
-                // NEW: Explicitly define payment channels to include Pesalink
+                // Explicitly define payment channels to include Pesalink
                 channels: ['mobile_money', 'card', 'bank_transfer', 'pesalink'],
                 metadata: {
                     related_job_id: jobId,
@@ -206,7 +206,7 @@ const initializeTrainingPayment = async (req, res, io) => {
                 reference: `TRAINING-${traineeId}-${Date.now()}`,
                 callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${traineeId}&jobType=training`,
                 currency: 'KES',
-                // NEW: Explicitly define payment channels to include Pesalink
+                // Explicitly define payment channels to include Pesalink
                 channels: ['mobile_money', 'card', 'bank_transfer', 'pesalink'],
                 metadata: {
                     related_job_id: traineeId,
@@ -497,12 +497,12 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 currency_paid_by_client,
                 exchange_rate_used,
                 client:users!client_id(full_name, email),
-                negotiation:negotiations!related_job_id(status, requirements, deadline_hours, agreed_price_usd), // NEW: Fetch negotiation status
-                direct_upload_job:direct_upload_jobs!related_job_id(status, client_instructions, agreed_deadline_hours, quote_amount) // NEW: Fetch direct upload job status
+                negotiation:negotiations!related_job_id(status, requirements, deadline_hours, agreed_price_usd),
+                direct_upload_job:direct_upload_jobs!related_job_id(status, client_instructions, agreed_deadline_hours, quote_amount)
             `)
             .eq('transcriber_id', transcriberId)
             // Filter to include only payments that are 'awaiting_completion' or 'paid_out'
-            .or('payout_status.eq.awaiting_completion,payout_status.eq.paid_out') // NEW FILTER
+            .or('payout_status.eq.awaiting_completion,payout_status.eq.paid_out')
             .order('transaction_date', { ascending: false });
 
         if (error) {
