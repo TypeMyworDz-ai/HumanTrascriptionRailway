@@ -191,7 +191,7 @@ const initializeTrainingPayment = async (req, res, io) => {
     const TRAINING_FEE_USD = 0.50; 
     if (Math.round(parsedAmountUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
         console.error('Training payment amount mismatch. Provided USD:', parsedAmountUsd, 'Expected USD:', TRAINING_FEE_USD);
-        return res.status(400).json({ error: `Training payment amount must be USD ${TRAINING_FEE_USD}.` });
+        return res.status(400).json({ error: `Training payment amount must be USD ${agreedPriceUsd}.` });
     }
 
     try {
@@ -497,8 +497,8 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 currency_paid_by_client,
                 exchange_rate_used,
                 client:users!client_id(full_name, email),
-                negotiation:negotiations!related_job_id(status, requirements, deadline_hours, agreed_price_usd),
-                direct_upload_job:direct_upload_jobs!related_job_id(status, client_instructions, agreed_deadline_hours, quote_amount)
+                negotiation:negotiations!related_job_id(status, requirements, deadline_hours, agreed_price_usd)
+                // Removed direct_upload_job join from here to prevent schema cache error
             `)
             .eq('transcriber_id', transcriberId)
             // Filter to include only payments that are 'awaiting_completion' or 'paid_out'
@@ -512,11 +512,20 @@ const getTranscriberPaymentHistory = async (req, res) => {
 
         const paymentsWithJobDetails = await Promise.all((payments || []).map(async (payment) => {
             let jobDetails = {};
-            // The negotiation and direct_upload_job data is already joined by the select query
+            // The negotiation data is already joined by the select query
             if (payment.related_job_type === 'negotiation') {
                 jobDetails = { negotiation: payment.negotiation || null };
             } else if (payment.related_job_type === 'direct_upload') {
-                jobDetails = { direct_upload_job: payment.direct_upload_job || null };
+                // NEW: Fetch direct_upload_job details separately due to schema cache error
+                const { data: directJob, error: directJobError } = await supabase
+                    .from('direct_upload_jobs')
+                    .select('status, client_instructions, agreed_deadline_hours, quote_amount')
+                    .eq('id', payment.related_job_id)
+                    .single();
+                if (directJobError) {
+                    console.error(`Error fetching direct upload job ${payment.related_job_id} for payment:`, directJobError);
+                }
+                jobDetails = { direct_upload_job: directJob || null };
             }
             return { ...payment, ...jobDetails };
         }));
