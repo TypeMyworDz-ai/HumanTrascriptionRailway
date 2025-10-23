@@ -1024,69 +1024,63 @@ const clientRejectCounter = async (req, res, io) => {
 };
 
 const clientCounterBack = async (req, res, io) => {
-    let negotiationFile = req.file;
+    // FIX: negotiationFile is no longer expected for client counter-back
+    // let negotiationFile = req.file; 
     try {
         const { negotiationId } = req.params;
-        const { proposed_price_usd, deadline_hours, client_response } = req.body;
+        // FIX: Only destructure proposed_price_usd and client_response
+        const { proposed_price_usd, client_response } = req.body;
         const clientId = req.user.userId;
 
         // Basic validation for required fields
-        if (!proposed_price_usd || !deadline_hours || !client_response) {
-            // Clean up the uploaded file if any required field is missing
-            if (negotiationFile && fs.existsSync(negotiationFile.path)) {
-                fs.unlinkSync(negotiationFile.path);
-            }
-            return res.status(400).json({ error: 'Proposed price, deadline, and message are required for a counter-offer back.' });
+        // FIX: Removed deadline_hours from validation
+        if (!proposed_price_usd || !client_response) {
+            // FIX: Removed file cleanup logic as file is not expected
+            return res.status(400).json({ error: 'Proposed price and message are required for a counter-offer back.' });
         }
 
-        let negotiationFileName = null;
-        if (negotiationFile) {
-            negotiationFileName = negotiationFile.filename;
-            const filePath = path.join('uploads/negotiation_files', negotiationFileName);
-            if (!fs.existsSync(filePath)) {
-                console.error(`CRITICAL WARNING: Uploaded file NOT found at expected path: ${filePath}`);
-                if (negotiationFile && fs.existsSync(negotiationFile.path)) {
-                    fs.unlinkSync(negotiationFile.path);
-                }
-                return res.status(500).json({ error: 'Uploaded file not found on server after processing. Please try again.' });
-            }
-        }
+        // FIX: Removed file handling logic entirely
+        // let negotiationFileName = null;
+        // if (negotiationFile) {
+        //     negotiationFileName = negotiationFile.filename;
+        //     const filePath = path.join('uploads/negotiation_files', negotiationFileName);
+        //     if (!fs.existsSync(filePath)) {
+        //         console.error(`CRITICAL WARNING: Uploaded file NOT found at expected path: ${filePath}`);
+        //         if (negotiationFile && fs.existsSync(negotiationFile.path)) {
+        //             fs.unlinkSync(negotiationFile.path);
+        //         }
+        //         return res.status(500).json({ error: 'Uploaded file not found on server after processing. Please try again.' });
+        //     }
+        // }
 
         // Fetch negotiation details to verify status and authorization
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
-            .select('status, transcriber_id, client_id, negotiation_files')
+            // FIX: Also fetch deadline_hours to retain it
+            .select('status, transcriber_id, client_id, negotiation_files, deadline_hours')
             .eq('id', negotiationId)
             .single();
 
         if (fetchError || !negotiation) {
-            // Clean up file if negotiation not found
-            if (negotiationFile && fs.existsSync(negotiationFile.path)) {
-                fs.unlinkSync(negotiationFile.path);
-            }
+            // FIX: Removed file cleanup as file is not expected
             return res.status(404).json({ error: 'Negotiation not found.' });
         }
 
         // Authorize the user (must be the client)
         if (negotiation.client_id !== clientId) {
-            // Clean up file if unauthorized
-            if (negotiationFile && fs.existsSync(negotiationFile.path)) {
-                fs.unlinkSync(negotiationFile.path);
-            }
+            // FIX: Removed file cleanup as file is not expected
             return res.status(403).json({ error: 'You are not authorized to counter back on this negotiation.' });
         }
 
         // Check if the negotiation is in the 'transcriber_counter' state
         if (negotiation.status !== 'transcriber_counter') {
-            // Clean up file if status is incorrect
-            if (negotiationFile && fs.existsSync(negotiationFile.path)) {
-                fs.unlinkSync(negotiationFile.path);
-            }
+            // FIX: Removed file cleanup as file is not expected
             return res.status(400).json({ error: 'Negotiation is not in a state that allows for a counter-offer back. Current status: ' + negotiation.status });
         }
 
-        // Determine the file name to use for the update
-        const fileToUpdate = negotiationFileName || negotiation.negotiation_files;
+        // FIX: Retain original negotiation_files and deadline_hours
+        const fileToUpdate = negotiation.negotiation_files;
+        const retainedDeadlineHours = negotiation.deadline_hours;
 
         // Update negotiation with the client's counter-offer
         const { data: updatedNegotiation, error: updateError } = await supabase
@@ -1094,8 +1088,10 @@ const clientCounterBack = async (req, res, io) => {
             .update({
                 status: 'client_counter',
                 agreed_price_usd: proposed_price_usd,
-                deadline_hours: deadline_hours,
+                // FIX: Retain the original deadline_hours
+                deadline_hours: retainedDeadlineHours,
                 client_message: client_response,
+                // FIX: Retain the original negotiation_files
                 negotiation_files: fileToUpdate,
                 updated_at: new Date().toISOString()
             })
@@ -1105,9 +1101,7 @@ const clientCounterBack = async (req, res, io) => {
 
         if (updateError) {
             console.error('Client counter back: Supabase error updating negotiation:', updateError);
-            if (negotiationFile && fs.existsSync(negotiationFile.path)) {
-                fs.unlinkSync(negotiationFile.path);
-            }
+            // FIX: Removed file cleanup as file is not expected
             throw updateError;
         }
 
@@ -1133,14 +1127,7 @@ const clientCounterBack = async (req, res, io) => {
 
     } catch (error) {
         console.error('Client counter back error: UNCAUGHT EXCEPTION:', error);
-        if (negotiationFile && fs.existsSync(negotiationFile.path)) {
-            try {
-                fs.unlinkSync(negotiationFile.path);
-                console.log(`Cleaned up uploaded file due to UNCAUGHT EXCEPTION: ${negotiationFile.path}`);
-            } catch (unlinkError) {
-                console.error(`Error deleting uploaded file after UNCAUGHT EXCEPTION in clientCounterBack: ${unlinkError}`);
-            }
-        }
+        // FIX: Removed file cleanup as file is not expected
         res.status(500).json({ error: error.message || 'Failed to send counter-offer due to server error.' });
     }
 };

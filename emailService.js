@@ -1,4 +1,4 @@
-// backend/emailService.js - UPDATED for styled emails with logo and removed promotional line
+// backend/emailService.js - UPDATED for styled emails with logo, removed promotional line, and added new email types
 
 const nodemailer = require('nodemailer');
 
@@ -69,7 +69,6 @@ const sendWelcomeEmail = async (user) => {
                     <p style="font-size: 16px;">Hello ${user.full_name || 'User'},</p>
                     <p style="font-size: 16px;">Whether you are looking to work or hire, you are in the right place. Our goal is to make this platform the best hub for professional and dedicated transcribers that can be hired all over the world!</p>
                     
-                    <!-- Removed the promotional line here -->
                     
                     <p style="font-size: 16px; font-weight: bold; color: #6a0dad;">Karibu!</p>
                     <p style="font-size: 14px; color: #666;">Best regards,<br>The TypeMyworDz Team</p>
@@ -133,12 +132,10 @@ const sendTranscriberTestResultEmail = async (user, status, reason = null) => {
             <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 20px auto; padding: 20px; border: 1px solid #eee; border-radius: 8px; background-color: #f9f9f9;">
                 ${emailHeader}Congratulations, ${user.full_name || 'Transcriber'}!</h1>
                 </div>
-                <p style="font-size: 16px;">You have been approved to join our professional team of transcribers at TypeMyworDz. Our goal is to make Kenya a hub of trusted and professional transcribers.</p>
-                
-                <h2 style="color: #6a0dad;">What's next?</h2>
-                <p style="font-size: 16px;">You now need to make sure that you are alert for any offers. Remember, you have to be online to receive offers from clients. Make sure to look out for your 'Go Online', 'Go Offline', 'Set Available', 'Set Busy' buttons, toggle them accordingly in order to make sure offers don't get past you.</p>
-                <p style="font-size: 16px;">Remember to read our 'very brief' guidelines. If a client doesn't require special guidelines, you will follow them.</p>
-                <p style="font-size: 16px; font-weight: bold; color: #6a0dad;">Let's grow this platform together and make it the best hub!</p>
+                <p style="font-size: 16px;">You have successfully passed our transcriber test! We are very impressed with your skills.</p>
+                <p style="font-size: 16px;">However, we are currently at full capacity for new transcribers. Your profile has been added to our waiting list.</p>
+                <p style="font-size: 16px;">We will notify you via email as soon as new positions become available. Thank you for your understanding and patience.</p>
+                <p style="font-size: 16px; font-weight: bold; color: #6a0dad;">We look forward to potentially working with you!</p>
                 ${emailFooter}
             </div>
         `;
@@ -197,7 +194,7 @@ const sendNewNegotiationRequestEmail = async (transcriber, client) => {
         });
         console.log(`New negotiation request email sent to ${transcriber.email} for client ${client.full_name}`);
     } catch (error) {
-        console.error(`Error sending new negotiation request email to ${transcriber.email}:`, error);
+        console.error(`Error sending new negotiation request email to ${transcriber.email} for client ${client.full_name}:`, error);
     }
 };
 
@@ -384,6 +381,36 @@ const sendNegotiationRejectedEmail = async (user, negotiation, reason) => {
     }
 };
 
+// NEW: Function to send email upon training completion and promotion to transcriber
+const sendTrainingCompletionEmail = async (user) => {
+    try {
+        await transporter.sendMail({
+            from: FROM_ADDRESS,
+            to: user.email,
+            subject: "Congratulations! You are now a TypeMyworDz Transcriber!",
+            html: `
+                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 20px auto; padding: 20px; border: 1px solid #eee; border-radius: 8px; background-color: #f9f9f9;">
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <img src="${LOGO_URL}" alt="TypeMyworDz Logo" style="max-width: 150px; height: auto; display: block; margin: 0 auto;">
+                        <h1 style="color: #6a0dad; margin-top: 15px;">Congratulations, ${user.full_name || 'Trainee'}!</h1>
+                    </div>
+                    <p style="font-size: 16px;">We are thrilled to inform you that you have successfully completed your training and have been promoted to an active transcriber!</p>
+                    <p style="font-size: 16px;">You can now start receiving and accepting transcription jobs from clients. Make sure to keep your availability status updated on your dashboard.</p>
+                    <p style="font-size: 16px;"><a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/transcriber-dashboard" style="color: #6a0dad; text-decoration: none; font-weight: bold;">Go to Your Transcriber Dashboard</a></p>
+                    <p style="font-size: 16px; font-weight: bold; color: #6a0dad;">Welcome to the team!</p>
+                    <p style="font-size: 14px; color: #666;">Best regards,<br>The TypeMyworDz Team</p>
+                    <div style="text-align: center; margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; font-size: 12px; color: #999;">
+                        &copy; ${new Date().getFullYear()} TypeMyworDz. All rights reserved.
+                    </div>
+                </div>
+            `,
+        });
+        console.log(`Training completion email sent to ${user.email}`);
+    } catch (error) {
+        console.error(`Error sending training completion email to ${user.email}:`, error);
+    }
+};
+
 
 module.exports = {
     sendWelcomeEmail,
@@ -394,4 +421,5 @@ module.exports = {
     sendNegotiationAcceptedEmail,
     sendPaymentConfirmationEmail,
     sendNegotiationRejectedEmail,
+    sendTrainingCompletionEmail, // NEW: Export the new function
 };
