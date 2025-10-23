@@ -1,8 +1,8 @@
 const axios = require('axios');
-const supabase = require('../database');
-const { syncAvailabilityStatus } = require('../controllers/transcriberController'); // CORRECTED IMPORT PATH
-const emailService = require('../emailService');
-const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
+const supabase = require('..//database');
+const { syncAvailabilityStatus } = require('..//controllers/transcriberController'); // CORRECTED IMPORT PATH
+const emailService = require('..//emailService');
+const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
 
 // Paystack Secret Key from environment variables
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
@@ -22,11 +22,13 @@ const getNextFriday = () => {
 
 // Function to initialize a Paystack transaction
 const initializePayment = async (req, res, io) => {
-    const { relatedJobId, amount, email, jobType } = req.body; // FIX: relatedJobId and jobType (e.g., 'negotiation', 'direct_upload')
+    // FIX: Changed 'email' to 'clientEmail' to match frontend payload
+    const { relatedJobId, amount, clientEmail, jobType } = req.body; 
     const clientId = req.user.userId;
 
     // Basic validation for required fields
-    if (!relatedJobId || !amount || !email || !jobType) { // FIX: Added jobType validation
+    // FIX: Updated validation message to reflect 'client email'
+    if (!relatedJobId || !amount || !clientEmail || !jobType) { 
         return res.status(400).json({ error: 'Job ID, amount, job type, and client email are required.' });
     }
     if (!['negotiation', 'direct_upload'].includes(jobType)) { // FIX: Validate jobType
@@ -100,7 +102,7 @@ const initializePayment = async (req, res, io) => {
         const paystackResponse = await axios.post(
             'https://api.paystack.co/transaction/initialize',
             {
-                email: email,
+                email: clientEmail, // FIX: Use clientEmail here
                 amount: amountInCentsKes,
                 reference: `${relatedJobId}-${Date.now()}`,
                 callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${relatedJobId}&jobType=${jobType}`, // FIX: Pass relatedJobId and jobType
