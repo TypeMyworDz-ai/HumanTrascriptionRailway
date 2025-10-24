@@ -1,12 +1,12 @@
-const supabase = require('..//database');
+const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { syncAvailabilityStatus } = require('./transcriberController'); // Import syncAvailabilityStatus
-const emailService = require('..//emailService'); // For sending notifications
+const emailService = require('../emailService'); // For sending notifications
 const util = require('util');
 const { getAudioDurationInSeconds } = require('get-audio-duration'); // For calculating audio length
-const { calculatePricePerMinute } = require('..//utils/pricingCalculator'); // Import the pricing calculator
+const { calculatePricePerMinute } = require('../utils/pricingCalculator'); // Import the pricing calculator
 
 // Promisify fs.unlink for async file deletion
 const unlinkAsync = util.promisify(fs.unlink);
@@ -113,7 +113,6 @@ const handleQuoteCalculationRequest = async (req, res, io) => {
         const quoteDetails = await getQuoteAndDeadline(
             audioLengthMinutes,
             audioQualityParam,
-            deadlineTypeParam,
             specialRequirements ? JSON.parse(specialRequirements) : []
         );
 
@@ -142,15 +141,11 @@ const createDirectUploadJob = async (req, res, io) => {
         audioQualityParam,
         deadlineTypeParam,
         specialRequirements,
-        quoteAmount, // FIX: Changed from quoteAmountUsd to quoteAmount
+        quote_amount, // FIX: Changed from quoteAmount to quote_amount to match frontend
         pricePerMinuteUsd,
-        agreedDeadlineHours
+        agreedDeadlineHours,
+        jobType // Assuming jobType is also sent from frontend for explicit check
     } = req.body;
-
-    console.log('[createDirectUploadJob] Received req.body:', req.body);
-    console.log('[createDirectUploadJob] Raw quoteAmount:', quoteAmount); // FIX: Changed from quoteAmountUsd to quoteAmount
-    console.log('[createDirectUploadJob] Raw pricePerMinuteUsd:', pricePerMinuteUsd);
-    console.log('[createDirectUploadJob] Raw agreedDeadlineHours:', agreedDeadlineHours);
 
     let audioVideoFile = req.files?.audioVideoFile?.[0];
     let instructionFiles = req.files?.instructionFiles || [];
@@ -180,12 +175,12 @@ const createDirectUploadJob = async (req, res, io) => {
     }
 
     // NEW: Perform parsing once and store in new variables for consistent validation and insertion
-    const parsedQuoteAmount = parseFloat(quoteAmount); // FIX: Changed from parsedQuoteAmountUsd to parsedQuoteAmount
+    const parsedQuoteAmount = parseFloat(quote_amount); // FIX: Use quote_amount
     const parsedPricePerMinuteUsd = parseFloat(pricePerMinuteUsd);
     const parsedAgreedDeadlineHours = parseInt(agreedDeadlineHours, 10);
 
     // NEW: Add robust validation for parsed numeric fields
-    if (isNaN(parsedQuoteAmount) || parsedQuoteAmount === null) { // FIX: Changed from parsedQuoteAmountUsd to parsedQuoteAmount
+    if (isNaN(parsedQuoteAmount) || parsedQuoteAmount === null) { 
         await cleanupFiles();
         return res.status(400).json({ error: 'Quote amount is missing or invalid. Please ensure quote is calculated and sent correctly.' });
     }
@@ -198,8 +193,14 @@ const createDirectUploadJob = async (req, res, io) => {
         return res.status(400).json({ error: 'Agreed deadline hours are missing or invalid. Please ensure quote is calculated and sent correctly.' });
     }
 
+    // Optional: Validate jobType if it's explicitly sent
+    if (jobType && jobType !== 'direct_upload') {
+        await cleanupFiles();
+        return res.status(400).json({ error: 'Invalid job type for this endpoint.' });
+    }
 
     try {
+        const audioVideoFilePath = audioVideoFile.path;
         if (!fs.existsSync(audioVideoFilePath)) {
             console.error(`!!! CRITICAL WARNING !!! Audio/Video file NOT found at expected path: ${audioVideoFilePath}`);
             await cleanupFiles();
@@ -539,7 +540,7 @@ const completeDirectUploadJob = async (req, res, io) => {
  * @route GET /api/admin/direct-upload-jobs
  * @desc Admin can view all direct upload jobs
  * @access Private (Admin only)
- */
+ * */
 const getAllDirectUploadJobsForAdmin = async (req, res) => {
     try {
         // Fetch all direct upload jobs, joining with client and transcriber user details
