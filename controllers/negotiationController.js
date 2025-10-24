@@ -2,7 +2,20 @@ const supabase = require('..//database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const emailService = require('..//emailService');
+// UPDATED: Import specific email functions for clarity and separation
+const {
+    sendNewNegotiationRequestEmail,
+    sendTranscriberCounterOfferEmail, // NEW: For transcriber countering
+    sendClientCounterBackEmail,   // NEW: For client countering back
+    sendNegotiationAcceptedEmail,
+    sendPaymentConfirmationEmail,
+    sendNegotiationRejectedEmail,
+    sendTrainingCompletionEmail,
+    sendPayoutConfirmationEmail,
+    sendTranscriberTestSubmittedEmail,
+    sendTranscriberTestResultEmail,
+    sendWelcomeEmail
+} = require('..//emailService');
 // Removed import for updateAverageRating as client rating is being removed.
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB limit
@@ -398,7 +411,7 @@ const createNegotiation = async (req, res, next, io) => {
     };
 
     if (transcriberDetailsForEmail && transcriberDetailsForEmail.email && clientDetailsForEmail && clientDetailsForEmail.email) {
-        await emailService.sendNewNegotiationRequestEmail(transcriberDetailsForEmail, clientDetailsForEmail);
+        await sendNewNegotiationRequestEmail(transcriberDetailsForEmail, clientDetailsForEmail);
     }
 
     res.status(201).json({
@@ -746,7 +759,7 @@ const acceptNegotiation = async (req, res, io) => {
         if (clientError) console.error('Error fetching client for negotiation accepted email:', clientError);
 
         if (clientUser) {
-            await emailService.sendNegotiationAcceptedEmail(clientUser, req.user, updatedNegotiation);
+            await sendNegotiationAcceptedEmail(clientUser, req.user, updatedNegotiation);
         }
 
         res.json({ message: 'Negotiation accepted. Awaiting client payment.', negotiation: updatedNegotiation });
@@ -822,7 +835,8 @@ const counterNegotiation = async (req, res, io) => {
         if (clientError) console.error('Error fetching client for counter offer email:', clientError);
 
         if (clientUser) {
-            await emailService.sendCounterOfferEmail(clientUser, req.user, updatedNegotiation);
+            // UPDATED: Call the specific email function for transcriber counter offers
+            await sendTranscriberCounterOfferEmail(clientUser, req.user, updatedNegotiation);
         }
 
         res.json({ message: 'Counter offer sent successfully.', negotiation: updatedNegotiation });
@@ -885,7 +899,7 @@ const rejectNegotiation = async (req, res, io) => {
         if (clientError) console.error('Error fetching client for negotiation rejected email:', clientError);
 
         if (clientUser) {
-            await emailService.sendNegotiationRejectedEmail(clientUser, req.user, updatedNegotiation);
+            await sendNegotiationRejectedEmail(clientUser, req.user, updatedNegotiation);
         }
 
         res.json({ message: 'Negotiation rejected successfully.', negotiation: updatedNegotiation });
@@ -947,7 +961,7 @@ const clientAcceptCounter = async (req, res, io) => {
         if (transcriberError) console.error('Error fetching transcriber for client accept counter email:', transcriberError);
 
         if (transcriberUser) {
-            await emailService.sendNegotiationAcceptedEmail(req.user, transcriberUser, updatedNegotiation);
+            await sendNegotiationAcceptedEmail(req.user, transcriberUser, updatedNegotiation);
         }
 
         res.json({ message: 'Counter-offer accepted. Proceed to payment.', negotiation: updatedNegotiation });
@@ -1010,7 +1024,7 @@ const clientRejectCounter = async (req, res, io) => {
         if (transcriberError) console.error('Error fetching transcriber for client reject counter email:', transcriberError);
 
         if (transcriberUser) {
-            await emailService.sendNegotiationRejectedEmail(transcriberUser, updatedNegotiation, client_response);
+            await sendNegotiationRejectedEmail(transcriberUser, updatedNegotiation, client_response);
         }
 
         res.json({ message: 'Counter-offer rejected successfully.', negotiation: updatedNegotiation });
@@ -1118,7 +1132,8 @@ const clientCounterBack = async (req, res, io) => {
         if (transcriberError) console.error('Error fetching transcriber for client counter back email:', transcriberError);
 
         if (transcriberUser) {
-            await emailService.sendCounterOfferEmail(transcriberUser, req.user, updatedNegotiation);
+            // UPDATED: Call the specific email function for client counter offers
+            await sendClientCounterBackEmail(transcriberUser, req.user, updatedNegotiation);
         }
 
         res.json({ message: 'Counter-offer sent successfully.', negotiation: updatedNegotiation });

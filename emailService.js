@@ -198,7 +198,11 @@ const sendNewNegotiationRequestEmail = async (transcriber, client) => {
     }
 };
 
-const sendCounterOfferEmail = async (client, transcriber, negotiation) => {
+// REMOVED: Old sendCounterOfferEmail
+// const sendCounterOfferEmail = async (client, transcriber, negotiation) => { /* ... */ };
+
+// NEW: sendTranscriberCounterOfferEmail (Transcriber to Client)
+const sendTranscriberCounterOfferEmail = async (client, transcriber, negotiation) => {
     try {
         await transporter.sendMail({
             from: FROM_ADDRESS,
@@ -227,9 +231,45 @@ const sendCounterOfferEmail = async (client, transcriber, negotiation) => {
                 </div>
             `,
         });
-        console.log(`Counter offer email sent to ${client.email} for negotiation #${negotiation.id}`);
+        console.log(`Transcriber counter offer email sent to client ${client.email} for negotiation #${negotiation.id}`);
     } catch (error) {
-        console.error(`Error sending counter offer email to ${client.email} for negotiation #${negotiation.id}:`, error);
+        console.error(`Error sending transcriber counter offer email to client ${client.email} for negotiation #${negotiation.id}:`, error);
+    }
+};
+
+// NEW: sendClientCounterBackEmail (Client to Transcriber)
+const sendClientCounterBackEmail = async (transcriber, client, negotiation) => {
+    try {
+        await transporter.sendMail({
+            from: FROM_ADDRESS,
+            to: transcriber.email,
+            subject: `Client Counter Offer for Negotiation #${negotiation.id}`,
+            html: `
+                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 20px auto; padding: 20px; border: 1px solid #eee; border-radius: 8px; background-color: #f9f9f9;">
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <img src="${LOGO_URL}" alt="TypeMyworDz Logo" style="max-width: 150px; height: auto; display: block; margin: 0 auto;">
+                        <h1 style="color: #6a0dad; margin-top: 15px;">Client Counter Offer</h1>
+                    </div>
+                    <p style="font-size: 16px;">Hello ${transcriber.full_name || 'Transcriber'},</p>
+                    <p style="font-size: 16px;">Client <strong>${client.full_name || 'Client'}</strong> (${client.email}) has sent a counter offer for negotiation #${negotiation.id}.</p>
+                    <p style="font-size: 16px;"><strong>Details:</strong></p>
+                    <ul style="font-size: 16px;">
+                        <li>Proposed Price: USD ${negotiation.agreed_price_usd ? negotiation.agreed_price_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'undefined'}</li>
+                        <li>Proposed Deadline: ${negotiation.deadline_hours} hours</li>
+                        ${negotiation.client_message ? `<li>Client's Message: ${negotiation.client_message}</li>` : ''}
+                    </ul>
+                    <p style="font-size: 16px;">Please review the counter offer on your dashboard.</p>
+                    <p style="font-size: 16px;"><a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/transcriber-dashboard" style="color: #6a0dad; text-decoration: none; font-weight: bold;">Go to Dashboard</a></p>
+                    <p style="font-size: 14px; color: #666;">Best regards,<br>The TypeMyworDz Team</p>
+                    <div style="text-align: center; margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; font-size: 12px; color: #999;">
+                        &copy; ${new Date().getFullYear()} TypeMyworDz. All rights reserved.
+                    </div>
+                </div>
+            `,
+        });
+        console.log(`Client counter offer email sent to transcriber ${transcriber.email} for negotiation #${negotiation.id}`);
+    } catch (error) {
+        console.error(`Error sending client counter offer email to transcriber ${transcriber.email} for negotiation #${negotiation.id}:`, error);
     }
 };
 
@@ -446,7 +486,8 @@ module.exports = {
     sendTranscriberTestSubmittedEmail,
     sendTranscriberTestResultEmail,
     sendNewNegotiationRequestEmail,
-    sendCounterOfferEmail,
+    sendTranscriberCounterOfferEmail, // NEW: Export the new function
+    sendClientCounterBackEmail,   // NEW: Export the new function
     sendNegotiationAcceptedEmail,
     sendPaymentConfirmationEmail,
     sendNegotiationRejectedEmail,
