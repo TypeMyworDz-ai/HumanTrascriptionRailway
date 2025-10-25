@@ -1,8 +1,8 @@
 const axios = require('axios');
-const supabase = require('../database');
-const { syncAvailabilityStatus } = require('../controllers/transcriberController');
-const emailService = require('../emailService');
-const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
+const supabase = require('..//database');
+const { syncAvailabilityStatus } = require('..//controllers/transcriberController');
+const emailService = require('..//emailService');
+const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
@@ -21,12 +21,17 @@ const getNextFriday = () => {
 const initializePayment = async (req, res, io) => {
     console.log('[initializePayment] Received request body:', req.body);
 
-    const { jobId, amount, clientEmail, jobType } = req.body; 
+    // FIX: Destructure negotiationId if present, and use 'email' from body
+    const { jobId: rawJobId, negotiationId, amount, email, jobType } = req.body;
     const clientId = req.user.userId;
 
-    console.log(`[initializePayment] Destructured parameters - jobId: ${jobId}, amount: ${amount}, clientEmail: ${clientEmail}, jobType: ${jobType}, clientId: ${clientId}`);
+    // Determine the actual jobId and clientEmail to use
+    const finalJobId = rawJobId || negotiationId;
+    const finalClientEmail = email; // Using 'email' from the request body
 
-    if (!jobId || !amount || !clientEmail || !jobType) { 
+    console.log(`[initializePayment] Destructured parameters - jobId: ${finalJobId}, amount: ${amount}, clientEmail: ${finalClientEmail}, jobType: ${jobType}, clientId: ${clientId}`);
+
+    if (!finalJobId || !amount || !finalClientEmail || !jobType) {
         console.error('[initializePayment] Validation failed: Missing required parameters.');
         return res.status(400).json({ error: 'Job ID, amount, job type, and client email are required.' });
     }
@@ -54,11 +59,11 @@ const initializePayment = async (req, res, io) => {
             const { data, error } = await supabase
                 .from('negotiations')
                 .select('id, client_id, transcriber_id, agreed_price_usd, status')
-                .eq('id', jobId)
+                .eq('id', finalJobId) // Use finalJobId
                 .eq('client_id', clientId)
                 .single();
             if (error || !data) {
-                console.error(`[initializePayment] Error fetching negotiation ${jobId} for payment:`, error);
+                console.error(`[initializePayment] Error fetching negotiation ${finalJobId} for payment:`, error);
                 return res.status(404).json({ error: 'Negotiation not found or not accessible.' });
             }
             jobDetails = data;
@@ -66,18 +71,18 @@ const initializePayment = async (req, res, io) => {
             agreedPriceUsd = data.agreed_price_usd;
             jobStatus = data.status;
             if (jobStatus !== 'accepted_awaiting_payment') {
-                console.error(`[initializePayment] Negotiation ${jobId} status is ${jobStatus}, not 'accepted_awaiting_payment'.`);
+                console.error(`[initializePayment] Negotiation ${finalJobId} status is ${jobStatus}, not 'accepted_awaiting_payment'.`);
                 return res.status(400).json({ error: `Payment can only be initiated for accepted negotiations (status: accepted_awaiting_payment). Current status: ${jobStatus}` });
             }
         } else if (jobType === 'direct_upload') {
             const { data, error } = await supabase
                 .from('direct_upload_jobs')
                 .select('id, client_id, transcriber_id, quote_amount, status')
-                .eq('id', jobId)
+                .eq('id', finalJobId) // Use finalJobId
                 .eq('client_id', clientId)
                 .single();
             if (error || !data) {
-                console.error(`[initializePayment] Error fetching direct upload job ${jobId} for payment:`, error);
+                console.error(`[initializePayment] Error fetching direct upload job ${finalJobId} for payment:`, error);
                 return res.status(404).json({ error: 'Direct upload job not found or not accessible.' });
             }
             jobDetails = data;
@@ -85,20 +90,20 @@ const initializePayment = async (req, res, io) => {
             agreedPriceUsd = data.quote_amount;
             jobStatus = data.status;
             if (jobStatus !== 'pending_review' && jobStatus !== 'transcriber_assigned') {
-                console.error(`[initializePayment] Direct upload job ${jobId} status is ${jobStatus}, not 'pending_review' or 'transcriber_assigned'.`);
+                console.error(`[initializePayment] Direct upload job ${finalJobId} status is ${jobStatus}, not 'pending_review' or 'transcriber_assigned'.`);
                 return res.status(400).json({ error: `Payment can only be initiated for direct upload jobs awaiting review or with assigned transcriber. Current status: ${jobStatus}` });
             }
         } else if (jobType === 'training') {
             const { data: traineeUser, error } = await supabase
                 .from('users')
                 .select('id, email, transcriber_status')
-                .eq('id', jobId)
+                .eq('id', finalJobId) // Use finalJobId
                 .eq('user_type', 'trainee')
                 .single();
             
             if (error || !traineeUser) {
-                console.error(`[initializePayment] Error fetching trainee ${jobId} for training payment:`, error);
-                return res.status(404).json({ error: 'Trainee not found or not accessible for training payment.' });
+                console.error(`[initializePayment] Error fetching trainee ${finalJobId} for training payment:`, error);
+                return res.status(404).json({ error: 'Trainee not found or not accessible for training payment.ᐟ' });
             }
             if (traineeUser.transcriber_status === 'paid_training_fee') {
                 return res.status(400).json({ error: 'Trainee has already paid for training.' });
@@ -127,17 +132,17 @@ const initializePayment = async (req, res, io) => {
         const amountInCentsKes = Math.round(amountKes * 100);
 
         const paystackResponse = await axios.post(
-            'https://api.paystack.co/transaction/initialize',
+            'https:paystack.co/transaction/initialize',
             {
-                email: clientEmail,
+                email: finalClientEmail, // Use finalClientEmail
                 amount: amountInCentsKes,
-                reference: `${jobId}-${Date.now()}`,
-                callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${jobId}&jobType=${jobType}`,
+                reference: `${finalJobId}-${Date.now()}`, // Use finalJobId
+                callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${finalJobId}&jobType=${jobType}`, // Use finalJobId
                 currency: 'KES',
                 // Explicitly define payment channels to include Pesalink
                 channels: ['mobile_money', 'card', 'bank_transfer', 'pesalink'],
                 metadata: {
-                    related_job_id: jobId, // Still using this for Paystack metadata
+                    related_job_id: finalJobId, // Still using this for Paystack metadata
                     related_job_type: jobType,
                     client_id: clientId,
                     transcriber_id: transcriberId,
@@ -188,7 +193,7 @@ const initializeTrainingPayment = async (req, res, io) => {
         return res.status(400).json({ error: 'Invalid training payment amount.' });
     }
 
-    const TRAINING_FEE_USD = 0.50; 
+    const TRAINING_FEE_USD = 0.50;
     if (Math.round(parsedAmountUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
         console.error('Training payment amount mismatch. Provided USD:', parsedAmountUsd, 'Expected USD:', TRAINING_FEE_USD);
         return res.status(400).json({ error: `Training payment amount must be USD ${TRAINING_FEE_USD}.` });
@@ -199,7 +204,7 @@ const initializeTrainingPayment = async (req, res, io) => {
         const amountInCentsKes = Math.round(amountKes * 100);
 
         const paystackResponse = await axios.post(
-            'https://api.paystack.co/transaction/initialize',
+            'https:paystack.co/transaction/initialize',
             {
                 email: email,
                 amount: amountInCentsKes,
@@ -257,7 +262,7 @@ const verifyPayment = async (req, res, io) => {
 
     try {
         const paystackResponse = await axios.get(
-            `https://api.paystack.co/transaction/verify/${reference}`,
+            `https:paystack.co/transaction/verify/${reference}`,
             {
                 headers: {
                     Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`
@@ -275,7 +280,7 @@ const verifyPayment = async (req, res, io) => {
             related_job_id: metadataRelatedJobId,
             related_job_type: metadataRelatedJobType,
             client_id: metadataClientId,
-            transcriber_id: metadataTranscriberIdRaw, 
+            transcriber_id: metadataTranscriberIdRaw,
             agreed_price_usd: metadataAgreedPrice,
             currency_paid: metadataCurrencyPaid,
             exchange_rate_usd_to_kes: metadataExchangeRate,
@@ -293,7 +298,7 @@ const verifyPayment = async (req, res, io) => {
             const TRAINING_FEE_USD = 0.50;
             if (Math.round(metadataAgreedPrice * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
                 console.error('Training metadata amount mismatch. Agreed USD:', metadataAgreedPrice, 'Expected USD:', TRAINING_FEE_USD);
-                return res.status(400).json({ error: 'Invalid transaction metadata (training amount mismatch).' });
+                return res.status(400).json({ error: 'Invalid transaction metadata (training amount mismatch).ᐟ' });
             }
 
             const expectedAmountKes = convertUsdToKes(TRAINING_FEE_USD);
@@ -320,8 +325,8 @@ const verifyPayment = async (req, res, io) => {
                 .from('payments')
                 .insert([
                     {
-                        negotiation_id: null, 
-                        direct_upload_job_id: null, 
+                        negotiation_id: null,
+                        direct_upload_job_id: null,
                         related_job_type: 'training',
                         client_id: metadataClientId,
                         transcriber_id: metadataClientId, // Trainee ID is used as transcriber_id for training payments
@@ -409,7 +414,7 @@ const verifyPayment = async (req, res, io) => {
         const paymentData = {
             related_job_type: jobType,
             client_id: metadataClientId,
-            transcriber_id: finalTranscriberId, 
+            transcriber_id: finalTranscriberId,
             amount: actualAmountPaidUsd,
             transcriber_earning: transcriberPayAmount,
             currency: 'USD',
@@ -460,12 +465,13 @@ const verifyPayment = async (req, res, io) => {
 
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', metadataClientId).single();
         // Only fetch transcriber if one is assigned (negotiation)
-        const transcriberUser = (jobType === 'negotiation' && finalTranscriberId) 
+        const transcriberUser = (jobType === 'negotiation' && finalTranscriberId)
             ? (await supabase.from('users').select('full_name, email').eq('id', finalTranscriberId).single()).data
             : null;
 
         if (clientError) console.error('Error fetching client for payment email: ', clientError);
-        if (transcriberUser === null && jobType === 'negotiation') console.error('Error fetching transcriber for payment email: ', transcriberError);
+        // FIX: Corrected error variable name from transcriberError to clientError (as transcriberError is not defined here)
+        if (transcriberUser === null && jobType === 'negotiation') console.error('Error fetching transcriber for payment email: ', clientError);
 
         if (clientUser) { // Send email to client for both negotiation and direct upload
             await emailService.sendPaymentConfirmationEmail(clientUser, transcriberUser, currentJob, paymentRecord);
@@ -545,7 +551,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 const { data: directJob, error: directJobError } = await supabase
                     .from('direct_upload_jobs')
                     .select('id, status, client_instructions, agreed_deadline_hours, quote_amount')
-                    .eq('id', payment.direct_upload_job_id) 
+                    .eq('id', payment.direct_upload_job_id)
                     .single();
                 if (directJobError) {
                     console.error(`Error fetching direct upload job ${payment.direct_upload_job_id} for payment:`, directJobError);
@@ -557,19 +563,19 @@ const getTranscriberPaymentHistory = async (req, res) => {
 
         const groupedUpcomingPayouts = {};
         let totalUpcomingPayouts = 0;
-        let totalEarnings = 0; 
-        let monthlyEarnings = 0; 
+        let totalEarnings = 0;
+        let monthlyEarnings = 0;
 
         paymentsWithJobDetails.forEach(payout => {
             if (payout.payout_status === 'awaiting_completion') {
                 const transactionDate = new Date(payout.transaction_date);
-                const dayOfWeek = transactionDate.getDay(); 
+                const dayOfWeek = transactionDate.getDay();
                 const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
-                
+
                 const weekEndingDate = new Date(transactionDate);
                 weekEndingDate.setDate(transactionDate.getDate() + daysUntilFriday);
-                weekEndingDate.setHours(23, 59, 59, 999); 
-                const weekEndingString = weekEndingDate.toISOString().split('T')[0]; 
+                weekEndingDate.setHours(23, 59, 59, 999);
+                const weekEndingString = weekEndingDate.toISOString().split('T')[0];
 
                 if (!groupedUpcomingPayouts[weekEndingString]) {
                     groupedUpcomingPayouts[weekEndingString] = {
@@ -581,18 +587,18 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 groupedUpcomingPayouts[weekEndingString].totalAmount += payout.transcriber_earning;
                 groupedUpcomingPayouts[weekEndingString].payouts.push({
                     id: payout.id,
-                    negotiation_id: payout.negotiation_id, 
-                    direct_upload_job_id: payout.direct_upload_job_id, 
+                    negotiation_id: payout.negotiation_id,
+                    direct_upload_job_id: payout.direct_upload_job_id,
                     related_job_type: payout.related_job_type,
                     clientName: payout.client?.full_name || 'N/A',
                     jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || 'N/A',
                     amount: payout.transcriber_earning,
-                    status: payout.payout_status, 
-                    job_status: payout.negotiation?.status || payout.direct_upload_job?.status || 'N/A', 
+                    status: payout.payout_status,
+                    job_status: payout.negotiation?.status || payout.direct_upload_job?.status || 'N/A',
                     created_at: new Date(payout.transaction_date).toLocaleDateString()
                 });
                 totalUpcomingPayouts += payout.transcriber_earning;
-            } else if (payout.payout_status === 'paid_out') { 
+            } else if (payout.payout_status === 'paid_out') {
                 totalEarnings += payout.transcriber_earning;
                 const date = new Date(payout.transaction_date);
                 const currentMonth = new Date().getMonth();
@@ -606,8 +612,8 @@ const getTranscriberPaymentHistory = async (req, res) => {
         const upcomingPayoutsArray = Object.values(groupedUpcomingPayouts).sort((a, b) => new Date(a.date) - new Date(b.date));
 
         res.status(200).json({
-            message: 'Transcriber payment history retrieved successfully.',
-            payments: [], 
+            message: `Upcoming payouts for transcriber ${transcriberId} retrieved successfully.`,
+            payments: [],
             upcomingPayouts: upcomingPayoutsArray,
             totalUpcomingPayouts: totalUpcomingPayouts,
             summary: {
@@ -837,7 +843,7 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
             const transactionDate = new Date(payout.transaction_date);
             const dayOfWeek = transactionDate.getDay();
             const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
-            
+
             const weekEndingDate = new Date(transactionDate);
             weekEndingDate.setDate(transactionDate.getDate() + daysUntilFriday);
             weekEndingDate.setHours(23, 59, 59, 999);
@@ -853,8 +859,8 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
             groupedPayouts[weekEndingString].totalAmount += payout.transcriber_earning;
             groupedPayouts[weekEndingString].payouts.push({
                 id: payout.id,
-                negotiation_id: payout.negotiation_id, 
-                direct_upload_job_id: payout.direct_upload_job_id, 
+                negotiation_id: payout.negotiation_id,
+                direct_upload_job_id: payout.direct_upload_job_id,
                 related_job_type: payout.related_job_type,
                 clientName: payout.client?.full_name || 'N/A',
                 jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || 'N/A',
