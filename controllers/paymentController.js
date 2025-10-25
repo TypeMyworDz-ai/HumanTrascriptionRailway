@@ -191,7 +191,7 @@ const initializeTrainingPayment = async (req, res, io) => {
     const TRAINING_FEE_USD = 0.50; 
     if (Math.round(parsedAmountUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
         console.error('Training payment amount mismatch. Provided USD:', parsedAmountUsd, 'Expected USD:', TRAINING_FEE_USD);
-        return res.status(400).json({ error: `Training payment amount must be USD ${agreedPriceUsd}.` });
+        return res.status(400).json({ error: `Training payment amount must be USD ${TRAINING_FEE_USD}.` });
     }
 
     try {
@@ -362,6 +362,7 @@ const verifyPayment = async (req, res, io) => {
         let currentJob;
         let updateTable;
         let updateStatusColumn;
+        let newJobStatus; // Define a variable for the new job status
 
         if (jobType === 'negotiation') {
             const { data, error } = await supabase
@@ -376,6 +377,7 @@ const verifyPayment = async (req, res, io) => {
             currentJob = data;
             updateTable = 'negotiations';
             updateStatusColumn = 'status';
+            newJobStatus = 'hired'; // For negotiation, status becomes 'hired'
             if (currentJob.status === 'hired') {
                 return res.status(200).json({ message: 'Payment already processed and job already hired.' });
             }
@@ -392,7 +394,8 @@ const verifyPayment = async (req, res, io) => {
             currentJob = data;
             updateTable = 'direct_upload_jobs';
             updateStatusColumn = 'status';
-            if (currentJob.status === 'hired' || currentJob.status === 'in_progress') {
+            newJobStatus = 'available_for_transcriber'; // For direct upload, status becomes 'available_for_transcriber'
+            if (currentJob.status === 'available_for_transcriber' || currentJob.status === 'taken' || currentJob.status === 'in_progress') {
                  return res.status(200).json({ message: 'Payment already processed and direct upload job already active.' });
             }
         } else {
@@ -442,23 +445,29 @@ const verifyPayment = async (req, res, io) => {
 
         const { error: jobUpdateError } = await supabase
             .from(updateTable)
-            .update({ [updateStatusColumn]: 'hired', updated_at: new Date().toISOString() })
+            .update({ [updateStatusColumn]: newJobStatus, updated_at: new Date().toISOString() }) // Use newJobStatus here
             .eq('id', relatedJobId);
 
         if (jobUpdateError) {
-            console.error(`Error updating job status to hired for ${jobType} ${relatedJobId}: `, jobUpdateError);
+            console.error(`Error updating job status to ${newJobStatus} for ${jobType} ${relatedJobId}: `, jobUpdateError);
             throw jobUpdateError;
         }
 
-        await syncAvailabilityStatus(finalTranscriberId, false, relatedJobId);
+        // Only sync availability if a transcriber was directly assigned (negotiation)
+        if (jobType === 'negotiation' && finalTranscriberId) {
+            await syncAvailabilityStatus(finalTranscriberId, false, relatedJobId);
+        }
 
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', metadataClientId).single();
-        const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', finalTranscriberId).single(); 
+        // Only fetch transcriber if one is assigned (negotiation)
+        const transcriberUser = (jobType === 'negotiation' && finalTranscriberId) 
+            ? (await supabase.from('users').select('full_name, email').eq('id', finalTranscriberId).single()).data
+            : null;
 
         if (clientError) console.error('Error fetching client for payment email: ', clientError);
-        if (transcriberError) console.error('Error fetching transcriber for payment email: ', transcriberError);
+        if (transcriberUser === null && jobType === 'negotiation') console.error('Error fetching transcriber for payment email: ', transcriberError);
 
-        if (clientUser && transcriberUser) {
+        if (clientUser) { // Send email to client for both negotiation and direct upload
             await emailService.sendPaymentConfirmationEmail(clientUser, transcriberUser, currentJob, paymentRecord);
         }
 
@@ -467,18 +476,18 @@ const verifyPayment = async (req, res, io) => {
                 relatedJobId: relatedJobId,
                 jobType: jobType,
                 message: 'Your payment was successful and the job is now active!',
-                newStatus: 'hired'
+                newStatus: newJobStatus
             });
-            if (finalTranscriberId) {
+            if (jobType === 'negotiation' && finalTranscriberId) { // Only emit job_hired for assigned transcribers in negotiation
                 io.to(finalTranscriberId).emit('job_hired', {
                     relatedJobId: relatedJobId,
                     jobType: jobType,
                     message: 'A client has paid for your accepted job. The job is now active!',
-                    newStatus: 'hired'
+                    newStatus: newJobStatus
                 });
                 console.log(`Emitted 'payment_successful' to client ${metadataClientId} and 'job_hired' to transcriber ${finalTranscriberId}`);
             } else {
-                console.log(`Emitted 'payment_successful' to client ${metadataClientId}. No transcriber assigned yet.`);
+                console.log(`Emitted 'payment_successful' to client ${metadataClientId}. No transcriber assigned yet for direct upload.`);
             }
         }
 
@@ -488,7 +497,7 @@ const verifyPayment = async (req, res, io) => {
         });
 
     } catch (error) {
-        console.error('[initializePayment] Error verifying Paystack payment:', error.response ? error.response.data : error.message);
+        console.error('[verifyPayment] Error verifying Paystack payment:', error.response ? error.response.data : error.message);
         res.status(500).json({ error: 'Server error during payment verification. ' + (error.message || '') });
     }
 };

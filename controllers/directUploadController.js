@@ -7,6 +7,7 @@ const emailService = require('../emailService'); // For sending notifications
 const util = require('util');
 const { getAudioDurationInSeconds } = require('get-audio-duration'); // For calculating audio length
 const { calculatePricePerMinute } = require('../utils/pricingCalculator'); // Import the pricing calculator
+const { updateAverageRating } = require('./ratingController'); // NEW: Import updateAverageRating
 
 // Promisify fs.unlink for async file deletion
 const unlinkAsync = util.promisify(fs.unlink);
@@ -241,7 +242,7 @@ const createDirectUploadJob = async (req, res, io) => {
                     price_per_minute_usd: parsedPricePerMinuteUsd,
                     currency: 'USD',
                     agreed_deadline_hours: parsedAgreedDeadlineHours,
-                    status: 'pending_review',
+                    status: 'pending_review', // Initial status before payment
                     audio_quality_param: audioQualityParam,
                     deadline_type_param: deadlineTypeParam,
                     special_requirements: parsedSpecialRequirements // Use the correctly parsed array
@@ -259,25 +260,27 @@ const createDirectUploadJob = async (req, res, io) => {
         const newJob = job;
 
         // 4. Notify qualified transcribers (4-star and 5-star) via Socket.IO
-        // FIX: Select transcriber_average_rating directly from 'users' table
+        // Transcribers should see their estimated pay (70% of quote_amount)
+        const transcriberEstimatedPay = (newJob.quote_amount * 0.70).toFixed(2);
+
         const { data: transcribers, error: transcriberFetchError } = await supabase
             .from('users')
             .select('id, full_name, email, transcriber_average_rating')
             .eq('user_type', 'transcriber')
             .eq('is_online', true)
             .eq('is_available', true)
-            .gte('transcriber_average_rating', 4); // Filter for rating >= 4
+            .gte('transcriber_average_rating', 4);
 
         if (transcriberFetchError) console.error("Error fetching transcribers for direct job notification:", transcriberFetchError);
 
         if (io && transcribers && transcribers.length > 0) {
-            const qualifiedTranscribers = transcribers.filter(t => t.transcriber_average_rating >= 4); // FIX: Use transcriber_average_rating
+            const qualifiedTranscribers = transcribers.filter(t => t.transcriber_average_rating >= 4);
             qualifiedTranscribers.forEach(transcriber => {
                 io.to(transcriber.id).emit('new_direct_job_available', {
                     jobId: newJob.id,
                     clientName: req.user.full_name,
-                    quote: newJob.quote_amount, // FIX: Use newJob.quote_amount
-                    message: `A new direct upload job from ${req.user.full_name} is available for USD ${newJob.quote_amount}!`, // FIX: Use newJob.quote_amount
+                    transcriberPay: transcriberEstimatedPay, // Send transcriber's estimated pay
+                    message: `A new direct upload job from ${req.user.full_name} is available for USD ${transcriberEstimatedPay}!`,
                     newStatus: 'pending_review'
                 });
             });
@@ -346,7 +349,6 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
 
     try {
         // 1. Verify the transcriber's eligibility (online, available, and rating >= 4)
-        // FIX: Select transcriber_average_rating and transcriber_status directly from 'users'
         const { data: transcriberUser, error: userError } = await supabase
             .from('users')
             .select('is_online, is_available, current_job_id, transcriber_average_rating, transcriber_status')
@@ -361,16 +363,14 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
         if (!transcriberUser.is_online || !transcriberUser.is_available || transcriberUser.current_job_id) {
             return res.status(409).json({ error: 'You are not online, available, or already have an active job. Please update your status.' });
         }
-        // FIX: Use transcriber_average_rating for the check
         if (transcriberUser.transcriber_average_rating < 4) {
             return res.status(403).json({ error: 'Only 4-star and 5-star transcribers can view these jobs.' });
         }
-        // FIX: Also check transcriber_status
         if (transcriberUser.transcriber_status !== 'active_transcriber') {
             return res.status(403).json({ error: 'You are not an active transcriber. Please complete your assessment.' });
         }
 
-        // 2. Fetch jobs that are 'pending_review' and have not been assigned to any transcriber yet
+        // 2. Fetch jobs that are 'available_for_transcriber' and have not been assigned to any transcriber yet
         const { data: jobs, error } = await supabase
             .from('direct_upload_jobs')
             .select(`
@@ -392,15 +392,21 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
                 created_at,
                 client:users!client_id(full_name, email)
             `)
-            .eq('status', 'pending_review')
+            .eq('status', 'available_for_transcriber') // Filter for the new status
             .is('transcriber_id', null)
             .order('created_at', { ascending: true });
 
         if (error) throw error;
 
+        // Calculate transcriber's pay for each job before sending to frontend
+        const jobsWithTranscriberPay = jobs.map(job => ({
+            ...job,
+            transcriber_pay: (job.quote_amount * 0.70).toFixed(2) // Calculate 70% for the transcriber
+        }));
+
         res.status(200).json({
             message: 'Available direct upload jobs retrieved successfully.',
-            jobs: jobs
+            jobs: jobsWithTranscriberPay
         });
 
     } catch (error) {
@@ -416,7 +422,6 @@ const takeDirectUploadJob = async (req, res, io) => {
 
     try {
         // 1. Verify transcriber's eligibility (online, available, correct rating)
-        // FIX: Select transcriber_average_rating and transcriber_status directly from 'users'
         const { data: transcriberUser, error: userError } = await supabase
             .from('users')
             .select('is_online, is_available, current_job_id, transcriber_average_rating, transcriber_status')
@@ -431,11 +436,9 @@ const takeDirectUploadJob = async (req, res, io) => {
         if (!transcriberUser.is_online || !transcriberUser.is_available || transcriberUser.current_job_id) {
             return res.status(409).json({ error: 'You are not online, available, or already have an active job. Please update your status.' });
         }
-        // FIX: Use transcriber_average_rating for the check
         if (transcriberUser.transcriber_average_rating < 4) {
             return res.status(403).json({ error: 'Only 4-star and 5-star transcribers can take these jobs.' });
         }
-        // FIX: Also check transcriber_status
         if (transcriberUser.transcriber_status !== 'active_transcriber') {
             return res.status(403).json({ error: 'You are not an active transcriber. Please complete your assessment.' });
         }
@@ -445,19 +448,19 @@ const takeDirectUploadJob = async (req, res, io) => {
             .from('direct_upload_jobs')
             .update({
                 transcriber_id: transcriberId,
-                status: 'in_progress',
+                status: 'taken', // Change status to 'taken'
                 taken_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
             })
             .eq('id', jobId)
-            .eq('status', 'pending_review')
+            .eq('status', 'available_for_transcriber') // Ensure job is 'available_for_transcriber'
             .is('transcriber_id', null)
             .select()
             .single();
 
         if (jobUpdateError) throw jobUpdateError;
         if (!updatedJob || count === 0) {
-            return res.status(409).json({ error: 'Job not found, already taken, or no longer pending review.' });
+            return res.status(409).json({ error: 'Job not found, already taken, or no longer available.' });
         }
 
         // 3. Update the transcriber's availability status (set to busy with this job)
@@ -469,13 +472,14 @@ const takeDirectUploadJob = async (req, res, io) => {
                 jobId: updatedJob.id,
                 transcriberName: req.user.full_name,
                 message: `Your direct upload job has been taken by ${req.user.full_name}!`,
-                newStatus: 'in_progress'
+                newStatus: 'taken' // Emit new status 'taken'
             });
-            io.emit('direct_job_status_update', {
+            // Emit to all connected clients (except the one taking the job) to update job visibility
+            io.emit('direct_upload_job_taken', { // New event for all transcribers
                 jobId: updatedJob.id,
-                newStatus: 'in_progress'
+                newStatus: 'taken'
             });
-            console.log(`Emitted 'direct_job_taken' to client ${updatedJob.client_id} and 'direct_job_status_update' to all.`);
+            console.log(`Emitted 'direct_job_taken' to client ${updatedJob.client_id} and 'direct_upload_job_taken' to all.`);
         }
 
         res.status(200).json({
@@ -505,8 +509,8 @@ const completeDirectUploadJob = async (req, res, io) => {
         if (jobError || !job) {
             return res.status(404).json({ error: 'Job not found or not assigned to you.' });
         }
-        if (job.status !== 'in_progress') {
-            return res.status(400).json({ error: 'Job is not in progress.' });
+        if (job.status !== 'taken') { // Changed from 'in_progress' to 'taken'
+            return res.status(400).json({ error: 'Job is not currently taken by you.' });
         }
 
         const { data: updatedJob, error: updateError } = await supabase
@@ -521,6 +525,23 @@ const completeDirectUploadJob = async (req, res, io) => {
             .single();
 
         if (updateError) throw updateError;
+
+        // --- NEW: Update payments record upon direct upload job completion ---
+        // Find the payment record associated with this direct upload job
+        const { error: paymentUpdateError } = await supabase
+            .from('payments')
+            .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
+            .eq('direct_upload_job_id', jobId)
+            .eq('transcriber_id', transcriberId)
+            .eq('payout_status', 'awaiting_completion'); // Only update if still awaiting completion
+
+        if (paymentUpdateError) {
+            console.error(`[completeDirectUploadJob] Error updating payment record for direct upload job ${jobId} to 'pending':`, paymentUpdateError);
+            // Don't throw, just log, as job completion is primary.
+        } else {
+            console.log(`[completeDirectUploadJob] Payment record for direct upload job ${jobId} updated to 'pending' payout status.`);
+        }
+        // --- END NEW: Update payments record upon direct upload job completion ---
 
         // 3. Update the transcriber's availability status (set back to available)
         await syncAvailabilityStatus(transcriberId, true, null);
@@ -548,10 +569,89 @@ const completeDirectUploadJob = async (req, res, io) => {
 };
 
 /**
+ * @route PUT /api/client/direct-jobs/:jobId/complete
+ * @desc Client marks a direct upload job as complete and provides feedback
+ * @access Private (Client only)
+ */
+const clientCompleteDirectUploadJob = async (req, res, io) => {
+    const { jobId } = req.params;
+    const clientId = req.user.userId;
+    const { clientFeedbackComment, clientFeedbackRating } = req.body;
+
+    if (!jobId || !clientFeedbackRating) {
+        return res.status(400).json({ error: 'Job ID and client feedback rating are required.' });
+    }
+
+    try {
+        // 1. Fetch the job to verify client ownership and status
+        const { data: job, error: jobFetchError } = await supabase
+            .from('direct_upload_jobs')
+            .select('client_id, transcriber_id, status')
+            .eq('id', jobId)
+            .eq('client_id', clientId)
+            .single();
+
+        if (jobFetchError || !job) {
+            return res.status(404).json({ error: 'Direct upload job not found or not owned by you.' });
+        }
+
+        // Ensure the job has been completed by the transcriber
+        if (job.status !== 'completed') {
+            return res.status(400).json({ error: `Job must be in 'completed' status by transcriber before client can mark it complete. Current status: ${job.status}` });
+        }
+
+        // 2. Update the job status to 'client_completed' and save feedback
+        const { data: updatedJob, error: updateError } = await supabase
+            .from('direct_upload_jobs')
+            .update({
+                status: 'client_completed',
+                client_feedback_comment: clientFeedbackComment,
+                client_feedback_rating: clientFeedbackRating,
+                client_completed_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', jobId)
+            .select()
+            .single();
+
+        if (updateError) throw updateError;
+
+        // 3. Update the transcriber's average rating
+        if (job.transcriber_id && clientFeedbackRating) {
+            await updateAverageRating(job.transcriber_id, clientFeedbackRating, 'transcriber');
+        }
+
+        // 4. Notify the transcriber in real-time about client completion and feedback
+        if (io && job.transcriber_id) {
+            io.to(job.transcriber_id).emit('direct_job_client_completed', {
+                jobId: job.id,
+                clientId: clientId,
+                message: `Client has marked your direct upload job '${job.id.substring(0, 8)}...' as complete and provided feedback!`,
+                newStatus: 'client_completed',
+                feedback: {
+                    comment: clientFeedbackComment,
+                    rating: clientFeedbackRating
+                }
+            });
+            console.log(`Emitted 'direct_job_client_completed' to transcriber ${job.transcriber_id}`);
+        }
+
+        res.status(200).json({
+            message: 'Direct upload job marked as client-completed successfully.',
+            job: updatedJob
+        });
+
+    } catch (error) {
+        console.error('Error completing direct upload job by client:', error);
+        res.status(500).json({ error: 'Server error completing direct upload job by client. ' + (error.message || '') });
+    }
+};
+
+/**
  * @route GET /api/admin/direct-upload-jobs
  * @desc Admin can view all direct upload jobs
  * @access Private (Admin only)
- * */
+ */
 const getAllDirectUploadJobsForAdmin = async (req, res) => {
     try {
         // Fetch all direct upload jobs, joining with client and transcriber user details
@@ -601,5 +701,6 @@ module.exports = {
     getAvailableDirectUploadJobsForTranscriber,
     takeDirectUploadJob,
     completeDirectUploadJob,
+    clientCompleteDirectUploadJob, // NEW: Export clientCompleteDirectUploadJob
     getAllDirectUploadJobsForAdmin
 };
