@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('..//database');
-const authMiddleware = require('..//middleware/authMiddleware');
+const supabase = require('../database');
+const authMiddleware = require('../middleware/authMiddleware');
 const fs = require('fs');
 const path = require('path');
 
@@ -22,7 +22,7 @@ const {
   clientRejectCounter,
   clientCounterBack,
   markJobCompleteByClient
-} = require('..//controllers/negotiationController');
+} = require('../controllers/negotiationController');
 
 // Import admin controller functions
 const {
@@ -44,7 +44,7 @@ const {
     getJobByIdForAdmin,
     getAllDisputesForAdmin,
     getAdminUserId // NEW: Import getAdminUserId
-} = require('..//controllers/adminController');
+} = require('../controllers/adminController');
 
 // Import chat controller functions
 const {
@@ -58,7 +58,7 @@ const {
     sendNegotiationMessage,
     uploadChatAttachment,
     handleChatAttachmentUpload
-} = require('..//controllers/chatController');
+} = require('../controllers/chatController');
 
 // NEW: Import payment controller functions
 const {
@@ -70,23 +70,23 @@ const {
     initializeTrainingPayment, // NEW: Import initializeTrainingPayment
     getTranscriberUpcomingPayoutsForAdmin, // NEW: Import getTranscriberUpcomingPayoutsForAdmin
     markPaymentAsPaidOut // NEW: Import markPaymentAsPaidOut
-} = require('..//controllers/paymentController');
+} = require('../controllers/paymentController');
 
 // NEW: Import rating controller functions
 const {
     rateUserByAdmin,
     getTranscriberRatings,
     getClientRating
-} = require('..//controllers/ratingController');
+} = require('../controllers/ratingController');
 
 // NEW: Import updateTranscriberProfile from transcriberController
-const { updateTranscriberProfile } = require('..//controllers/transcriberController');
+const { updateTranscriberProfile } = require('../controllers/transcriberController');
 // NEW: Import updateClientProfile from authController
-const { updateClientProfile } = require('..//controllers/authController');
+const { updateClientProfile } = require('../controllers/authController');
 
 // NEW: Import functions from directUploadController.js
 const {
-    uploadDirectFiles,
+    // uploadDirectFiles, // This is a placeholder, actual Multer middleware is defined here
     createDirectUploadJob,
     getDirectUploadJobsForClient,
     getAvailableDirectUploadJobsForTranscriber,
@@ -94,7 +94,7 @@ const {
     completeDirectUploadJob,
     getAllDirectUploadJobsForAdmin,
     handleQuoteCalculationRequest
-} = require('..//controllers/directUploadController');
+} = require('../controllers/directUploadController');
 
 // NEW: Import training controller functions
 const {
@@ -108,7 +108,7 @@ const {
     uploadTrainingRoomAttachment, // NEW: Import uploadTrainingRoomAttachment
     handleTrainingRoomAttachmentUpload, // NEW: Import handleTrainingRoomAttachmentUpload
     completeTraining // NEW: Import completeTraining
-} = require('..//controllers/trainingController');
+} = require('../controllers/trainingController');
 
 // Import multer for direct use in this file for error handling
 const multer = require('multer');
@@ -692,7 +692,10 @@ module.exports = (io) => {
     }
   }).fields([
       { name: 'audioVideoFile', maxCount: 1 },
-      { name: 'instructionFiles', maxCount: 5 }
+      { name: 'instructionFiles', maxCount: 5 },
+      { name: 'audioQualityParam', maxCount: 1 }, // Explicitly define text field
+      { name: 'deadlineTypeParam', maxCount: 1 }, // Explicitly define text field
+      { name: 'specialRequirements', maxCount: 1 } // Explicitly define text field
   ]);
 
   router.post('/direct-upload/job/quote', authMiddleware, uploadDirectFilesMiddleware, (req, res, next) => {
