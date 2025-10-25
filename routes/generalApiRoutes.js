@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('..//database');
-const authMiddleware = require('..//middleware/authMiddleware');
+const supabase = require('../database');
+const authMiddleware = require('../middleware/authMiddleware');
 const fs = require('fs');
 const path = require('path');
 
@@ -14,7 +14,6 @@ const {
   createNegotiation,
   getClientNegotiations,
   deleteNegotiation,
-  syncAvailabilityStatus,
   acceptNegotiation,
   counterNegotiation,
   rejectNegotiation,
@@ -22,7 +21,7 @@ const {
   clientRejectCounter,
   clientCounterBack,
   markJobCompleteByClient
-} = require('..//controllers/negotiationController');
+} = require('../controllers/negotiationController');
 
 // Import admin controller functions
 const {
@@ -44,7 +43,7 @@ const {
     getJobByIdForAdmin,
     getAllDisputesForAdmin,
     getAdminUserId // NEW: Import getAdminUserId
-} = require('..//controllers/adminController');
+} = require('../controllers/adminController');
 
 // Import chat controller functions
 const {
@@ -58,7 +57,7 @@ const {
     sendJobMessage, // RENAMED from sendNegotiationMessage
     uploadChatAttachment,
     handleChatAttachmentUpload
-} = require('..//controllers/chatController');
+} = require('../controllers/chatController');
 
 // NEW: Import payment controller functions
 const {
@@ -70,19 +69,19 @@ const {
     initializeTrainingPayment, // NEW: Import initializeTrainingPayment
     getTranscriberUpcomingPayoutsForAdmin, // NEW: Import getTranscriberUpcomingPayoutsForAdmin
     markPaymentAsPaidOut // NEW: Import markPaymentAsPaidOut
-} = require('..//controllers/paymentController');
+} = require('../controllers/paymentController');
 
 // NEW: Import rating controller functions
 const {
     rateUserByAdmin,
     getTranscriberRatings,
     getClientRating
-} = require('..//controllers/ratingController');
+} = require('../controllers/ratingController');
 
-// NEW: Import updateTranscriberProfile from transcriberController
-const { updateTranscriberProfile } = require('..//controllers/transcriberController');
+// NEW: Import updateTranscriberProfile and syncAvailabilityStatus from transcriberController
+const { updateTranscriberProfile, syncAvailabilityStatus } = require('../controllers/transcriberController');
 // NEW: Import updateClientProfile from authController
-const { updateClientProfile } = require('..//controllers/authController');
+const { updateClientProfile } = require('../controllers/authController');
 
 // NEW: Import functions from directUploadController.js
 const {
@@ -95,7 +94,7 @@ const {
     clientCompleteDirectUploadJob, // NEW: Import clientCompleteDirectUploadJob
     getAllDirectUploadJobsForAdmin,
     handleQuoteCalculationRequest
-} = require('..//controllers/directUploadController');
+} = require('../controllers/directUploadController');
 
 // NEW: Import training controller functions
 const {
@@ -109,7 +108,7 @@ const {
     uploadTrainingRoomAttachment, // NEW: Import uploadTrainingRoomAttachment
     handleTrainingRoomAttachmentUpload, // NEW: Import handleTrainingRoomAttachmentUpload
     completeTraining // NEW: Import completeTraining
-} = require('..//controllers/trainingController');
+} = require('../controllers/trainingController');
 
 // Import multer for direct use in this file for error handling
 const multer = require('multer');
@@ -346,55 +345,33 @@ module.exports = (io) => {
     clientRejectCounter(req, res, io);
   });
 
-  router.put('/negotiations/:negotiationId/client/counter-back', authMiddleware, (req, res, next) => {
-    if (req.user.userType !== 'client') {
+  router.put(
+    '/negotiations/:negotiationId/client/counter-back',
+    authMiddleware,
+    (req, res, next) => { // Custom middleware to check user type
+      if (req.user.userType !== 'client') {
+        // If not authorized, clean up any potential files uploaded by Multer before this point
+        if (req.file) { // For single file upload
+          fs.unlink(req.file.path, (err) => { if (err) console.error("Error deleting unauthorized temp file:", err); });
+        }
+        if (req.files && typeof req.files === 'object') { // For multiple files
+          for (const key in req.files) {
+            req.files[key].forEach(file => {
+              fs.unlink(file.path, (err) => { if (err) console.error("Error deleting unauthorized temp file:", err); });
+            });
+          }
+        }
         return res.status(403).json({ error: 'Access denied. Only clients can counter back.' });
-    }
-    // CRITICAL CHANGE: Add Multer middleware for file upload here
-    // Use uploadNegotiationFiles (from negotiationController) for file handling
-    uploadNegotiationFiles(req, res, (multerErr) => {
-      if (multerErr) {
-        return multerErrorHandler(multerErr, req, res, next);
       }
+      next();
+    },
+    uploadNegotiationFiles, // Multer middleware
+    (req, res, next) => { // Final handler
       clientCounterBack(req, res, io);
-    });
-  });
+    },
+    multerErrorHandler // Multer error handler
+  );
 
-
-  router.put('/users/:userId/availability-status', authMiddleware, async (req, res) => {
-    if (req.user.userType !== 'transcriber' && req.user.userType !== 'admin') {
-      return res.status(403).json({ error: 'Access denied. Only transcribers or admins can update availability status.' });
-    }
-    const { userId } = req.params;
-    const { is_available } = req.body;
-    const currentUserId = req.user.userId;
-
-    if (userId !== currentUserId && req.user.userType !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized to update this user\'s status.' });
-    }
-
-    try {
-        await syncAvailabilityStatus(userId, is_available, null);
-
-        const { data, error } = await supabase
-            .from('users')
-            .select('id, is_online, is_available, current_job_id')
-            .eq('id', userId)
-            .single();
-
-        if (error) {
-            console.error("Supabase error updating availability status:", error);
-            return res.status(500).json({ error: error.message });
-        }
-        if (!data) {
-            return res.status(404).json({ error: 'User not found.' });
-        }
-        res.json({ message: 'Availability status updated successfully', user: data });
-    } catch (err) {
-      console.error("Server error updating availability status:", err);
-      res.status(500).json({ error: 'Server error updating availability status' });
-    }
-  });
 
   router.put('/transcriber-profile/:userId', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'transcriber' && req.user.userType !== 'admin') {

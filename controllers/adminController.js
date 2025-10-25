@@ -1,5 +1,54 @@
-const supabase = require('../database');
-const emailService = require('../emailService'); // Ensure this path is correct
+const supabase = require('..//database');
+const emailService = require('..//emailService'); // Ensure this path is correct
+
+// Define explicit columns to select from the 'users' table, excluding 'is_available'
+const USER_SELECT_COLUMNS_EXCLUDING_PASSWORD_AND_IS_AVAILABLE = `
+    id,
+    email,
+    full_name,
+    user_type,
+    last_login,
+    is_active,
+    is_online,
+    current_job_id,
+    phone,
+    transcriber_status,
+    transcriber_user_level,
+    transcriber_average_rating,
+    transcriber_completed_jobs,
+    transcriber_mpesa_number,
+    transcriber_paypal_email,
+    client_average_rating,
+    client_completed_jobs,
+    client_comment,
+    created_at,
+    updated_at
+`;
+
+// Define explicit columns to select from the 'users' table, including password_hash but excluding 'is_available'
+const USER_SELECT_COLUMNS_INCLUDING_PASSWORD_EXCLUDING_IS_AVAILABLE = `
+    id,
+    email,
+    full_name,
+    user_type,
+    last_login,
+    is_active,
+    is_online,
+    current_job_id,
+    phone,
+    transcriber_status,
+    transcriber_user_level,
+    transcriber_average_rating,
+    transcriber_completed_jobs,
+    transcriber_mpesa_number,
+    transcriber_paypal_email,
+    client_average_rating,
+    client_completed_jobs,
+    client_comment,
+    created_at,
+    updated_at,
+    password_hash
+`;
 
 // --- Admin Statistics ---
 
@@ -296,10 +345,10 @@ const getUserByIdForAdmin = async (req, res) => {
         const { userId } = req.params;
         console.log(`[getUserByIdForAdmin] Attempting to fetch user ID: ${userId}`);
 
-        // FIX: Fetch all user and profile details directly from the 'users' table
+        // FIX: Fetch all user and profile details explicitly from the 'users' table
         const { data: user, error } = await supabase
             .from('users')
-            .select(`*`) // Select all columns from the 'users' table
+            .select(USER_SELECT_COLUMNS_INCLUDING_PASSWORD_EXCLUDING_IS_AVAILABLE) // Explicitly select columns
             .eq('id', userId)
             .single();
 
@@ -332,10 +381,10 @@ const getUserByIdForAdmin = async (req, res) => {
 const getAnyUserById = async (req, res) => {
     try {
         const { userId } = req.params;
-        // FIX: Select all relevant basic user info directly from the 'users' table
+        // FIX: Select all relevant basic user info directly from the 'users' table, excluding 'is_available'
         const { data: user, error } = await supabase
             .from('users')
-            .select('id, full_name, email, user_type, is_online, is_available, current_job_id, phone, transcriber_status, transcriber_user_level, transcriber_average_rating, transcriber_completed_jobs, transcriber_mpesa_number, transcriber_paypal_email, client_average_rating, client_completed_jobs, client_comment')
+            .select(USER_SELECT_COLUMNS_EXCLUDING_PASSWORD_AND_IS_AVAILABLE) // Explicitly select columns, excluding 'is_available'
             .eq('id', userId)
             .single();
 
@@ -352,7 +401,7 @@ const getAnyUserById = async (req, res) => {
             console.warn(`[getAnyUserById] User ${userId} not found (after initial check).`);
             return res.status(404).json({ error: 'User not found.' });
         }
-        // Remove password_hash if it was accidentally selected (though '*' usually excludes it if not explicitly requested)
+        // Remove password_hash if it was accidentally selected (though it shouldn't be with the explicit select)
         const { password_hash, ...userWithoutPasswordHash } = user;
         res.json({ user: userWithoutPasswordHash });
     } catch (error) {

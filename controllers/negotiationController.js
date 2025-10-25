@@ -1,4 +1,4 @@
-const supabase = require('..//database');
+const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -14,9 +14,13 @@ const {
     sendPayoutConfirmationEmail,
     sendTranscriberTestSubmittedEmail,
     sendTranscriberTestResultEmail,
-    sendWelcomeEmail
-} = require('..//emailService');
+    sendWelcomeEmail,
+    sendJobCompletedEmailToTranscriber, // Ensure this is imported if used
+    sendJobCompletedEmailToClient // Ensure this is imported if used
+} = require('../emailService');
 // Removed import for updateAverageRating as client rating is being removed.
+// NEW: Import syncAvailabilityStatus from transcriberController
+const { syncAvailabilityStatus } = require('./transcriberController');
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB limit
 
@@ -29,32 +33,6 @@ const getNextFriday = () => {
     nextFriday.setDate(today.getDate() + daysUntilFriday);
     nextFriday.setHours(23, 59, 59, 999); // Set to end of day Friday
     return nextFriday.toISOString();
-};
-
-// Utility function to sync availability status (updates 'users' table only)
-const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) => {
-    const updateData = {
-        is_available: isAvailable,
-        current_job_id: currentJobId,
-        updated_at: new Date().toISOString()
-    };
-
-    try {
-        // FIX: Only update 'users' table for availability flags
-        const { error: userError } = await supabase
-            .from('users')
-            .update(updateData)
-            .eq('id', userId);
-
-        if (userError) {
-            console.error(`Supabase error updating user availability in 'users' table for ${userId}:`, userError);
-            throw userError;
-        }
-        console.log(`User ${userId} availability synced: is_available=${isAvailable}, current_job_id=${currentJobId}`);
-    } catch (error) {
-        console.error(`syncAvailabilityStatus: Uncaught error for user ${userId}:`, error);
-        throw error;
-    }
 };
 
 // Multer configuration for negotiation files (used by clientCounterBack)
@@ -128,6 +106,7 @@ const getAvailableTranscribers = async (req, res) => {
     console.log('Fetching available transcribers...');
 
     // FIX: Select all relevant transcriber profile fields directly from the 'users' table
+    // REMOVED: is_available from select and query
     const { data: transcribers, error } = await supabase
       .from('users')
       .select(`
@@ -136,7 +115,6 @@ const getAvailableTranscribers = async (req, res) => {
         email,
         created_at,
         is_online,
-        is_available,
         current_job_id,
         transcriber_status,
         transcriber_user_level,
@@ -147,7 +125,6 @@ const getAvailableTranscribers = async (req, res) => {
       `)
       .eq('user_type', 'transcriber')
       .eq('is_online', true) // Must be online (logged in and on website)
-      .eq('is_available', true) // Must be explicitly available (not manually set to unavailable)
       .is('current_job_id', null) // Must not have an active/hired job
       .eq('transcriber_status', 'active_transcriber'); // Ensure their transcriber status is active
 
@@ -169,7 +146,7 @@ const getAvailableTranscribers = async (req, res) => {
         status: user.transcriber_status,
         user_level: user.transcriber_user_level,
         is_online: user.is_online,
-        is_available: user.is_available,
+        // REMOVED: is_available
         average_rating: user.transcriber_average_rating || 0.0, // Default to 0.0 if null
         completed_jobs: user.transcriber_completed_jobs || 0, // Default to 0 if null
         mpesa_number: user.transcriber_mpesa_number,
@@ -190,9 +167,9 @@ const getAvailableTranscribers = async (req, res) => {
       console.log('No transcribers found, creating sample data...');
 
       const sampleUsers = [
-        { full_name: 'Sarah Wanjiku', email: 'sarah@example.com', password_hash: '$2b$10$sample.hash.for.demo', user_type: 'transcriber', is_online: true, is_available: true, current_job_id: null, transcriber_status: 'active_transcriber', transcriber_user_level: 'transcriber', transcriber_average_rating: 4.5, transcriber_completed_jobs: 15 },
-        { full_name: 'John Kipchoge', email: 'john@example.com', password_hash: '$2b$10$sample.hash.for.demo', user_type: 'transcriber', is_online: true, is_available: true, current_job_id: null, transcriber_status: 'active_transcriber', transcriber_user_level: 'transcriber', transcriber_average_rating: 4.2, transcriber_completed_jobs: 10 },
-        { full_name: 'Grace Akinyi', email: 'grace@example.com', password_hash: '$2b$10$sample.hash.for.demo', user_type: 'transcriber', is_online: true, is_available: true, current_job_id: null, transcriber_status: 'active_transcriber', transcriber_user_level: 'transcriber', transcriber_average_rating: 4.8, transcriber_completed_jobs: 20 }
+        { full_name: 'Sarah Wanjiku', email: 'sarah@example.com', password_hash: '$2b$10$sample.hash.for.demo', user_type: 'transcriber', is_online: true, current_job_id: null, transcriber_status: 'active_transcriber', transcriber_user_level: 'transcriber', transcriber_average_rating: 4.5, transcriber_completed_jobs: 15 },
+        { full_name: 'John Kipchoge', email: 'john@example.com', password_hash: '$2b$10$sample.hash.for.demo', user_type: 'transcriber', is_online: true, current_job_id: null, transcriber_status: 'active_transcriber', transcriber_user_level: 'transcriber', transcriber_average_rating: 4.2, transcriber_completed_jobs: 10 },
+        { full_name: 'Grace Akinyi', email: 'grace@example.com', password_hash: '$2b$10$sample.hash.for.demo', user_type: 'transcriber', is_online: true, current_job_id: null, transcriber_status: 'active_transcriber', transcriber_user_level: 'transcriber', transcriber_average_rating: 4.8, transcriber_completed_jobs: 20 }
       ];
 
       // Insert sample users (these will go into the 'users' table directly now)
@@ -209,7 +186,8 @@ const getAvailableTranscribers = async (req, res) => {
       if (insertUserError) {
         console.error('Error creating sample users for transcribers:', insertUserError);
       } else {
-        // Create corresponding transcriber marker profiles in the 'transcribers' table
+        // Create corresponding transcriber marker profiles in the 'transcribers' table (if still needed)
+        // Note: The 'transcribers' table might be deprecated if all transcriber data moves to 'users'
         const sampleTranscriberMarkers = insertedUsers.map(user => ({ id: user.id }));
         const { error: insertProfileError } = await supabase
             .from('transcribers')
@@ -224,7 +202,6 @@ const getAvailableTranscribers = async (req, res) => {
             status: user.transcriber_status,
             user_level: user.transcriber_user_level,
             is_online: user.is_online,
-            is_available: user.is_available,
             average_rating: user.transcriber_average_rating,
             completed_jobs: user.transcriber_completed_jobs,
             mpesa_number: user.mpesa_number,
@@ -248,7 +225,6 @@ const getAvailableTranscribers = async (req, res) => {
     });
 
   } catch (error) {
-    // FIX: Corrected syntax error here
     console.error('Get available transcribers error:', error);
     res.status(500).json({ error: error.message });
   }
@@ -285,6 +261,7 @@ const createNegotiation = async (req, res, next, io) => {
     }
 
     // FIX: Check transcriber's availability and status directly from the 'users' table
+    // REMOVED: is_available from select and query
     const { data: transcriberUser, error: transcriberError } = await supabase
       .from('users')
       .select(`
@@ -292,7 +269,6 @@ const createNegotiation = async (req, res, next, io) => {
         full_name,
         email,
         is_online,
-        is_available,
         current_job_id,
         transcriber_status,
         transcriber_user_level
@@ -300,7 +276,6 @@ const createNegotiation = async (req, res, next, io) => {
       .eq('id', transcriber_id)
       .eq('user_type', 'transcriber')
       .eq('is_online', true)
-      .eq('is_available', true)
       .is('current_job_id', null)
       .eq('transcriber_status', 'active_transcriber') // Check transcriber_status from 'users'
       .single();
@@ -313,11 +288,7 @@ const createNegotiation = async (req, res, next, io) => {
       console.error('createNegotiation: Transcriber not found or not available. Supabase Error:', transcriberError);
       return res.status(404).json({ error: 'Transcriber not found, not online, or not available for new jobs.' });
     }
-    // Additional checks based on transcriber status
-    if (!transcriberUser.is_available) {
-      if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-      return res.status(400).json({ error: 'Transcriber is currently busy with another job or manually set to unavailable.' });
-    }
+    // REMOVED: Additional checks based on transcriber.is_available as it's removed
     if (transcriberUser.current_job_id) {
         if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
         return res.status(400).json({ error: 'Transcriber is currently busy with an active job.' });
@@ -651,10 +622,11 @@ const deleteNegotiation = async (req, res, io) => {
         }
     }
 
-    // NEW: Always clear transcriber's current_job_id and set available to true if transcriber_id exists and the job was 'hired' or 'completed'
+    // NEW: Always clear transcriber's current_job_id if transcriber_id exists and the job was 'hired' or 'completed'
+    // REMOVED: is_available parameter
     if (negotiation.transcriber_id && (negotiation.status === 'hired' || negotiation.status === 'completed')) {
         console.log(`Attempting to free up transcriber ${negotiation.transcriber_id} for negotiation ${negotiationId}.`);
-        await syncAvailabilityStatus(negotiation.transcriber_id, true, null);
+        await syncAvailabilityStatus(negotiation.transcriber_id, null); // Only pass userId and currentJobId (null)
         console.log(`Transcriber ${negotiation.transcriber_id} availability status updated.`);
     }
 
@@ -1051,20 +1023,6 @@ const clientCounterBack = async (req, res, io) => {
             return res.status(400).json({ error: 'Proposed price is required for a counter-offer back.' });
         }
 
-        // FIX: Removed file handling logic entirely
-        // let negotiationFileName = null;
-        // if (negotiationFile) {
-        //     negotiationFileName = negotiationFile.filename;
-        //     const filePath = path.join('uploads/negotiation_files', negotiationFileName);
-        //     if (!fs.existsSync(filePath)) {
-        //         console.error(`CRITICAL WARNING: Uploaded file NOT found at expected path: ${filePath}`);
-        //         if (negotiationFile && fs.existsSync(negotiationFile.path)) {
-        //             fs.unlinkSync(negotiationFile.path);
-        //         }
-        //         return res.status(500).json({ error: 'Uploaded file not found on server after processing. Please try again.' });
-        //     }
-        // }
-
         // Fetch negotiation details to verify status and authorization
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
@@ -1196,9 +1154,10 @@ const markJobCompleteByClient = async (req, res, io) => {
 
         if (updateError) throw updateError;
 
-        // 6. Update transcriber's availability (set current_job_id to null and is_available to true)
+        // 6. Update transcriber's availability (set current_job_id to null)
+        // REMOVED: is_available parameter
         if (negotiation.transcriber_id) {
-            await syncAvailabilityStatus(negotiation.transcriber_id, true, null);
+            await syncAvailabilityStatus(negotiation.transcriber_id, null); // Only pass userId and currentJobId (null)
             console.log(`Transcriber ${negotiation.transcriber_id} freed up after client marked job ${negotiationId} as complete.`);
         }
 
@@ -1271,8 +1230,8 @@ const markJobCompleteByClient = async (req, res, io) => {
         if (transcriberUserError) console.error('Error fetching transcriber for job completed email:', transcriberUserError);
 
         if (transcriberUser) {
-            await emailService.sendJobCompletedEmailToTranscriber(transcriberUser, req.user, updatedNegotiation);
-            await emailService.sendJobCompletedEmailToClient(req.user, transcriberUser, updatedNegotiation);
+            await sendJobCompletedEmailToTranscriber(transcriberUser, req.user, updatedNegotiation);
+            await sendJobCompletedEmailToClient(req.user, transcriberUser, updatedNegotiation);
         }
 
         res.json({ message: 'Job marked as complete successfully.', negotiation: updatedNegotiation });
@@ -1293,7 +1252,7 @@ module.exports = {
     getClientNegotiations,
     getTranscriberNegotiations, // FIX: Export getTranscriberNegotiations
     deleteNegotiation,
-    syncAvailabilityStatus,
+    syncAvailabilityStatus, // This is now imported, but still exported for other modules that might use it
     acceptNegotiation,
     counterNegotiation,
     rejectNegotiation,

@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken'); // FIX: Corrected 'require' to 'jsonwebtoken'
-const supabase = require('../database');
-const emailService = require('../emailService');
+const supabase = require('..//database');
+const emailService = require('..//emailService');
 const { v4: uuidv4 } = require('uuid'); // Import uuid for token generation
 
 // Console logs for debugging module loading and configuration
@@ -10,6 +10,31 @@ console.log('[authController.js] uuidv4 imported:', typeof uuidv4);
 
 const FRONTEND_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 console.log('[authController.js] FRONTEND_URL:', FRONTEND_URL);
+
+// Define the explicit columns to select from the 'users' table
+const USER_SELECT_COLUMNS = `
+    id,
+    email,
+    full_name,
+    user_type,
+    last_login,
+    is_active,
+    is_online,
+    current_job_id,
+    phone,
+    transcriber_status,
+    transcriber_user_level,
+    transcriber_average_rating,
+    transcriber_completed_jobs,
+    transcriber_mpesa_number,
+    transcriber_paypal_email,
+    client_average_rating,
+    client_completed_jobs,
+    client_comment,
+    created_at,
+    updated_at,
+    password_hash
+`;
 
 // Register new user
 const registerUser = async (req, res) => {
@@ -47,7 +72,7 @@ const registerUser = async (req, res) => {
     last_login: null,
     is_active: true, // Default to active
     is_online: false, // Default to offline
-    is_available: true, // Default to available
+    // Removed is_available as it's no longer in the schema
     current_job_id: null,
     phone: phone || null, // Universal phone field
 
@@ -81,7 +106,7 @@ const registerUser = async (req, res) => {
   if (user_type === 'trainee') {
       insertUserData.transcriber_status = 'pending_training_payment'; // Trainees start here
       insertUserData.transcriber_user_level = 'trainee'; // Assign a level for trainees
-      insertUserData.is_available = false; // Trainees are not available for jobs
+      // Removed is_available = false for trainees
       // FIX: Explicitly set default values for NOT NULL columns for trainees
       insertUserData.transcriber_average_rating = 0.0; 
       insertUserData.transcriber_completed_jobs = 0;
@@ -92,7 +117,7 @@ const registerUser = async (req, res) => {
   const { data: userData, error: userError } = await supabase
     .from('users')
     .insert([insertUserData])
-    .select('*') // Select all columns for the response
+    .select(USER_SELECT_COLUMNS) // Select all columns for the response explicitly
     .single();
 
   if (userError) {
@@ -140,7 +165,7 @@ const registerUser = async (req, res) => {
       email: newUser.email,
       userType: newUser.user_type,
       isOnline: newUser.is_online,
-      isAvailable: newUser.is_available,
+      // Removed isAvailable from JWT payload
       currentJobId: newUser.current_job_id,
       phone: newUser.phone,
       transcriberStatus: newUser.transcriber_status,
@@ -189,7 +214,7 @@ const loginUser = async (req, res) => {
   // Fetch all user data from the 'users' table (now the source of truth)
   const { data: user, error: userFetchError } = await supabase
     .from('users')
-    .select('*') // Select all columns as 'users' is now the source of truth
+    .select(USER_SELECT_COLUMNS) // Select all columns explicitly
     .eq('email', email)
     .single();
 
@@ -203,7 +228,8 @@ const loginUser = async (req, res) => {
   }
   // Log user details found (ensure sensitive data like password_hash is not logged)
   // FIX: Corrected string literal concatenation for user.id to prevent syntax issues
-  console.log('loginUser: User found:', user.email, 'ID:', user.id, 'is_active:', user.is_active, 'user_type:', user.user_type, 'is_online:', user.is_online, 'is_available:', user.is_available); 
+  // Removed is_available from logging
+  console.log('loginUser: User found:', user.email, 'ID:', user.id, 'is_active:', user.is_active, 'user_type:', user.user_type, 'is_online:', user.is_online); 
 
   // Check if the user account is active
   if (!user.is_active) {
@@ -240,7 +266,7 @@ const loginUser = async (req, res) => {
       userType: user.user_type,
       // Include all relevant 'users' table fields directly in the token payload
       isOnline: user.is_online,
-      isAvailable: user.is_available,
+      // Removed isAvailable from JWT payload
       currentJobId: user.current_job_id,
       phone: user.phone,
       // FIX: Explicitly include transcriber-specific fields in JWT payload
@@ -286,7 +312,7 @@ const getUserById = async (req, res) => {
   // Fetch all user data from the 'users' table (now the source of truth)
   const { data: user, error: userFetchError } = await supabase
     .from('users')
-    .select('*') // Select all columns as 'users' is now the source of truth
+    .select(USER_SELECT_COLUMNS) // Select all columns explicitly
     .eq('id', userId)
     .single();
 
@@ -345,7 +371,7 @@ const updateClientProfile = async (req, res) => {
             .update(userUpdateData)
             .eq('id', userId)
             .eq('user_type', 'client') // Scope update to clients only
-            .select('*') // Select all updated columns to return the full user object
+            .select(USER_SELECT_COLUMNS) // Select all updated columns to return the full user object
             .single();
 
         if (userError) throw userError;
