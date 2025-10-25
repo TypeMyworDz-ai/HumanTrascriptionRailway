@@ -137,7 +137,7 @@ const initializePayment = async (req, res, io) => {
                 // Explicitly define payment channels to include Pesalink
                 channels: ['mobile_money', 'card', 'bank_transfer', 'pesalink'],
                 metadata: {
-                    related_job_id: jobId,
+                    related_job_id: jobId, // Still using this for Paystack metadata
                     related_job_type: jobType,
                     client_id: clientId,
                     transcriber_id: transcriberId,
@@ -320,11 +320,11 @@ const verifyPayment = async (req, res, io) => {
                 .from('payments')
                 .insert([
                     {
-                        negotiation_id: null, // Set to null for training payments
-                        direct_upload_job_id: null, // Set to null for training payments
+                        negotiation_id: null, 
+                        direct_upload_job_id: null, 
                         related_job_type: 'training',
                         client_id: metadataClientId,
-                        transcriber_id: metadataClientId, 
+                        transcriber_id: metadataClientId, // Trainee ID is used as transcriber_id for training payments
                         amount: actualAmountPaidUsd,
                         currency: 'USD',
                         paystack_reference: transaction.reference,
@@ -424,7 +424,7 @@ const verifyPayment = async (req, res, io) => {
         } else if (jobType === 'direct_upload') {
             paymentData.direct_upload_job_id = relatedJobId;
             paymentData.negotiation_id = null;
-        } else if (jobType === 'training') { // Although training is handled above, this is for completeness
+        } else if (jobType === 'training') { // This block should ideally not be reached if training is handled above
             paymentData.negotiation_id = null;
             paymentData.direct_upload_job_id = null;
         }
@@ -516,7 +516,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 currency_paid_by_client,
                 exchange_rate_used,
                 client:users!client_id(full_name, email),
-                negotiation:negotiation_id(status, requirements, deadline_hours, agreed_price_usd)
+                negotiation:negotiation_id(id, status, requirements, deadline_hours, agreed_price_usd) // Join using negotiation_id
             `)
             .eq('transcriber_id', transcriberId)
             .or('payout_status.eq.awaiting_completion,payout_status.eq.paid_out')
@@ -532,10 +532,11 @@ const getTranscriberPaymentHistory = async (req, res) => {
             if (payment.related_job_type === 'negotiation') {
                 jobDetails = { negotiation: payment.negotiation || null };
             } else if (payment.related_job_type === 'direct_upload') {
+                // Fetch direct_upload_job details separately using direct_upload_job_id
                 const { data: directJob, error: directJobError } = await supabase
                     .from('direct_upload_jobs')
-                    .select('status, client_instructions, agreed_deadline_hours, quote_amount')
-                    .eq('id', payment.direct_upload_job_id) // Use direct_upload_job_id here
+                    .select('id, status, client_instructions, agreed_deadline_hours, quote_amount')
+                    .eq('id', payment.direct_upload_job_id) 
                     .single();
                 if (directJobError) {
                     console.error(`Error fetching direct upload job ${payment.direct_upload_job_id} for payment:`, directJobError);
@@ -571,8 +572,8 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 groupedUpcomingPayouts[weekEndingString].totalAmount += payout.transcriber_earning;
                 groupedUpcomingPayouts[weekEndingString].payouts.push({
                     id: payout.id,
-                    negotiation_id: payout.negotiation_id, // Use negotiation_id
-                    direct_upload_job_id: payout.direct_upload_job_id, // Use direct_upload_job_id
+                    negotiation_id: payout.negotiation_id, 
+                    direct_upload_job_id: payout.direct_upload_job_id, 
                     related_job_type: payout.related_job_type,
                     clientName: payout.client?.full_name || 'N/A',
                     jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || 'N/A',
@@ -634,7 +635,8 @@ const getClientPaymentHistory = async (req, res) => {
                 payout_status,
                 currency_paid_by_client,
                 exchange_rate_used,
-                transcriber:users!transcriber_id(full_name, email)
+                transcriber:users!transcriber_id(full_name, email),
+                negotiation:negotiation_id(id, status, requirements, deadline_hours, agreed_price_usd) // Join using negotiation_id
             `)
             .eq('client_id', clientId)
             .order('transaction_date', { ascending: false });
@@ -811,6 +813,9 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
                     .select('client_instructions, agreed_deadline_hours, quote_amount, created_at')
                     .eq('id', payment.direct_upload_job_id) // Use direct_upload_job_id here
                     .single();
+                if (directJobError) {
+                    console.error(`Error fetching direct upload job ${payment.direct_upload_job_id} for payment:`, directJobError);
+                }
                 jobDetails = { direct_upload_job: directJob || null };
             }
             return { ...payment, ...jobDetails };
@@ -839,8 +844,8 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
             groupedPayouts[weekEndingString].totalAmount += payout.transcriber_earning;
             groupedPayouts[weekEndingString].payouts.push({
                 id: payout.id,
-                negotiation_id: payout.negotiation_id, // Use negotiation_id
-                direct_upload_job_id: payout.direct_upload_job_id, // Use direct_upload_job_id
+                negotiation_id: payout.negotiation_id, 
+                direct_upload_job_id: payout.direct_upload_job_id, 
                 related_job_type: payout.related_job_type,
                 clientName: payout.client?.full_name || 'N/A',
                 jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || 'N/A',
