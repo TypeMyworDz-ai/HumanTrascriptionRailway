@@ -1,10 +1,10 @@
-const supabase = require('../database');
+const supabase = require('..//database');
 const path = require('path');
 const fs = require('fs');
-const emailService = require('../emailService');
-const { updateAverageRating } = require('./ratingController'); // This will also need updating later
-const { calculateTranscriberEarning } = require('../utils/paymentUtils'); // Import calculateTranscriberEarning
-const { getNextFriday } = require('../utils/paymentUtils'); // Import getNextFriday
+const emailService = require('..//emailService');
+const { updateAverageRating } = require('.//ratingController'); // This will also need updating later
+const { calculateTranscriberEarning } = require('..//utils/paymentUtils'); // Import calculateTranscriberEarning
+const { getNextFriday } = require('..//utils/paymentUtils'); // Import getNextFriday
 
 // Utility function to sync availability status (updates 'users' table only)
 const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) => {
@@ -42,10 +42,40 @@ const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) 
 const setOnlineStatus = async (userId, isOnline) => {
     console.log(`[setOnlineStatus] Attempting to set user ${userId} is_online to ${isOnline}`);
     try {
-        // FIX: Only update 'users' table for is_online
+        // Fetch current user data before updating to ensure consistency
+        const { data: currentUser, error: fetchError } = await supabase
+            .from('users')
+            .select('is_available, current_job_id')
+            .eq('id', userId)
+            .eq('user_type', 'transcriber')
+            .single();
+
+        if (fetchError || !currentUser) {
+            console.error(`[setOnlineStatus] Error fetching current user data for ${userId}:`, fetchError);
+            // Proceed with setting online status, but log the error
+        }
+
+        const updateData = {
+            is_online: isOnline,
+            updated_at: new Date().toISOString()
+        };
+
+        // NEW LOGIC: If transcriber is going online and is NOT currently assigned a job,
+        // ensure their 'is_available' status is also set to true.
+        // This prevents cases where 'is_available' might be false due to a previous session or bug.
+        if (isOnline && (!currentUser || !currentUser.current_job_id)) {
+            updateData.is_available = true;
+            updateData.current_job_id = null; // Ensure no stale job ID if making available
+            console.log(`[setOnlineStatus] Correcting 'is_available' to true for user ${userId} as they are coming online and have no active job.`);
+        } else if (!isOnline) {
+            // When going offline, also set is_available to false as they are no longer actively working
+            updateData.is_available = false;
+            console.log(`[setOnlineStatus] Setting 'is_available' to false for user ${userId} as they are going offline.`);
+        }
+
         const { data, error } = await supabase
             .from('users')
-            .update({ is_online: isOnline, updated_at: new Date().toISOString() })
+            .update(updateData)
             .eq('id', userId)
             .eq('user_type', 'transcriber'); // Ensure this only affects transcriber records
 
@@ -54,29 +84,6 @@ const setOnlineStatus = async (userId, isOnline) => {
             throw error;
         }
         console.log(`[setOnlineStatus] User ${userId} is_online status successfully set to ${isOnline}. Supabase response data:`, data);
-
-        // NEW LOGIC: When a transcriber goes online, ensure their availability status is correct.
-        // If they are online and not assigned to a job, they should be available.
-        if (isOnline) {
-            // Fetch current availability status from the USERS table
-            const { data: userProfile, error: fetchUserError } = await supabase
-                .from('users')
-                .select('is_available, current_job_id') // Check primary availability flags
-                .eq('id', userId)
-                .single();
-
-            if (fetchUserError) {
-                console.error(`[setOnlineStatus] Error fetching user profile for availability check on login for ${userId}:`, fetchUserError);
-                // Don't throw, just log and continue, as setting online status was successful.
-            } else if (userProfile) {
-                // If they are not available AND not assigned to a job (inconsistent state), make them available.
-                // This handles cases where is_available was incorrectly left as FALSE from a previous session or bug.
-                if (!userProfile.is_available && !userProfile.current_job_id) {
-                    await syncAvailabilityStatus(userId, true, null);
-                    console.log(`[setOnlineStatus] Corrected inconsistent availability status for user ${userId} on login: set is_available=TRUE, current_job_id=NULL.`);
-                }
-            }
-        }
 
     } catch (error) {
         console.error('[setOnlineStatus] Uncaught error:', error);

@@ -1,4 +1,4 @@
-const supabase = require('../database');
+const supabase = require('..//database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -89,7 +89,7 @@ const getAdminDirectMessages = async (req, res, io) => {
 
         const { data: messages, error } = await supabase
             .from('messages')
-            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, negotiation_id, training_room_id') // NEW: Include training_room_id
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, negotiation_id, direct_upload_job_id, training_room_id') // NEW: Include direct_upload_job_id
             .or(orFilter)
             // Removed .is('negotiation_id', null) and .is('training_room_id', null)
             // as this endpoint now serves as the general chat history for admin-user conversations,
@@ -152,12 +152,13 @@ const sendAdminDirectMessage = async (req, res, io) => {
                 receiver_id: receiverId,
                 content: messageText,
                 negotiation_id: null,
+                direct_upload_job_id: null, // Ensure this is null for direct messages
                 training_room_id: trainingRoomId || null, // MODIFIED: Store trainingRoomId if provided
                 is_read: false,
                 file_url: fileUrl,
                 file_name: fileName
             })
-            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, training_room_id') // NEW: Include training_room_id in select
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, negotiation_id, direct_upload_job_id, training_room_id') // NEW: Include direct_upload_job_id in select
             .single();
 
         if (error) throw error;
@@ -198,7 +199,7 @@ const getUserDirectMessages = async (req, res, io) => {
 
         const { data: messages, error } = await supabase
             .from('messages')
-            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, negotiation_id, training_room_id') // NEW: Include training_room_id
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, negotiation_id, direct_upload_job_id, training_room_id') // NEW: Include direct_upload_job_id
             .or(orFilter)
             // Removed .is('negotiation_id', null) and .is('training_room_id', null)
             // as this endpoint now serves as the general chat history for user-partner conversations,
@@ -257,12 +258,13 @@ const sendUserDirectMessage = async (req, res, io) => {
                 receiver_id: receiverId,
                 content: messageText,
                 negotiation_id: null,
+                direct_upload_job_id: null, // Ensure this is null for direct messages
                 training_room_id: trainingRoomId || null, // MODIFIED: Store trainingRoomId if provided
                 is_read: false,
                 file_url: fileUrl,
                 file_name: fileName
             })
-            .select('id, sender_id, receiver_id, negotiation_id, content, timestamp, is_read, file_url, file_name, training_room_id') // NEW: Include training_room_id in select
+            .select('id, sender_id, receiver_id, negotiation_id, direct_upload_job_id, content, timestamp, is_read, file_url, file_name, training_room_id') // NEW: Include direct_upload_job_id in select
             .single();
 
         if (error) {
@@ -310,13 +312,14 @@ const getUnreadMessageCount = async (req, res) => {
             return res.json({ count: 0 });
         }
 
-        // MODIFIED: Removed .is('training_room_id', null) filter to include training room messages in count
+        // CORRECTED: Filter to exclude messages linked to both negotiation_id and direct_upload_job_id
         const { count, error } = await supabase
             .from('messages')
             .select('*', { count: 'exact', head: true })
             .eq('receiver_id', userId)
             .eq('is_read', false)
-            .is('negotiation_id', null); // Keep this to exclude negotiation messages
+            .is('negotiation_id', null) // Exclude negotiation messages
+            .is('direct_upload_job_id', null); // Exclude direct upload job messages
 
         if (error) {
             console.error(`[getUnreadMessageCount] Supabase error fetching unread message count for user ${userId}:`, error);
@@ -330,35 +333,59 @@ const getUnreadMessageCount = async (req, res) => {
     }
 };
 
-const getNegotiationMessages = async (req, res, io) => {
+const getJobMessages = async (req, res, io) => { // Renamed from getNegotiationMessages
     try {
-        const { negotiationId } = req.params;
+        const { jobId } = req.params; // Generic jobId for either negotiation or direct_upload
         const userId = req.user.userId;
 
-        const { data: negotiation, error: negotiationError } = await supabase
+        let job;
+        let jobType;
+        let jobError;
+
+        // Attempt to fetch from negotiations
+        const { data: negotiationData, error: negotiationError } = await supabase
             .from('negotiations')
             .select('client_id, transcriber_id')
-            .eq('id', negotiationId)
+            .eq('id', jobId)
             .single();
 
-        if (negotiationError || !negotiation) {
-            console.error(`NegotiationMessages: Negotiation ${negotiationId} not found or user ${userId} not authorized.`, negotiationError);
-            return res.status(404).json({ error: 'Negotiation not found or access denied.' });
+        if (negotiationData) {
+            job = negotiationData;
+            jobType = 'negotiation';
+        } else {
+            // If not found in negotiations, attempt to fetch from direct_upload_jobs
+            const { data: directUploadData, error: directUploadError } = await supabase
+                .from('direct_upload_jobs')
+                .select('client_id, transcriber_id')
+                .eq('id', jobId)
+                .single();
+
+            if (directUploadData) {
+                job = directUploadData;
+                jobType = 'direct_upload';
+            } else {
+                jobError = negotiationError || directUploadError; // Capture the error if neither is found
+            }
         }
 
-        if (negotiation.client_id !== userId && negotiation.transcriber_id !== userId) {
-            console.warn(`NegotiationMessages: User ${userId} attempted unauthorized access to negotiation messages for ${negotiationId}.`);
-            return res.status(403).json({ error: 'Access denied to messages for this negotiation.' });
+        if (jobError || !job) {
+            console.error(`[getJobMessages]: Job ${jobId} not found or user ${userId} not authorized.`, jobError);
+            return res.status(404).json({ error: 'Job not found or access denied.' });
+        }
+
+        if (job.client_id !== userId && job.transcriber_id !== userId) {
+            console.warn(`[getJobMessages]: User ${userId} attempted unauthorized access to job messages for ${jobId}.`);
+            return res.status(403).json({ error: 'Access denied to messages for this job.' });
         }
 
         const { data: messages, error } = await supabase
             .from('messages')
-            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, training_room_id') // NEW: Include training_room_id
-            .eq('negotiation_id', negotiationId)
+            .select('id, sender_id, receiver_id, negotiation_id, direct_upload_job_id, content, timestamp, is_read, file_url, file_name, training_room_id') // NEW: Include direct_upload_job_id
+            .or(`negotiation_id.eq.${jobId},direct_upload_job_id.eq.${jobId}`) // Filter by either ID
             .order('timestamp', { ascending: true });
 
         if (error) {
-            console.error(`[getNegotiationMessages] Supabase error fetching messages for negotiation ${negotiationId}:`, error);
+            console.error(`[getJobMessages] Supabase error fetching messages for job ${jobId}:`, error);
             throw error;
         }
 
@@ -373,7 +400,7 @@ const getNegotiationMessages = async (req, res, io) => {
                     .in('id', unreadIds);
 
                 if (updateError) {
-                    console.error('Error marking negotiation messages as read:', updateError);
+                    console.error('Error marking job messages as read:', updateError);
                 } else {
                     const senderOfUnreadMessages = unreadMessagesForUser[0].sender_id;
                     if (senderOfUnreadMessages !== userId) {
@@ -381,7 +408,7 @@ const getNegotiationMessages = async (req, res, io) => {
                          io.to(senderOfUnreadMessages).emit('messageRead', {
                              senderId: userId,
                              receiverId: senderOfUnreadMessages,
-                             negotiationId: negotiationId,
+                             jobId: jobId, // Use jobId here
                              messageIds: unreadIds
                          });
                     }
@@ -391,50 +418,83 @@ const getNegotiationMessages = async (req, res, io) => {
 
         res.json({ messages });
     } catch (error) {
-        console.error('Error fetching negotiation messages:', error);
+        console.error('Error fetching job messages:', error);
         res.status(500).json({ error: error.message });
     }
 };
 
-const sendNegotiationMessage = async (req, res, io) => {
+const sendJobMessage = async (req, res, io) => { // Renamed from sendNegotiationMessage
     try {
-        const { receiverId, negotiationId, messageText, fileUrl, fileName } = req.body;
+        const { receiverId, jobId, messageText, fileUrl, fileName } = req.body; // Changed negotiationId to jobId
         const senderId = req.user.userId;
         const senderFullName = req.user.full_name || 'User';
 
-        if (!receiverId || !negotiationId || (!messageText && !fileUrl)) {
-            return res.status(400).json({ error: 'Receiver ID, negotiation ID, and either message text or a file are required.' });
+        if (!receiverId || !jobId || (!messageText && !fileUrl)) {
+            return res.status(400).json({ error: 'Receiver ID, job ID, and either message text or a file are required.' });
         }
 
-        const { data: negotiation, error: negotiationError } = await supabase
+        let job;
+        let jobType;
+        let jobError;
+
+        // Attempt to fetch from negotiations
+        const { data: negotiationData, error: negotiationError } = await supabase
             .from('negotiations')
             .select('client_id, transcriber_id')
-            .eq('id', negotiationId)
+            .eq('id', jobId)
             .single();
 
-        if (negotiationError || !negotiation) {
-            console.error(`SendNegotiationMessage: Negotiation ${negotiationId} not found or user ${senderId} not authorized.`, negotiationError);
-            return res.status(404).json({ error: 'Negotiation not found or access denied.' });
+        if (negotiationData) {
+            job = negotiationData;
+            jobType = 'negotiation';
+        } else {
+            // If not found in negotiations, attempt to fetch from direct_upload_jobs
+            const { data: directUploadData, error: directUploadError } = await supabase
+                .from('direct_upload_jobs')
+                .select('client_id, transcriber_id')
+                .eq('id', jobId)
+                .single();
+
+            if (directUploadData) {
+                job = directUploadData;
+                jobType = 'direct_upload';
+            } else {
+                jobError = negotiationError || directUploadError; // Capture the error if neither is found
+            }
         }
 
-        if (negotiation.client_id !== senderId && negotiation.transcriber_id !== senderId) {
-            console.warn(`SendNegotiationMessage: User ${senderId} attempted unauthorized message send for negotiation ${negotiationId}.`);
-            return res.status(403).json({ error: 'Access denied to send messages for this negotiation.' });
+        if (jobError || !job) {
+            console.error(`[sendJobMessage]: Job ${jobId} not found or user ${senderId} not authorized.`, jobError);
+            return res.status(404).json({ error: 'Job not found or access denied.' });
+        }
+
+        if (job.client_id !== senderId && job.transcriber_id !== senderId) {
+            console.warn(`[sendJobMessage]: User ${senderId} attempted unauthorized message send for job ${jobId}.`);
+            return res.status(403).json({ error: 'Access denied to send messages for this job.' });
+        }
+
+        const messageToInsert = {
+            sender_id: senderId,
+            receiver_id: receiverId,
+            content: messageText,
+            training_room_id: null, // Ensure this is null for job messages
+            is_read: false,
+            file_url: fileUrl,
+            file_name: fileName
+        };
+
+        if (jobType === 'negotiation') {
+            messageToInsert.negotiation_id = jobId;
+            messageToInsert.direct_upload_job_id = null;
+        } else { // direct_upload
+            messageToInsert.direct_upload_job_id = jobId;
+            messageToInsert.negotiation_id = null;
         }
 
         const { data: newMessage, error } = await supabase
             .from('messages')
-            .insert({
-                sender_id: senderId,
-                receiver_id: receiverId,
-                negotiation_id: negotiationId,
-                content: messageText,
-                training_room_id: null, // Ensure this is null for negotiation messages
-                is_read: false,
-                file_url: fileUrl,
-                file_name: fileName
-            })
-            .select('id, sender_id, receiver_id, negotiation_id, content, timestamp, is_read, file_url, file_name, training_room_id') // NEW: Include training_room_id in select
+            .insert(messageToInsert)
+            .select('id, sender_id, receiver_id, negotiation_id, direct_upload_job_id, content, timestamp, is_read, file_url, file_name, training_room_id') // NEW: Include direct_upload_job_id in select
             .single();
 
         if (error) throw error;
@@ -445,9 +505,9 @@ const sendNegotiationMessage = async (req, res, io) => {
                 sender_name: senderFullName,
             };
 
-            console.log(`[sendNegotiationMessage] Attempting to emit 'newChatMessage' for negotiation ${negotiationId}`);
-            console.log(`[sendNegotiationMessage] Sender ID: ${senderId}, Receiver ID: ${receiverId}`);
-            console.log(`[sendNegotiationMessage] Emitting payload:`, messagePayload);
+            console.log(`[sendJobMessage] Attempting to emit 'newChatMessage' for job ${jobId} (Type: ${jobType})`);
+            console.log(`[sendJobMessage] Sender ID: ${senderId}, Receiver ID: ${receiverId}`);
+            console.log(`[sendJobMessage] Emitting payload:`, messagePayload);
 
             io.to(receiverId).emit('newChatMessage', messagePayload);
             io.to(senderId).emit('newChatMessage', messagePayload);
@@ -456,7 +516,7 @@ const sendNegotiationMessage = async (req, res, io) => {
 
         res.status(201).json({ message: 'Message sent successfully', messageData: newMessage });
     } catch (error) {
-        console.error('Error sending negotiation message:', error);
+        console.error('Error sending job message:', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -486,14 +546,15 @@ const getAdminChatList = async (req, res) => {
 
             if (partnerError) console.error(`Error fetching partner ${partnerId}:`, partnerError);
 
-            // MODIFIED: Removed .is('training_room_id', null) filter to include training room messages in count
+            // MODIFIED: Filter to exclude messages linked to both negotiation_id and direct_upload_job_id
             const { count: unreadCount, error: unreadError } = await supabase
                 .from('messages')
                 .select('*', { count: 'exact', head: true })
                 .eq('sender_id', partnerId)
                 .eq('receiver_id', adminId)
                 .eq('is_read', false)
-                .is('negotiation_id', null); // Keep this to exclude negotiation messages
+                .is('negotiation_id', null) // Exclude negotiation messages
+                .is('direct_upload_job_id', null); // Exclude direct upload job messages
 
             if (unreadError) console.error(`Error fetching unread count for partner ${partnerId}:`, unreadError);
 
@@ -524,8 +585,8 @@ module.exports = {
     sendUserDirectMessage,
     getUnreadMessageCount,
     getAdminChatList,
-    getNegotiationMessages,
-    sendNegotiationMessage,
+    getJobMessages, // Renamed export
+    sendJobMessage, // Renamed export
     uploadChatAttachment,
     handleChatAttachmentUpload
 };

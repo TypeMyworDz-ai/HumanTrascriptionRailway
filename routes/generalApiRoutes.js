@@ -54,8 +54,8 @@ const {
     sendUserDirectMessage,
     getUnreadMessageCount,
     getAdminChatList,
-    getNegotiationMessages,
-    sendNegotiationMessage,
+    getJobMessages, // RENAMED from getNegotiationMessages
+    sendJobMessage, // RENAMED from sendNegotiationMessage
     uploadChatAttachment,
     handleChatAttachmentUpload
 } = require('..//controllers/chatController');
@@ -278,12 +278,14 @@ module.exports = (io) => {
   });
 
   // --- MESSAGING ROUTES (General) ---
-  router.get('/messages/:negotiationId', authMiddleware, (req, res, next) => {
-    getNegotiationMessages(req, res, io);
+  // RENAMED: Route for fetching job messages
+  router.get('/messages/:jobId', authMiddleware, (req, res, next) => {
+    getJobMessages(req, res, io);
   });
 
-  router.post('/messages/negotiation/send', authMiddleware, (req, res, next) => {
-    sendNegotiationMessage(req, res, io);
+  // RENAMED: Route for sending job messages
+  router.post('/messages/job/send', authMiddleware, (req, res, next) => {
+    sendJobMessage(req, res, io);
   });
 
   // NEW: Chat Attachment Upload Route
