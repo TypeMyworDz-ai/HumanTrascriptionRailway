@@ -1,8 +1,8 @@
 const axios = require('axios');
-const supabase = require('..//database');
-const { syncAvailabilityStatus } = require('..//controllers/transcriberController');
-const emailService = require('..//emailService');
-const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
+const supabase = require('../database');
+const { syncAvailabilityStatus } = require('../controllers/transcriberController');
+const emailService = require('../emailService');
+const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
@@ -275,12 +275,15 @@ const verifyPayment = async (req, res, io) => {
             related_job_id: metadataRelatedJobId,
             related_job_type: metadataRelatedJobType,
             client_id: metadataClientId,
-            transcriber_id: metadataTranscriberId,
+            transcriber_id: metadataTranscriberIdRaw, // Renamed to avoid confusion
             agreed_price_usd: metadataAgreedPrice,
             currency_paid: metadataCurrencyPaid,
             exchange_rate_usd_to_kes: metadataExchangeRate,
             amount_paid_kes: metadataAmountPaidKes
         } = transaction.metadata;
+
+        // Ensure transcriberId is explicitly null if it's an empty string or undefined from metadata
+        const finalTranscriberId = (metadataTranscriberIdRaw === '' || metadataTranscriberIdRaw === undefined) ? null : metadataTranscriberIdRaw;
 
         if (metadataRelatedJobId !== relatedJobId || metadataRelatedJobType !== jobType) {
             console.error('Metadata job ID or type mismatch:', metadataRelatedJobId, relatedJobId, metadataRelatedJobType, jobType);
@@ -406,7 +409,7 @@ const verifyPayment = async (req, res, io) => {
                     related_job_id: relatedJobId,
                     related_job_type: jobType,
                     client_id: metadataClientId,
-                    transcriber_id: metadataTranscriberId,
+                    transcriber_id: finalTranscriberId, // Use the safely handled ID
                     amount: actualAmountPaidUsd,
                     transcriber_earning: transcriberPayAmount,
                     currency: 'USD',
@@ -436,10 +439,10 @@ const verifyPayment = async (req, res, io) => {
             throw jobUpdateError;
         }
 
-        await syncAvailabilityStatus(metadataTranscriberId, false, relatedJobId);
+        await syncAvailabilityStatus(finalTranscriberId, false, relatedJobId); // Use finalTranscriberId here too
 
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', metadataClientId).single();
-        const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', metadataTranscriberId).single();
+        const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', finalTranscriberId).single(); // Use finalTranscriberId here
 
         if (clientError) console.error('Error fetching client for payment email: ', clientError);
         if (transcriberError) console.error('Error fetching transcriber for payment email: ', transcriberError);
@@ -455,13 +458,18 @@ const verifyPayment = async (req, res, io) => {
                 message: 'Your payment was successful and the job is now active!',
                 newStatus: 'hired'
             });
-            io.to(metadataTranscriberId).emit('job_hired', {
-                relatedJobId: relatedJobId,
-                jobType: jobType,
-                message: 'A client has paid for your accepted job. The job is now active!',
-                newStatus: 'hired'
-            });
-            console.log(`Emitted 'payment_successful' to client ${metadataClientId} and 'job_hired' to transcriber ${metadataTranscriberId}`);
+            // Only emit job_hired to transcriber if one is assigned
+            if (finalTranscriberId) {
+                io.to(finalTranscriberId).emit('job_hired', {
+                    relatedJobId: relatedJobId,
+                    jobType: jobType,
+                    message: 'A client has paid for your accepted job. The job is now active!',
+                    newStatus: 'hired'
+                });
+                console.log(`Emitted 'payment_successful' to client ${metadataClientId} and 'job_hired' to transcriber ${finalTranscriberId}`);
+            } else {
+                console.log(`Emitted 'payment_successful' to client ${metadataClientId}. No transcriber assigned yet.`);
+            }
         }
 
         res.status(200).json({
@@ -730,7 +738,7 @@ const getAllPaymentHistoryForAdmin = async (req, res) => {
 
     return res.status(200).json(paymentsWithJobDetails);
   } catch (error) {
-    console.error('Server error fetching all payment history for admin: ', error);
+    console.error('Server error fetching all payment history for admin:', error);
     return res.status(500).json({ error: 'Failed to fetch all payment history for admin.' });
   }
 };
