@@ -199,7 +199,7 @@ const createDirectUploadJob = async (req, res, io) => {
         await cleanupFiles();
         return res.status(400).json({ error: 'Price per minute is missing or invalid. Please ensure quote is calculated and sent correctly.' });
     }
-    if (isNaN(parsedAgreedDeadlineHours) || parsedAgredDeadlineHours === null) {
+    if (isNaN(parsedAgreedDeadlineHours) || parsedAgreedDeadlineHours === null) {
         await cleanupFiles();
         return res.status(400).json({ error: 'Agreed deadline hours are missing or invalid. Please ensure quote is calculated and sent correctly.' });
     }
