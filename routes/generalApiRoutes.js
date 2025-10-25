@@ -684,6 +684,7 @@ module.exports = (io) => {
     }
   };
 
+  // CORRECTED: Removed non-file fields from .fields()
   const uploadDirectFilesMiddleware = multer({
     storage: directUploadFileStorage,
     fileFilter: directUploadFileFilter,
@@ -692,10 +693,7 @@ module.exports = (io) => {
     }
   }).fields([
       { name: 'audioVideoFile', maxCount: 1 },
-      { name: 'instructionFiles', maxCount: 5 },
-      { name: 'audioQualityParam', maxCount: 1 }, // Explicitly define text field
-      { name: 'deadlineTypeParam', maxCount: 1 }, // Explicitly define text field
-      { name: 'specialRequirements', maxCount: 1 } // Explicitly define text field
+      { name: 'instructionFiles', maxCount: 5 }
   ]);
 
   router.post('/direct-upload/job/quote', authMiddleware, uploadDirectFilesMiddleware, (req, res, next) => {

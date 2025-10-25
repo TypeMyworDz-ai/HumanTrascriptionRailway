@@ -99,6 +99,11 @@ const handleQuoteCalculationRequest = async (req, res, io) => {
         return res.status(400).json({ error: 'Main audio/video file is required for quote calculation.' });
     }
 
+    // Robustly parse specialRequirements
+    const parsedSpecialRequirements = (specialRequirements && specialRequirements !== '[]') 
+        ? JSON.parse(specialRequirements) 
+        : [];
+
     try {
         const audioVideoFilePath = audioVideoFile.path;
         if (!fs.existsSync(audioVideoFilePath)) {
@@ -113,7 +118,8 @@ const handleQuoteCalculationRequest = async (req, res, io) => {
         const quoteDetails = await getQuoteAndDeadline(
             audioLengthMinutes,
             audioQualityParam,
-            specialRequirements ? JSON.parse(specialRequirements) : []
+            deadlineTypeParam,
+            parsedSpecialRequirements // Pass the correctly parsed array
         );
 
         res.status(200).json({
@@ -179,6 +185,11 @@ const createDirectUploadJob = async (req, res, io) => {
     const parsedPricePerMinuteUsd = parseFloat(pricePerMinuteUsd);
     const parsedAgreedDeadlineHours = parseInt(agreedDeadlineHours, 10);
 
+    // Robustly parse specialRequirements for job creation
+    const parsedSpecialRequirements = (specialRequirements && specialRequirements !== '[]') 
+        ? JSON.parse(specialRequirements) 
+        : [];
+
     // NEW: Add robust validation for parsed numeric fields
     if (isNaN(parsedQuoteAmount) || parsedQuoteAmount === null) { 
         await cleanupFiles();
@@ -188,7 +199,7 @@ const createDirectUploadJob = async (req, res, io) => {
         await cleanupFiles();
         return res.status(400).json({ error: 'Price per minute is missing or invalid. Please ensure quote is calculated and sent correctly.' });
     }
-    if (isNaN(parsedAgreedDeadlineHours) || parsedAgreedDeadlineHours === null) {
+    if (isNaN(parsedAgreedDeadlineHours) || parsedAgredDeadlineHours === null) {
         await cleanupFiles();
         return res.status(400).json({ error: 'Agreed deadline hours are missing or invalid. Please ensure quote is calculated and sent correctly.' });
     }
@@ -233,7 +244,7 @@ const createDirectUploadJob = async (req, res, io) => {
                     status: 'pending_review',
                     audio_quality_param: audioQualityParam,
                     deadline_type_param: deadlineTypeParam,
-                    special_requirements: specialRequirements ? JSON.parse(specialRequirements) : []
+                    special_requirements: parsedSpecialRequirements // Use the correctly parsed array
                 }
             ])
             .select()
@@ -568,27 +579,16 @@ const getAllDirectUploadJobsForAdmin = async (req, res) => {
             `)
             .order('created_at', { ascending: false });
 
-        if (error) {
-            console.error('Error fetching all direct upload jobs for admin:', error);
-            return res.status(500).json({ error: error.message });
-        }
-
-        // Format results to handle potential null client/transcriber IDs gracefully
-        const formattedJobs = jobs.map(j => ({
-            ...j,
-            client: j.client || { full_name: 'Unknown Client', email: 'N/A' },
-            transcriber: j.transcriber || { full_name: 'Unassigned', email: 'N/A' }
-        }));
-
+        if (error) throw error;
 
         res.status(200).json({
-            message: 'All direct upload jobs retrieved successfully for admin.',
-            jobs: formattedJobs
+            message: 'Client direct upload jobs retrieved successfully.',
+            jobs: jobs
         });
 
     } catch (error) {
-        console.error('Server error fetching all direct upload jobs for admin:', error);
-        res.status(500).json({ error: 'Server error fetching all direct upload jobs for admin.' });
+        console.error('Error fetching client direct upload jobs:', error);
+        res.status(500).json({ error: 'Server error fetching client direct upload jobs.' });
     }
 };
 
