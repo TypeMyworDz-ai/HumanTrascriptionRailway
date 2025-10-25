@@ -1,13 +1,19 @@
-const supabase = require('..//database');
+const supabase = require('../database');
 const path = require('path');
 const fs = require('fs');
-const emailService = require('..//emailService');
+const emailService = require('../emailService');
 const { updateAverageRating } = require('./ratingController'); // This will also need updating later
-const { calculateTranscriberEarning } = require('..//utils/paymentUtils'); // Import calculateTranscriberEarning
-const { getNextFriday } = require('..//utils/paymentUtils'); // Import getNextFriday
+const { calculateTranscriberEarning } = require('../utils/paymentUtils'); // Import calculateTranscriberEarning
+const { getNextFriday } = require('../utils/paymentUtils'); // Import getNextFriday
 
 // Utility function to sync availability status (updates 'users' table only)
 const syncAvailabilityStatus = async (userId, isAvailable, currentJobId = null) => {
+    // NEW: Add a check for null or undefined userId
+    if (!userId) {
+        console.warn('syncAvailabilityStatus: userId is null or undefined. Skipping availability sync.');
+        return; // Exit early if no valid user ID
+    }
+
     const updateData = {
         is_available: isAvailable,
         current_job_id: currentJobId,
