@@ -275,14 +275,13 @@ const verifyPayment = async (req, res, io) => {
             related_job_id: metadataRelatedJobId,
             related_job_type: metadataRelatedJobType,
             client_id: metadataClientId,
-            transcriber_id: metadataTranscriberIdRaw, // Renamed to avoid confusion
+            transcriber_id: metadataTranscriberIdRaw, 
             agreed_price_usd: metadataAgreedPrice,
             currency_paid: metadataCurrencyPaid,
             exchange_rate_usd_to_kes: metadataExchangeRate,
             amount_paid_kes: metadataAmountPaidKes
         } = transaction.metadata;
 
-        // Ensure transcriberId is explicitly null if it's an empty string or undefined from metadata
         const finalTranscriberId = (metadataTranscriberIdRaw === '' || metadataTranscriberIdRaw === undefined) ? null : metadataTranscriberIdRaw;
 
         if (metadataRelatedJobId !== relatedJobId || metadataRelatedJobType !== jobType) {
@@ -321,7 +320,8 @@ const verifyPayment = async (req, res, io) => {
                 .from('payments')
                 .insert([
                     {
-                        related_job_id: null,
+                        negotiation_id: null, // Set to null for training payments
+                        direct_upload_job_id: null, // Set to null for training payments
                         related_job_type: 'training',
                         client_id: metadataClientId,
                         transcriber_id: metadataClientId, 
@@ -402,25 +402,36 @@ const verifyPayment = async (req, res, io) => {
         const actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2));
         const transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd);
 
+        // Conditional insertion based on jobType for negotiation_id and direct_upload_job_id
+        const paymentData = {
+            related_job_type: jobType,
+            client_id: metadataClientId,
+            transcriber_id: finalTranscriberId, 
+            amount: actualAmountPaidUsd,
+            transcriber_earning: transcriberPayAmount,
+            currency: 'USD',
+            paystack_reference: transaction.reference,
+            paystack_status: transaction.status,
+            transaction_date: new Date(transaction.paid_at).toISOString(),
+            payout_status: 'awaiting_completion',
+            currency_paid_by_client: metadataCurrencyPaid,
+            exchange_rate_used: metadataExchangeRate
+        };
+
+        if (jobType === 'negotiation') {
+            paymentData.negotiation_id = relatedJobId;
+            paymentData.direct_upload_job_id = null;
+        } else if (jobType === 'direct_upload') {
+            paymentData.direct_upload_job_id = relatedJobId;
+            paymentData.negotiation_id = null;
+        } else if (jobType === 'training') { // Although training is handled above, this is for completeness
+            paymentData.negotiation_id = null;
+            paymentData.direct_upload_job_id = null;
+        }
+
         const { data: paymentRecord, error: paymentError } = await supabase
             .from('payments')
-            .insert([
-                {
-                    related_job_id: relatedJobId,
-                    related_job_type: jobType,
-                    client_id: metadataClientId,
-                    transcriber_id: finalTranscriberId, // Use the safely handled ID
-                    amount: actualAmountPaidUsd,
-                    transcriber_earning: transcriberPayAmount,
-                    currency: 'USD',
-                    paystack_reference: transaction.reference,
-                    paystack_status: transaction.status,
-                    transaction_date: new Date(transaction.paid_at).toISOString(),
-                    payout_status: 'awaiting_completion',
-                    currency_paid_by_client: metadataCurrencyPaid,
-                    exchange_rate_used: metadataExchangeRate
-                }
-            ])
+            .insert([paymentData])
             .select()
             .single();
 
@@ -439,10 +450,10 @@ const verifyPayment = async (req, res, io) => {
             throw jobUpdateError;
         }
 
-        await syncAvailabilityStatus(finalTranscriberId, false, relatedJobId); // Use finalTranscriberId here too
+        await syncAvailabilityStatus(finalTranscriberId, false, relatedJobId);
 
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', metadataClientId).single();
-        const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', finalTranscriberId).single(); // Use finalTranscriberId here
+        const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', finalTranscriberId).single(); 
 
         if (clientError) console.error('Error fetching client for payment email: ', clientError);
         if (transcriberError) console.error('Error fetching transcriber for payment email: ', transcriberError);
@@ -458,7 +469,6 @@ const verifyPayment = async (req, res, io) => {
                 message: 'Your payment was successful and the job is now active!',
                 newStatus: 'hired'
             });
-            // Only emit job_hired to transcriber if one is assigned
             if (finalTranscriberId) {
                 io.to(finalTranscriberId).emit('job_hired', {
                     relatedJobId: relatedJobId,
@@ -491,7 +501,8 @@ const getTranscriberPaymentHistory = async (req, res) => {
             .from('payments')
             .select(`
                 id,
-                related_job_id,
+                negotiation_id,
+                direct_upload_job_id,
                 related_job_type,
                 client_id,
                 transcriber_id,
@@ -505,11 +516,9 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 currency_paid_by_client,
                 exchange_rate_used,
                 client:users!client_id(full_name, email),
-                negotiation:negotiations!related_job_id(status, requirements, deadline_hours, agreed_price_usd)
-                // Removed direct_upload_job join from here to prevent schema cache error
+                negotiation:negotiation_id(status, requirements, deadline_hours, agreed_price_usd)
             `)
             .eq('transcriber_id', transcriberId)
-            // Filter to include only payments that are 'awaiting_completion' or 'paid_out'
             .or('payout_status.eq.awaiting_completion,payout_status.eq.paid_out')
             .order('transaction_date', { ascending: false });
 
@@ -520,40 +529,37 @@ const getTranscriberPaymentHistory = async (req, res) => {
 
         const paymentsWithJobDetails = await Promise.all((payments || []).map(async (payment) => {
             let jobDetails = {};
-            // The negotiation data is already joined by the select query
             if (payment.related_job_type === 'negotiation') {
                 jobDetails = { negotiation: payment.negotiation || null };
             } else if (payment.related_job_type === 'direct_upload') {
-                // NEW: Fetch direct_upload_job details separately due to schema cache error
                 const { data: directJob, error: directJobError } = await supabase
                     .from('direct_upload_jobs')
                     .select('status, client_instructions, agreed_deadline_hours, quote_amount')
-                    .eq('id', payment.related_job_id)
+                    .eq('id', payment.direct_upload_job_id) // Use direct_upload_job_id here
                     .single();
                 if (directJobError) {
-                    console.error(`Error fetching direct upload job ${payment.related_job_id} for payment:`, directJobError);
+                    console.error(`Error fetching direct upload job ${payment.direct_upload_job_id} for payment:`, directJobError);
                 }
                 jobDetails = { direct_upload_job: directJob || null };
             }
             return { ...payment, ...jobDetails };
         }));
 
-        // Group payments by week ending Friday for upcoming payouts
         const groupedUpcomingPayouts = {};
         let totalUpcomingPayouts = 0;
-        let totalEarnings = 0; // Initialize total earnings for completed jobs
-        let monthlyEarnings = 0; // Initialize monthly earnings for completed jobs
+        let totalEarnings = 0; 
+        let monthlyEarnings = 0; 
 
         paymentsWithJobDetails.forEach(payout => {
             if (payout.payout_status === 'awaiting_completion') {
                 const transactionDate = new Date(payout.transaction_date);
-                const dayOfWeek = transactionDate.getDay(); // 0 for Sunday, 1 for Monday, ..., 6 for Saturday
+                const dayOfWeek = transactionDate.getDay(); 
                 const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
                 
                 const weekEndingDate = new Date(transactionDate);
                 weekEndingDate.setDate(transactionDate.getDate() + daysUntilFriday);
-                weekEndingDate.setHours(23, 59, 59, 999); // Set to end of Friday
-                const weekEndingString = weekEndingDate.toISOString().split('T')[0]; // YYYY-MM-DD
+                weekEndingDate.setHours(23, 59, 59, 999); 
+                const weekEndingString = weekEndingDate.toISOString().split('T')[0]; 
 
                 if (!groupedUpcomingPayouts[weekEndingString]) {
                     groupedUpcomingPayouts[weekEndingString] = {
@@ -565,17 +571,18 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 groupedUpcomingPayouts[weekEndingString].totalAmount += payout.transcriber_earning;
                 groupedUpcomingPayouts[weekEndingString].payouts.push({
                     id: payout.id,
-                    related_job_id: payout.related_job_id,
+                    negotiation_id: payout.negotiation_id, // Use negotiation_id
+                    direct_upload_job_id: payout.direct_upload_job_id, // Use direct_upload_job_id
                     related_job_type: payout.related_job_type,
                     clientName: payout.client?.full_name || 'N/A',
                     jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || 'N/A',
                     amount: payout.transcriber_earning,
-                    status: payout.payout_status, // This is the payout_status
-                    job_status: payout.negotiation?.status || payout.direct_upload_job?.status || 'N/A', // NEW: Add the job's actual status
+                    status: payout.payout_status, 
+                    job_status: payout.negotiation?.status || payout.direct_upload_job?.status || 'N/A', 
                     created_at: new Date(payout.transaction_date).toLocaleDateString()
                 });
                 totalUpcomingPayouts += payout.transcriber_earning;
-            } else if (payout.payout_status === 'paid_out') { // Calculate total and monthly earnings from 'paid_out' payments
+            } else if (payout.payout_status === 'paid_out') { 
                 totalEarnings += payout.transcriber_earning;
                 const date = new Date(payout.transaction_date);
                 const currentMonth = new Date().getMonth();
@@ -590,7 +597,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
 
         res.status(200).json({
             message: 'Transcriber payment history retrieved successfully.',
-            payments: [], // No longer returning 'All Past Transactions' in this endpoint
+            payments: [], 
             upcomingPayouts: upcomingPayoutsArray,
             totalUpcomingPayouts: totalUpcomingPayouts,
             summary: {
@@ -613,7 +620,8 @@ const getClientPaymentHistory = async (req, res) => {
             .from('payments')
             .select(`
                 id,
-                related_job_id,
+                negotiation_id,
+                direct_upload_job_id,
                 related_job_type,
                 client_id,
                 transcriber_id,
@@ -642,14 +650,14 @@ const getClientPaymentHistory = async (req, res) => {
                 const { data: negotiation, error: negError } = await supabase
                     .from('negotiations')
                     .select('requirements, deadline_hours, agreed_price_usd')
-                    .eq('id', payment.related_job_id)
+                    .eq('id', payment.negotiation_id) // Use negotiation_id here
                     .single();
                 jobDetails = { negotiation: negotiation || null };
             } else if (payment.related_job_type === 'direct_upload') {
                 const { data: directJob, error: directJobError } = await supabase
                     .from('direct_upload_jobs')
                     .select('client_instructions, agreed_deadline_hours, quote_amount')
-                    .eq('id', payment.related_job_id)
+                    .eq('id', payment.direct_upload_job_id) // Use direct_upload_job_id here
                     .single();
                 jobDetails = { direct_upload_job: directJob || null };
             }
@@ -686,7 +694,8 @@ const getAllPaymentHistoryForAdmin = async (req, res) => {
       .from('payments')
       .select(`
         id,
-        related_job_id,
+        negotiation_id,
+        direct_upload_job_id,
         related_job_type,
         client_id,
         transcriber_id,
@@ -715,14 +724,14 @@ const getAllPaymentHistoryForAdmin = async (req, res) => {
             const { data: negotiation, error: negError } = await supabase
                 .from('negotiations')
                 .select('requirements, deadline_hours, agreed_price_usd')
-                .eq('id', payment.related_job_id)
+                .eq('id', payment.negotiation_id) // Use negotiation_id here
                 .single();
             jobDetails = { negotiation: negotiation || null };
         } else if (payment.related_job_type === 'direct_upload') {
             const { data: directJob, error: directJobError } = await supabase
                 .from('direct_upload_jobs')
                 .select('client_instructions, agreed_deadline_hours, quote_amount')
-                .eq('id', payment.related_job_id)
+                .eq('id', payment.direct_upload_job_id) // Use direct_upload_job_id here
                 .single();
             jobDetails = { direct_upload_job: directJob || null };
         } else if (payment.related_job_type === 'training') {
@@ -762,7 +771,8 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
             .from('payments')
             .select(`
                 id,
-                related_job_id,
+                negotiation_id,
+                direct_upload_job_id,
                 related_job_type,
                 client_id,
                 transcriber_id,
@@ -792,14 +802,14 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
                 const { data: negotiation, error: negError } = await supabase
                     .from('negotiations')
                     .select('requirements, deadline_hours, agreed_price_usd, created_at')
-                    .eq('id', payment.related_job_id)
+                    .eq('id', payment.negotiation_id) // Use negotiation_id here
                     .single();
                 jobDetails = { negotiation: negotiation || null };
             } else if (payment.related_job_type === 'direct_upload') {
                 const { data: directJob, error: directJobError } = await supabase
                     .from('direct_upload_jobs')
                     .select('client_instructions, agreed_deadline_hours, quote_amount, created_at')
-                    .eq('id', payment.related_job_id)
+                    .eq('id', payment.direct_upload_job_id) // Use direct_upload_job_id here
                     .single();
                 jobDetails = { direct_upload_job: directJob || null };
             }
@@ -829,7 +839,8 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
             groupedPayouts[weekEndingString].totalAmount += payout.transcriber_earning;
             groupedPayouts[weekEndingString].payouts.push({
                 id: payout.id,
-                related_job_id: payout.related_job_id,
+                negotiation_id: payout.negotiation_id, // Use negotiation_id
+                direct_upload_job_id: payout.direct_upload_job_id, // Use direct_upload_job_id
                 related_job_type: payout.related_job_type,
                 clientName: payout.client?.full_name || 'N/A',
                 jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || 'N/A',
