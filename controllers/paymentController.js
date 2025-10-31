@@ -1,8 +1,8 @@
 const axios = require('axios');
-const supabase = require('..//database');
-const { syncAvailabilityStatus } = require('..//controllers/transcriberController');
-const emailService = require('..//emailService');
-const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
+const supabase = require('../database');
+const { syncAvailabilityStatus } = require('../controllers/transcriberController');
+const emailService = require('../emailService');
+const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
@@ -311,24 +311,12 @@ const initializeTrainingPayment = async (req, res, io) => {
             const korapayResponse = await axios.post(
                 `${KORAPAY_BASE_URL}/charges/initiate`, // Corrected KoraPay endpoint
                 {
-                    amount: parsedAmountUsd,
-                    currency: 'USD',
-                    reference: `TRAINING-${traineeId}-${Date.now()}`,
-                    narration: `Training Fee for TypeMyworDz Trainee ${traineeId}`,
-                    customer: {
-                        name: req.user.full_name || 'Trainee',
-                        email: email,
-                    },
-                    redirect_url: `${CLIENT_URL}/payment-callback?relatedJobId=${traineeId}&jobType=training&paymentMethod=korapay`,
-                    metadata: {
-                        related_job_id: traineeId,
-                        related_job_type: 'training',
-                        client_id: traineeId,
-                        agreed_price_usd: TRAINING_FEE_USD,
-                        currency_paid: 'USD',
-                        exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
-                        amount_paid_usd: parsedAmountUsd
-                    }
+                    // The Korapay error indicated that 'amount', 'currency', 'reference', 'narration',
+                    // 'customer', 'redirect_url', and 'metadata' are NOT ALLOWED for this endpoint
+                    // in the context of training payment.
+                    // It also indicated that 'payment_reference' and 'source' are REQUIRED.
+                    payment_reference: `TRAINING-${traineeId}-${Date.now()}`, // Required as per Korapay error
+                    source: 'api', // Required as per Korapay error, assuming 'api' as a placeholder
                 },
                 {
                     headers: {
@@ -382,7 +370,7 @@ const verifyPayment = async (req, res, io) => {
 
         if (paymentMethod === 'paystack') {
             const paystackResponse = await axios.get(
-                `https://paystack.co/transaction/verify/${reference}`,
+                `${PAYSTACK_BASE_URL}/transaction/verify/${reference}`,
                 {
                     headers: {
                         Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
