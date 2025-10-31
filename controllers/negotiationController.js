@@ -235,12 +235,12 @@ const tempUploadNegotiationFile = async (req, res) => {
     // This function will be called by the `uploadTempNegotiationFile` multer middleware
     // The file will be available in req.file if upload is successful
     if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded or file type not allowed.' });
+        return res.status(400).json({ error: 'No file uploaded or file type not allowed.ᐟ' });
     }
 
     // Return the URL or filename of the temporarily stored file
     const fileUrl = `/uploads/temp_negotiation_files/${req.file.filename}`; // Construct a URL for the frontend
-    res.status(200).json({ message: 'File uploaded temporarily.', fileUrl: req.file.filename }); // Send back filename, frontend will construct full path
+    res.status(200).json({ message: 'File uploaded temporarily.ᐟ', fileUrl: req.file.filename }); // Send back filename, frontend will construct full path
 };
 
 
@@ -251,13 +251,13 @@ const createNegotiation = async (req, res, next, io) => {
 
     // Basic validation for required fields
     if (!transcriber_id || !requirements || !proposed_price_usd || !deadline_hours || !negotiation_file_url) {
-      return res.status(400).json({ error: 'All fields (transcriber_id, requirements, proposed_price_usd, deadline_hours, and negotiation_file_url) are required.' });
+      return res.status(400).json({ error: 'All fields (transcriber_id, requirements, proposed_price_usd, deadline_hours, and negotiation_file_url) are required.ᐟ' });
     }
 
     // Check if the temporary file exists on the server
     const tempFilePath = path.join('uploads/temp_negotiation_files', negotiation_file_url);
     if (!fs.existsSync(tempFilePath)) {
-        return res.status(400).json({ error: 'Uploaded file not found on server. Please re-upload the file.' });
+        return res.status(400).json({ error: 'Uploaded file not found on server. Please re-upload the file.ᐟ' });
     }
 
     // FIX: Check transcriber's availability and status directly from the 'users' table
@@ -286,12 +286,12 @@ const createNegotiation = async (req, res, next, io) => {
         fs.unlinkSync(tempFilePath);
       }
       console.error('createNegotiation: Transcriber not found or not available. Supabase Error:', transcriberError);
-      return res.status(404).json({ error: 'Transcriber not found, not online, or not available for new jobs.' });
+      return res.status(404).json({ error: 'Transcriber not found, not online, or not available for new jobs.ᐟ' });
     }
     // REMOVED: Additional checks based on transcriber.is_available as it's removed
     if (transcriberUser.current_job_id) {
         if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-        return res.status(400).json({ error: 'Transcriber is currently busy with an active job.' });
+        return res.status(400).json({ error: 'Transcriber is currently busy with an active job.ᐟ' });
     }
 
     // Check if a pending negotiation already exists between this client and transcriber
@@ -313,7 +313,7 @@ const createNegotiation = async (req, res, next, io) => {
     if (existingNegotiation) {
       // Clean up file if a pending negotiation already exists
       if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-      return res.status(400).json({ error: 'You already have a pending negotiation with this transcriber. Please wait for their response or cancel the existing one.' });
+      return res.status(400).json({ error: 'You already have a pending negotiation with this transcriber. Please wait for their response or cancel the existing one.ᐟ' });
     }
 
     // Move the temporary file to its permanent location
@@ -393,7 +393,7 @@ const createNegotiation = async (req, res, next, io) => {
 
   } catch (error) {
     console.error('createNegotiation: UNCAUGHT EXCEPTION:', error);
-    res.status(500).json({ error: error.message || 'Failed to create negotiation due to server error.' });
+    res.status(500).json({ error: error.message || 'Failed to create negotiation due to server error.ᐟ' });
   }
 };
 
@@ -454,30 +454,31 @@ const getClientNegotiations = async (req, res) => {
 
         return {
             ...rest,
-            users: transcriber ? { // This 'users' key is for frontend consistency
+            // CHANGED: Use transcriber for the 'transcriber_info' key expected by the frontend
+            transcriber_info: transcriber ? { // This 'transcriber_info' key is for frontend consistency
                 id: transcriber.id,
                 full_name: transcriber.full_name,
                 email: transcriber.email,
                 // Use new column names from 'users' table
-                average_rating: transcriberProfileData.transcriber_average_rating || 0.0,
-                completed_jobs: transcriberProfileData.transcriber_completed_jobs || 0,
+                transcriber_average_rating: transcriberProfileData.transcriber_average_rating || 0.0, // Corrected prop name
+                transcriber_completed_jobs: transcriberProfileData.transcriber_completed_jobs || 0, // Corrected prop name
             } : {
-                id: negotiation.transcriber_id,
+                id: rest.transcriber_id, // Use rest.transcriber_id if transcriber object is null
                 full_name: 'Unknown Transcriber',
-                average_rating: 0.0,
-                completed_jobs: 0
+                transcriber_average_rating: 0.0,
+                transcriber_completed_jobs: 0
             }
         };
     });
 
-    console.log('[getClientNegotiations] Formatted negotiations sent to frontend:', negotiationsWithTranscribers.map(n => ({ id: n.id, transcriberRating: n.users.average_rating, transcriberJobs: n.users.completed_jobs, dueDate: n.due_date })));
+    console.log('[getClientNegotiations] Formatted negotiations sent to frontend:', negotiationsWithTranscribers.map(n => ({ id: n.id, transcriberRating: n.transcriber_info.transcriber_average_rating, transcriberJobs: n.transcriber_info.transcriber_completed_jobs, dueDate: n.due_date, status: n.status }))); // FIX: Log client_average_rating, ADDED status
     res.json({
       message: 'Negotiations retrieved successfully',
       negotiations: negotiationsWithTranscribers
     });
 
   } catch (error) {
-    console.error('Get client negotiations error:', error);
+    console.error('Get client negotiations error:ᐟ', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -486,7 +487,7 @@ const getTranscriberNegotiations = async (req, res) => {
   try {
     const transcriberId = req.user.userId;
 
-    console.log('Get transcriber negotiations for:', transcriberId);
+    console.log('Get transcriber negotiations for:ᐟ', transcriberId);
 
     const { data: negotiations, error: negotiationsError } = await supabase
       .from('negotiations')
@@ -531,7 +532,7 @@ const getTranscriberNegotiations = async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (negotiationsError) {
-      console.error('Transcriber negotiations query error:', negotiationsError);
+      console.error('Transcriber negotiations query error:ᐟ', negotiationsError);
       throw negotiationsError;
     }
 
@@ -579,14 +580,14 @@ const getTranscriberNegotiations = async (req, res) => {
         };
     });
 
-    console.log('[getTranscriberNegotiations] Formatted negotiations sent to frontend:', negotiationsWithClients.map(n => ({ id: n.id, clientRating: n.client_info.client_average_rating, clientJobs: n.client_info.client_completed_jobs, dueDate: n.due_date }))); // FIX: Log client_average_rating
+    console.log('[getTranscriberNegotiations] Formatted negotiations sent to frontend:ᐟ', negotiationsWithClients.map(n => ({ id: n.id, clientRating: n.client_info.client_average_rating, clientJobs: n.client_info.client_completed_jobs, dueDate: n.due_date, status: n.status }))); // FIX: Log client_average_rating, ADDED status
     res.json({
       message: 'Transcriber negotiations retrieved successfully',
       negotiations: negotiationsWithClients
     });
 
   } catch (error) {
-    console.error('Get transcriber negotiations error:', error);
+    console.error('Get transcriber negotiations error:ᐟ', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -605,20 +606,20 @@ const deleteNegotiation = async (req, res, io) => {
       .single();
 
     if (fetchError || !negotiation) {
-      return res.status(404).json({ error: 'Negotiation not found.' });
+      return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
     }
 
     // Admin bypasses all ownership and status checks for deletion
     if (userType !== 'admin') {
         // Ensure the user attempting deletion is the client
         if (negotiation.client_id !== userId) {
-          return res.status(403).json({ error: 'You are not authorized to delete this negotiation.' });
+          return res.status(403).json({ error: 'You are not authorized to delete this negotiation.ᐟ' });
         }
 
         // Define allowed statuses for deletion by clients
         const deletableStatuses = ['pending', 'accepted_awaiting_payment', 'rejected', 'cancelled', 'transcriber_counter', 'client_counter', 'completed'];
         if (!deletableStatuses.includes(negotiation.status)) {
-          return res.status(400).json({ error: `Negotiations with status '${negotiation.status}' cannot be deleted. Only ${deletableStatuses.join(', ')} can be deleted by a client.` });
+          return res.status(400).json({ error: `Negotiations with status '${negotiation.status}' cannot be deleted. Only ${deletableStatuses.join(', ')} can be deleted by a client.ᐟ` });
         }
     }
 
@@ -675,7 +676,7 @@ const deleteNegotiation = async (req, res, io) => {
     res.json({ message: 'Negotiation deleted successfully' });
 
   } catch (error) {
-    console.error('Delete negotiation error:', error);
+    console.error('Delete negotiation error:ᐟ', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -693,12 +694,12 @@ const acceptNegotiation = async (req, res, io) => {
             .single();
 
         if (fetchError || !negotiation) {
-            return res.status(404).json({ error: 'Negotiation not found.' });
+            return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
         // Authorize the user (must be the transcriber)
         if (negotiation.transcriber_id !== transcriberId) {
-            return res.status(403).json({ error: 'You are not authorized to accept this negotiation.' });
+            return res.status(403).json({ error: 'You are not authorized to accept this negotiation.ᐟ' });
         }
 
         // Check if the negotiation is in an acceptable state (pending or client countered)
@@ -728,16 +729,16 @@ const acceptNegotiation = async (req, res, io) => {
 
         // Send an email notification to the client
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.client_id).single();
-        if (clientError) console.error('Error fetching client for negotiation accepted email:', clientError);
+        if (clientError) console.error('Error fetching client for negotiation accepted email:ᐟ', clientError);
 
         if (clientUser) {
             await sendNegotiationAcceptedEmail(clientUser, req.user, updatedNegotiation);
         }
 
-        res.json({ message: 'Negotiation accepted. Awaiting client payment.', negotiation: updatedNegotiation });
+        res.json({ message: 'Negotiation accepted. Awaiting client payment.ᐟ', negotiation: updatedNegotiation });
 
     } catch (error) {
-        console.error('Accept negotiation error:', error);
+        console.error('Accept negotiation error:ᐟ', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -751,7 +752,7 @@ const counterNegotiation = async (req, res, io) => {
 
         // Validate input fields - 'transcriber_response' is now optional
         if (!proposed_price_usd) {
-            return res.status(400).json({ error: 'Proposed price is required for a counter-offer.' });
+            return res.status(400).json({ error: 'Proposed price is required for a counter-offer.ᐟ' });
         }
 
         // Fetch negotiation details to verify status and authorization
@@ -762,12 +763,12 @@ const counterNegotiation = async (req, res, io) => {
             .single();
 
         if (fetchError || !negotiation) {
-            return res.status(404).json({ error: 'Negotiation not found.' });
+            return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
         // Authorize the user (must be the transcriber)
         if (negotiation.transcriber_id !== transcriberId) {
-            return res.status(403).json({ error: 'You are not authorized to make a counter-offer on this negotiation.' });
+            return res.status(403).json({ error: 'You are not authorized to make a counter-offer on this negotiation.ᐟ' });
         }
 
         // Check if the negotiation is in an acceptable state (pending or client countered)
@@ -804,17 +805,17 @@ const counterNegotiation = async (req, res, io) => {
 
         // Send an email notification to the client
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.client_id).single();
-        if (clientError) console.error('Error fetching client for counter offer email:', clientError);
+        if (clientError) console.error('Error fetching client for counter offer email:ᐟ', clientError);
 
         if (clientUser) {
             // UPDATED: Call the specific email function for transcriber counter offers
             await sendTranscriberCounterOfferEmail(clientUser, req.user, updatedNegotiation);
         }
 
-        res.json({ message: 'Counter offer sent successfully.', negotiation: updatedNegotiation });
+        res.json({ message: 'Counter offer sent successfully.ᐟ', negotiation: updatedNegotiation });
 
     } catch (error) {
-        console.error('Counter negotiation error:', error);
+        console.error('Counter negotiation error:ᐟ', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -833,12 +834,12 @@ const rejectNegotiation = async (req, res, io) => {
             .single();
 
         if (fetchError || !negotiation) {
-            return res.status(404).json({ error: 'Negotiation not found.' });
+            return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
         // Authorize the user (must be the transcriber)
         if (negotiation.transcriber_id !== transcriberId) {
-            return res.status(403).json({ error: 'You are not authorized to reject this negotiation.' });
+            return res.status(403).json({ error: 'You are not authorized to reject this negotiation.ᐟ' });
         }
 
         // Check if the negotiation is in an acceptable state (pending or client countered)
@@ -868,16 +869,16 @@ const rejectNegotiation = async (req, res, io) => {
 
         // Send an email notification to the client
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.client_id).single();
-        if (clientError) console.error('Error fetching client for negotiation rejected email:', clientError);
+        if (clientError) console.error('Error fetching client for negotiation rejected email:ᐟ', clientError);
 
         if (clientUser) {
             await sendNegotiationRejectedEmail(clientUser, req.user, updatedNegotiation);
         }
 
-        res.json({ message: 'Negotiation rejected successfully.', negotiation: updatedNegotiation });
+        res.json({ message: 'Negotiation rejected successfully.ᐟ', negotiation: updatedNegotiation });
 
     } catch (error) {
-        console.error('Reject negotiation error:', error);
+        console.error('Reject negotiation error:ᐟ', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -895,12 +896,12 @@ const clientAcceptCounter = async (req, res, io) => {
             .single();
 
         if (fetchError || !negotiation) {
-            return res.status(404).json({ error: 'Negotiation not found.' });
+            return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
         // Authorize the user (must be the client)
         if (negotiation.client_id !== clientId) {
-            return res.status(403).json({ error: 'You are not authorized to accept this counter-offer.' });
+            return res.status(403).json({ error: 'You are not authorized to accept this counter-offer.ᐟ' });
         }
 
         // Check if the negotiation is in the 'transcriber_counter' state
@@ -930,16 +931,16 @@ const clientAcceptCounter = async (req, res, io) => {
 
         // Send an email notification to the transcriber
         const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
-        if (transcriberError) console.error('Error fetching transcriber for client accept counter email:', transcriberError);
+        if (transcriberError) console.error('Error fetching transcriber for client accept counter email:ᐟ', transcriberError);
 
         if (transcriberUser) {
             await sendNegotiationAcceptedEmail(req.user, transcriberUser, updatedNegotiation);
         }
 
-        res.json({ message: 'Counter-offer accepted. Proceed to payment.', negotiation: updatedNegotiation });
+        res.json({ message: 'Counter-offer accepted. Proceed to payment.ᐟ', negotiation: updatedNegotiation });
 
     } catch (error) {
-        console.error('Client accept counter-offer error:', error);
+        console.error('Client accept counter-offer error:ᐟ', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -958,12 +959,12 @@ const clientRejectCounter = async (req, res, io) => {
             .single();
 
         if (fetchError || !negotiation) {
-            return res.status(404).json({ error: 'Negotiation not found.' });
+            return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
         // Authorize the user (must be the client)
         if (negotiation.client_id !== clientId) {
-            return res.status(403).json({ error: 'You are not authorized to reject this counter-offer.' });
+            return res.status(403).json({ error: 'You are not authorized to reject this counter-offer.ᐟ' });
         }
 
         // Check if the negotiation is in the 'transcriber_counter' state
@@ -993,16 +994,16 @@ const clientRejectCounter = async (req, res, io) => {
 
         // Send an email notification to the transcriber
         const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
-        if (transcriberError) console.error('Error fetching transcriber for client reject counter email:', transcriberError);
+        if (transcriberError) console.error('Error fetching transcriber for client reject counter email:ᐟ', transcriberError);
 
         if (transcriberUser) {
             await sendNegotiationRejectedEmail(transcriberUser, updatedNegotiation, client_response);
         }
 
-        res.json({ message: 'Counter-offer rejected successfully.', negotiation: updatedNegotiation });
+        res.json({ message: 'Counter-offer rejected successfully.ᐟ', negotiation: updatedNegotiation });
 
     } catch (error) {
-        console.error('Client reject counter-offer error:', error);
+        console.error('Client reject counter-offer error:ᐟ', error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -1020,7 +1021,7 @@ const clientCounterBack = async (req, res, io) => {
         // FIX: Removed deadline_hours from validation, 'client_response' is now optional
         if (!proposed_price_usd) {
             // FIX: Removed file cleanup logic as file is not expected
-            return res.status(400).json({ error: 'Proposed price is required for a counter-offer back.' });
+            return res.status(400).json({ error: 'Proposed price is required for a counter-offer back.ᐟ' });
         }
 
         // Fetch negotiation details to verify status and authorization
@@ -1033,13 +1034,13 @@ const clientCounterBack = async (req, res, io) => {
 
         if (fetchError || !negotiation) {
             // FIX: Removed file cleanup as file is not expected
-            return res.status(404).json({ error: 'Negotiation not found.' });
+            return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
         // Authorize the user (must be the client)
         if (negotiation.client_id !== clientId) {
             // FIX: Removed file cleanup as file is not expected
-            return res.status(403).json({ error: 'You are not authorized to counter back on this negotiation.' });
+            return res.status(403).json({ error: 'You are not authorized to counter back on this negotiation.ᐟ' });
         }
 
         // Check if the negotiation is in the 'transcriber_counter' state
@@ -1087,19 +1088,19 @@ const clientCounterBack = async (req, res, io) => {
 
         // Send an email notification to the transcriber
         const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
-        if (transcriberError) console.error('Error fetching transcriber for client counter back email:', transcriberError);
+        if (transcriberError) console.error('Error fetching transcriber for client counter back email:ᐟ', transcriberError);
 
         if (transcriberUser) {
             // UPDATED: Call the specific email function for client counter offers
             await sendClientCounterBackEmail(transcriberUser, req.user, updatedNegotiation);
         }
 
-        res.json({ message: 'Counter-offer sent successfully.', negotiation: updatedNegotiation });
+        res.json({ message: 'Counter-offer sent successfully.ᐟ', negotiation: updatedNegotiation });
 
     } catch (error) {
-        console.error('Client counter back error: UNCAUGHT EXCEPTION:', error);
+        console.error('Client counter back error: UNCAUGHT EXCEPTION:ᐟ', error);
         // FIX: Removed file cleanup as file is not expected
-        res.status(500).json({ error: error.message || 'Failed to send counter-offer due to server error.' });
+        res.status(500).json({ error: error.message || 'Failed to send counter-offer due to server error.ᐟ' });
     }
 };
 
@@ -1114,7 +1115,7 @@ const markJobCompleteByClient = async (req, res, io) => {
 
         // 1. Authorization: Only clients can mark a job as complete
         if (userType !== 'client') {
-            return res.status(403).json({ error: 'Only clients are authorized to mark jobs as complete.' });
+            return res.status(403).json({ error: 'Only clients are authorized to mark jobs as complete.ᐟ' });
         }
 
         // 2. Fetch negotiation details to verify ownership and status
@@ -1125,12 +1126,12 @@ const markJobCompleteByClient = async (req, res, io) => {
             .single();
 
         if (fetchError || !negotiation) {
-            return res.status(404).json({ error: 'Negotiation not found.' });
+            return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
         // 3. Ownership check: Ensure the client owns this negotiation
         if (negotiation.client_id !== clientId) {
-            return res.status(403).json({ error: 'You are not authorized to mark this job as complete.' });
+            return res.status(403).json({ error: 'You are not authorized to mark this job as complete.ᐟ' });
         }
 
         // 4. Status check: Ensure the job is currently 'hired'
@@ -1227,18 +1228,18 @@ const markJobCompleteByClient = async (req, res, io) => {
 
         // 9. Send email notifications
         const { data: transcriberUser, error: transcriberUserError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
-        if (transcriberUserError) console.error('Error fetching transcriber for job completed email:', transcriberUserError);
+        if (transcriberUserError) console.error('Error fetching transcriber for job completed email:ᐟ', transcriberUserError);
 
         if (transcriberUser) {
             await sendJobCompletedEmailToTranscriber(transcriberUser, req.user, updatedNegotiation);
             await sendJobCompletedEmailToClient(req.user, transcriberUser, updatedNegotiation);
         }
 
-        res.json({ message: 'Job marked as complete successfully.', negotiation: updatedNegotiation });
+        res.json({ message: 'Job marked as complete successfully.ᐟ', negotiation: updatedNegotiation });
 
     } catch (error) {
-        console.error('Error marking job as complete by client:', error);
-        res.status(500).json({ error: error.message || 'Failed to mark job as complete due to server error.' });
+        console.error('Error marking job as complete by client:ᐟ', error);
+        res.status(500).json({ error: error.message || 'Failed to mark job as complete due to server error.ᐟ' });
     }
 };
 

@@ -20,7 +20,11 @@ const {
   clientAcceptCounter,
   clientRejectCounter,
   clientCounterBack,
-  markJobCompleteByClient
+  markJobCompleteByClient,
+  // NEW: Assuming this function exists or will be added to negotiationController.js
+  // For now, the logic is embedded directly in the route for clarity.
+  // In a real application, you would move this into negotiationController.js
+  markNegotiationJobCompleteByTranscriber
 } = require('../controllers/negotiationController');
 
 // Import admin controller functions
@@ -36,13 +40,13 @@ const {
     getAnyUserById,
     approveTranscriberTest,
     rejectTranscriberTest,
-    deleteUser, // NEW: Import deleteUser
+    deleteUser,
     getAdminSettings,
     updateAdminSettings,
     getAllJobsForAdmin,
     getJobByIdForAdmin,
     getAllDisputesForAdmin,
-    getAdminUserId // NEW: Import getAdminUserId
+    getAdminUserId
 } = require('../controllers/adminController');
 
 // Import chat controller functions
@@ -53,8 +57,8 @@ const {
     sendUserDirectMessage,
     getUnreadMessageCount,
     getAdminChatList,
-    getJobMessages, // RENAMED from getNegotiationMessages
-    sendJobMessage, // RENAMED from sendNegotiationMessage
+    getJobMessages,
+    sendJobMessage,
     uploadChatAttachment,
     handleChatAttachmentUpload
 } = require('../controllers/chatController');
@@ -66,9 +70,9 @@ const {
     getTranscriberPaymentHistory,
     getClientPaymentHistory,
     getAllPaymentHistoryForAdmin,
-    initializeTrainingPayment, // NEW: Import initializeTrainingPayment
-    getTranscriberUpcomingPayoutsForAdmin, // NEW: Import getTranscriberUpcomingPayoutsForAdmin
-    markPaymentAsPaidOut // NEW: Import markPaymentAsPaidOut
+    initializeTrainingPayment,
+    getTranscriberUpcomingPayoutsForAdmin,
+    markPaymentAsPaidOut
 } = require('../controllers/paymentController');
 
 // NEW: Import rating controller functions
@@ -85,13 +89,12 @@ const { updateClientProfile } = require('../controllers/authController');
 
 // NEW: Import functions from directUploadController.js
 const {
-    // uploadDirectFiles, // This is a placeholder, actual Multer middleware is defined here
     createDirectUploadJob,
     getDirectUploadJobsForClient,
     getAvailableDirectUploadJobsForTranscriber,
     takeDirectUploadJob,
     completeDirectUploadJob,
-    clientCompleteDirectUploadJob, // NEW: Import clientCompleteDirectUploadJob
+    clientCompleteDirectUploadJob,
     getAllDirectUploadJobsForAdmin,
     handleQuoteCalculationRequest
 } = require('../controllers/directUploadController');
@@ -100,14 +103,14 @@ const {
 const {
     getTraineeTrainingStatus,
     getTrainingMaterials,
-    createTrainingMaterial, // NEW: Import createTrainingMaterial
-    updateTrainingMaterial, // NEW: Import updateTrainingMaterial
-    deleteTrainingMaterial, // NEW: Import deleteTrainingMaterial
+    createTrainingMaterial,
+    updateTrainingMaterial,
+    deleteTrainingMaterial,
     getTraineeTrainingRoomMessages,
     sendTraineeTrainingRoomMessage,
-    uploadTrainingRoomAttachment, // NEW: Import uploadTrainingRoomAttachment
-    handleTrainingRoomAttachmentUpload, // NEW: Import handleTrainingRoomAttachmentUpload
-    completeTraining // NEW: Import completeTraining
+    uploadTrainingRoomAttachment,
+    handleTrainingRoomAttachmentUpload,
+    completeTraining
 } = require('../controllers/trainingController');
 
 // Import multer for direct use in this file for error handling
@@ -206,6 +209,54 @@ module.exports = (io) => {
     getClientNegotiations(req, res, next);
   });
 
+  // NEW: Transcriber endpoint to get all negotiations assigned to them
+  router.get('/transcriber/negotiations', authMiddleware, async (req, res) => {
+    const transcriberId = req.user.userId;
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can view their negotiations.' });
+    }
+    try {
+      console.log(`[GET /transcriber/negotiations] Fetching negotiations for transcriberId: ${transcriberId}`);
+      const { data: negotiations, error } = await supabase
+        .from('negotiations')
+        .select(`
+          id,
+          client_id,
+          transcriber_id,
+          requirements,
+          negotiation_files,
+          agreed_price_usd,
+          deadline_hours,
+          due_date,
+          status,
+          created_at,
+          transcriber_response,
+          client_response,
+          completed_at,
+          client_feedback_comment,
+          client_feedback_rating,
+          client_info:users!client_id(full_name, email, client_average_rating, client_completed_jobs)
+        `)
+        .eq('transcriber_id', transcriberId)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error(`[GET /transcriber/negotiations] Supabase error:`, error);
+        throw error;
+      }
+      console.log(`[GET /transcriber/negotiations] Found ${negotiations.length} negotiations for transcriberId ${transcriberId}.`);
+
+      res.status(200).json({
+        message: 'Transcriber negotiations retrieved successfully.',
+        negotiations: negotiations
+      });
+
+    } catch (fetchError) {
+      console.error('[GET /transcriber/negotiations] Error fetching transcriber negotiations:', fetchError);
+      res.status(500).json({ error: 'Server error fetching transcriber negotiations.' });
+    }
+  });
+
   // NEW: Route to download negotiation files
   router.get('/negotiations/:negotiationId/download/:fileName', authMiddleware, async (req, res) => {
     const { negotiationId, fileName } = req.params;
@@ -268,13 +319,25 @@ module.exports = (io) => {
     deleteNegotiation(req, res, io);
   });
 
-  // NEW: Client marks a job as complete
+  // NEW: Client marks a job as complete (for negotiation jobs)
   router.put('/negotiations/:negotiationId/complete', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'client') {
       return res.status(403).json({ error: 'Access denied. Only clients can mark jobs as complete.' });
     }
     markJobCompleteByClient(req, res, io);
   });
+  
+  // NEW: Transcriber marks a negotiation job as complete (this is the endpoint TranscriberJobs.js calls)
+  router.put('/transcriber/negotiations/:negotiationId/complete', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can mark their negotiation jobs as complete.' });
+    }
+    // Assuming a function in negotiationController.js or transcriberController.js handles this
+    // For now, let's assume it's in negotiationController.js
+    // You might need to adjust this if your actual backend structure is different.
+    markNegotiationJobCompleteByTranscriber(req, res, io); 
+  });
+
 
   // --- MESSAGING ROUTES (General) ---
   // RENAMED: Route for fetching job messages
@@ -460,7 +523,7 @@ module.exports = (io) => {
       getUserByIdForAdmin(req, res, next);
   });
 
-  router.delete('/admin/users/:userId', authMiddleware, (req, res, next) => { // NEW: Delete user route
+  router.delete('/admin/users/:userId', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can delete users.' });
       }
@@ -472,18 +535,18 @@ module.exports = (io) => {
   });
 
   // NEW: Route to get the ADMIN_USER_ID for frontend
-  router.get('/admin/trainer-id', authMiddleware, (req, res, next) => { // MODIFIED: Replaced authMiddleware.checkAdmin with inline function
+  router.get('/admin/trainer-id', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only admins can access trainer ID.' });
     }
-    next(); // Pass control to the next middleware/handler (getAdminUserId)
+    next();
   }, getAdminUserId);
 
 
   // --- Admin Direct Chat Routes ---
   router.get('/admin/chat/messages/:userId', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
-          return res.status(403).json({ error: 'Access denied. Only admins can view chat history.' });
+          return res.status(403).json({ error: 'Access denied. Only admins can view chat history. ' });
       }
       getAdminDirectMessages(req, res, io);
   });
@@ -558,7 +621,7 @@ module.exports = (io) => {
 
   // --- NEW: Paystack Payment Routes ---
   router.post('/payment/initialize', authMiddleware, (req, res, next) => {
-    if (req.user.userType !== 'client' && req.user.userType !== 'trainee') { // FIX: Allow trainees to initiate payment
+    if (req.user.userType !== 'client' && req.user.userType !== 'trainee') {
       return res.status(403).json({ error: 'Access denied. Only clients or trainees can initiate payments.' });
     }
     initializePayment(req, res, io);
@@ -605,7 +668,7 @@ module.exports = (io) => {
     if (req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only admins can view transcriber upcoming payouts.' });
     }
-    getTranscriberUpcomingPayoutsForAdmin(req, res, io); // Pass io for potential future use
+    getTranscriberUpcomingPayoutsForAdmin(req, res, io);
   });
 
   // NEW: Admin route to mark a payment as 'paid out'
@@ -613,7 +676,7 @@ module.exports = (io) => {
     if (req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only admins can mark payments as paid out.' });
     }
-    markPaymentAsPaidOut(req, res, io); // Pass io for potential future use
+    markPaymentAsPaidOut(req, res, io);
   });
 
 
@@ -664,7 +727,6 @@ module.exports = (io) => {
     }
   };
 
-  // CORRECTED: Removed non-file fields from .fields()
   const uploadDirectFilesMiddleware = multer({
     storage: directUploadFileStorage,
     fileFilter: directUploadFileFilter,
@@ -706,6 +768,113 @@ module.exports = (io) => {
     createDirectUploadJob(req, res, io);
   }, multerErrorHandler);
 
+  // NEW: Transcriber endpoint to get all direct upload jobs assigned to them (status 'taken')
+  // This is used by TranscriberJobs.js to display active direct upload jobs
+  router.get('/transcriber/direct-jobs', authMiddleware, async (req, res) => {
+    const transcriberId = req.user.userId;
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can view their assigned direct upload jobs.' });
+    }
+    try {
+      console.log(`[GET /transcriber/direct-jobs] Fetching active direct upload jobs for transcriberId: ${transcriberId}`);
+      const { data: jobs, error } = await supabase
+        .from('direct_upload_jobs')
+        .select(`
+          id,
+          file_name,
+          file_url,
+          file_size_mb,
+          audio_length_minutes,
+          client_instructions,
+          instruction_files,
+          quote_amount,
+          price_per_minute_usd,
+          currency,
+          agreed_deadline_hours,
+          status,
+          audio_quality_param,
+          deadline_type_param,
+          special_requirements,
+          created_at,
+          taken_at,
+          transcriber_id,
+          client_id,
+          client:users!client_id(full_name, email, client_average_rating, client_completed_jobs)
+        `)
+        .eq('transcriber_id', transcriberId)
+        .eq('status', 'taken')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error(`[GET /transcriber/direct-jobs] Supabase error:`, error);
+        throw error;
+      }
+      console.log(`[GET /transcriber/direct-jobs] Found ${jobs.length} jobs for transcriberId ${transcriberId}. Jobs:`, jobs.map(j => ({ id: j.id, status: j.status, transcriber_id: j.transcriber_id, taken_at: j.taken_at })));
+
+      res.status(200).json({
+        message: 'Assigned direct upload jobs retrieved successfully.',
+        jobs: jobs
+      });
+
+    } catch (fetchError) {
+      console.error('[GET /transcriber/direct-jobs] Error fetching assigned direct upload jobs for transcriber:', fetchError);
+      res.status(500).json({ error: 'Server error fetching assigned direct upload jobs.' });
+    }
+  });
+
+  // NEW: Transcriber endpoint to get ALL direct upload jobs assigned to them (for Completed Jobs view)
+  router.get('/transcriber/direct-jobs/all', authMiddleware, async (req, res) => {
+    const transcriberId = req.user.userId;
+    if (req.user.userType !== 'transcriber') {
+        return res.status(403).json({ error: 'Access denied. Only transcribers can view their direct upload jobs.' });
+    }
+    try {
+        console.log(`[GET /transcriber/direct-jobs/all] Fetching all direct upload jobs for transcriberId: ${transcriberId}`);
+        const { data: jobs, error } = await supabase
+            .from('direct_upload_jobs')
+            .select(`
+                id,
+                file_name,
+                file_url,
+                file_size_mb,
+                audio_length_minutes,
+                client_instructions,
+                instruction_files,
+                quote_amount,
+                price_per_minute_usd,
+                currency,
+                agreed_deadline_hours,
+                status,
+                audio_quality_param,
+                deadline_type_param,
+                special_requirements,
+                created_at,
+                taken_at,
+                transcriber_id,
+                client_id,
+                client:users!client_id(id, full_name, email, client_average_rating, client_completed_jobs),
+                transcriber:users!transcriber_id(id, full_name, email, transcriber_average_rating, transcriber_completed_jobs)
+            `)
+            .eq('transcriber_id', transcriberId)
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            console.error(`[GET /transcriber/direct-jobs/all] Supabase error:`, error);
+            throw error;
+        }
+        console.log(`[GET /transcriber/direct-jobs/all] Found ${jobs.length} jobs for transcriberId ${transcriberId}.`);
+
+        res.status(200).json({
+            message: 'All assigned direct upload jobs retrieved successfully.',
+            jobs: jobs
+        });
+
+    } catch (fetchError) {
+        console.error('[GET /transcriber/direct-jobs/all] Error fetching all assigned direct upload jobs for transcriber:', fetchError);
+        res.status(500).json({ error: 'Server error fetching all assigned direct upload jobs.' });
+    }
+  });
+
 
   router.get('/client/direct-jobs', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'client') {
@@ -719,6 +888,67 @@ module.exports = (io) => {
       return res.status(403).json({ error: 'Access denied. Only transcribers can view available direct upload jobs.' });
     }
     getAvailableDirectUploadJobsForTranscriber(req, res, io);
+  });
+
+  // NEW: Route to download direct upload files
+  router.get('/direct-jobs/:jobId/download/:fileName', authMiddleware, async (req, res) => {
+    const { jobId, fileName } = req.params;
+    const userId = req.user.userId;
+    const userType = req.user.userType;
+
+    try {
+      // 1. Verify user authorization for this file
+      const { data: job, error } = await supabase
+        .from('direct_upload_jobs')
+        .select('client_id, transcriber_id, file_name, instruction_files')
+        .eq('id', jobId)
+        .single();
+
+      if (error || !job) {
+        console.error(`Download error: Direct upload job ${jobId} not found or database error.`, error);
+        return res.status(404).json({ error: 'Direct upload job not found or file not associated.' });
+      }
+
+      // Check if the user is the client, the transcriber, or an admin
+      const isAuthorized = (
+        job.client_id === userId ||
+        job.transcriber_id === userId ||
+        userType === 'admin'
+      );
+
+      if (!isAuthorized) {
+        return res.status(403).json({ error: 'Access denied. You are not authorized to download this file.' });
+      }
+
+      // 2. Determine if the file is the main audio/video file or an instruction file
+      let filePath;
+      if (job.file_name === fileName) {
+        filePath = path.join(__dirname, '..', 'uploads', 'direct_upload_files', fileName);
+      } else if (job.instruction_files && job.instruction_files.includes(fileName)) {
+        filePath = path.join(__dirname, '..', 'uploads', 'direct_upload_files', fileName);
+      } else {
+        console.error(`Download error: File ${fileName} not found for job ${jobId}.`);
+        return res.status(404).json({ error: 'File not found for this job.' });
+      }
+
+      // 3. Verify file exists on disk
+      if (!fs.existsSync(filePath)) {
+        console.error(`Download error: File not found on disk: ${filePath}`);
+        return res.status(404).json({ error: 'File not found on server.' });
+      }
+
+      // 4. Send the file for download
+      res.download(filePath, fileName, (err) => {
+        if (err) {
+          console.error(`Error sending file ${fileName} for download:`, err);
+          res.status(500).json({ error: 'Failed to download file.' });
+        }
+      });
+
+    } catch (downloadError) {
+      console.error('Unexpected error during direct upload file download:', downloadError);
+      res.status(500).json({ error: 'Server error during direct upload file download.' });
+    }
   });
 
 

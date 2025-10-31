@@ -32,21 +32,21 @@ const initializePayment = async (req, res, io) => {
     console.log(`[initializePayment] Destructured parameters - jobId: ${finalJobId}, amount: ${amount}, clientEmail: ${finalClientEmail}, jobType: ${jobType}, clientId: ${clientId}`);
 
     if (!finalJobId || !amount || !finalClientEmail || !jobType) {
-        console.error('[initializePayment] Validation failed: Missing required parameters.');
-        return res.status(400).json({ error: 'Job ID, amount, job type, and client email are required.' });
+        console.error('[initializePayment] Validation failed: Missing required parameters.ᐟ');
+        return res.status(400).json({ error: 'Job ID, amount, job type, and client email are required.ᐟ' });
     }
     if (!['negotiation', 'direct_upload', 'training'].includes(jobType)) {
         console.error(`[initializePayment] Validation failed: Invalid job type provided: ${jobType}`);
-        return res.status(400).json({ error: 'Invalid job type provided for payment initialization.' });
+        return res.status(400).json({ error: 'Invalid job type provided for payment initialization.ᐟ' });
     }
     if (!PAYSTACK_SECRET_KEY) {
         console.error('[initializePayment] PAYSTACK_SECRET_KEY is not set.');
-        return res.status(500).json({ error: 'Payment service not configured.' });
+        return res.status(500).json({ error: 'Payment service not configured.ᐟ' });
     }
 
     const parsedAmountUsd = parseFloat(amount);
     if (isNaN(parsedAmountUsd) || parsedAmountUsd <= 0) {
-        return res.status(400).json({ error: 'Invalid payment amount.' });
+        return res.status(400).json({ error: 'Invalid payment amount.ᐟ' });
     }
 
     try {
@@ -64,7 +64,7 @@ const initializePayment = async (req, res, io) => {
                 .single();
             if (error || !data) {
                 console.error(`[initializePayment] Error fetching negotiation ${finalJobId} for payment:`, error);
-                return res.status(404).json({ error: 'Negotiation not found or not accessible.' });
+                return res.status(404).json({ error: 'Negotiation not found or not accessible.ᐟ' });
             }
             jobDetails = data;
             transcriberId = data.transcriber_id;
@@ -83,7 +83,7 @@ const initializePayment = async (req, res, io) => {
                 .single();
             if (error || !data) {
                 console.error(`[initializePayment] Error fetching direct upload job ${finalJobId} for payment:`, error);
-                return res.status(404).json({ error: 'Direct upload job not found or not accessible.' });
+                return res.status(404).json({ error: 'Direct upload job not found or not accessible.ᐟ' });
             }
             jobDetails = data;
             transcriberId = data.transcriber_id;
@@ -106,7 +106,7 @@ const initializePayment = async (req, res, io) => {
                 return res.status(404).json({ error: 'Trainee not found or not accessible for training payment.ᐟ' });
             }
             if (traineeUser.transcriber_status === 'paid_training_fee') {
-                return res.status(400).json({ error: 'Trainee has already paid for training.' });
+                return res.status(400).json({ error: 'Trainee has already paid for training.ᐟ' });
             }
             jobDetails = traineeUser;
             transcriberId = traineeUser.id;
@@ -120,12 +120,12 @@ const initializePayment = async (req, res, io) => {
         }
         else {
             console.error(`[initializePayment] Unsupported job type for payment initialization: ${jobType}`);
-            return res.status(400).json({ error: 'Unsupported job type for payment initialization.' });
+            return res.status(400).json({ error: 'Unsupported job type for payment initialization.ᐟ' });
         }
 
         if (jobType !== 'training' && Math.round(parsedAmountUsd * 100) !== Math.round(agreedPriceUsd * 100)) {
             console.error('[initializePayment] Payment amount mismatch. Provided USD:', parsedAmountUsd, 'Agreed USD:', agreedPriceUsd);
-            return res.status(400).json({ error: 'Payment amount does not match the agreed job price.' });
+            return res.status(400).json({ error: 'Payment amount does not match the agreed job price.ᐟ' });
         }
 
         const amountKes = convertUsdToKes(parsedAmountUsd);
@@ -162,7 +162,7 @@ const initializePayment = async (req, res, io) => {
 
         if (!paystackResponse.data.status) {
             console.error('[initializePayment] Paystack initialization failed:', paystackResponse.data.message);
-            return res.status(500).json({ error: paystackResponse.data.message || 'Failed to initialize payment with Paystack.' });
+            return res.status(500).json({ error: paystackResponse.data.message || 'Failed to initialize payment with Paystack.ᐟ' });
         }
 
         res.status(200).json({
@@ -172,7 +172,7 @@ const initializePayment = async (req, res, io) => {
 
     } catch (error) {
         console.error('[initializePayment] Error initializing Paystack payment:', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Server error during payment initialization.' });
+        res.status(500).json({ error: 'Server error during payment initialization.ᐟ' });
     }
 };
 
@@ -181,16 +181,16 @@ const initializeTrainingPayment = async (req, res, io) => {
     const traineeId = req.user.userId;
 
     if (!amount || !email) {
-        return res.status(400).json({ error: 'Amount and trainee email are required for training payment.' });
+        return res.status(400).json({ error: 'Amount and trainee email are required for training payment.ᐟ' });
     }
     if (!PAYSTACK_SECRET_KEY) {
         console.error('PAYSTACK_SECRET_KEY is not set for training payment.');
-        return res.status(500).json({ error: 'Payment service not configured.' });
+        return res.status(500).json({ error: 'Payment service not configured.ᐟ' });
     }
 
     const parsedAmountUsd = parseFloat(amount);
     if (isNaN(parsedAmountUsd) || parsedAmountUsd <= 0) {
-        return res.status(400).json({ error: 'Invalid training payment amount.' });
+        return res.status(400).json({ error: 'Invalid training payment amount.ᐟ' });
     }
 
     const TRAINING_FEE_USD = 0.50;
@@ -233,7 +233,7 @@ const initializeTrainingPayment = async (req, res, io) => {
 
         if (!paystackResponse.data.status) {
             console.error('Paystack training initialization failed:', paystackResponse.data.message);
-            return res.status(500).json({ error: paystackResponse.data.message || 'Failed to initialize training payment with Paystack.' });
+            return res.status(500).json({ error: paystackResponse.data.message || 'Failed to initialize training payment with Paystack.ᐟ' });
         }
 
         res.status(200).json({
@@ -243,7 +243,7 @@ const initializeTrainingPayment = async (req, res, io) => {
 
     } catch (error) {
         console.error('Error initializing Paystack training payment:', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Server error during training payment initialization.' });
+        res.status(500).json({ error: 'Server error during training payment initialization.ᐟ' });
     }
 };
 
@@ -253,11 +253,11 @@ const verifyPayment = async (req, res, io) => {
     const { relatedJobId, jobType } = req.query;
 
     if (!reference || !relatedJobId || !jobType) {
-        return res.status(400).json({ error: 'Payment reference, job ID, and job type are required for verification.' });
+        return res.status(400).json({ error: 'Payment reference, job ID, and job type are required for verification.ᐟ' });
     }
     if (!PAYSTACK_SECRET_KEY) {
         console.error('PAYSTACK_SECRET_KEY is not set.');
-        return res.status(500).json({ error: 'Payment service not configured.' });
+        return res.status(500).json({ error: 'Payment service not configured.ᐟ' });
     }
 
     try {
@@ -272,7 +272,7 @@ const verifyPayment = async (req, res, io) => {
 
         if (!paystackResponse.data.status || paystackResponse.data.data.status !== 'success') {
             console.error('Paystack verification failed:', paystackResponse.data.data.gateway_response);
-            return res.status(400).json({ error: paystackResponse.data.data.gateway_response || 'Payment verification failed.' });
+            return res.status(400).json({ error: paystackResponse.data.data.gateway_response || 'Payment verification failed.ᐟ' });
         }
 
         const transaction = paystackResponse.data.data;
@@ -291,7 +291,7 @@ const verifyPayment = async (req, res, io) => {
 
         if (metadataRelatedJobId !== relatedJobId || metadataRelatedJobType !== jobType) {
             console.error('Metadata job ID or type mismatch:', metadataRelatedJobId, relatedJobId, metadataRelatedJobType, jobType);
-            return res.status(400).json({ error: 'Invalid transaction metadata (job ID or type mismatch).' });
+            return res.status(400).json({ error: 'Invalid transaction metadata (job ID or type mismatch).ᐟ' });
         }
 
         if (jobType === 'training') {
@@ -306,7 +306,7 @@ const verifyPayment = async (req, res, io) => {
 
             if (transaction.amount !== expectedAmountInCentsKes) {
                 console.error('Training metadata amount mismatch. Transaction amount (KES cents):', transaction.amount, 'Expected KES cents:', expectedAmountInCentsKes);
-                return res.status(400).json({ error: 'Invalid transaction metadata (training amount mismatch). Paystack charged a different KES amount than expected.' });
+                return res.status(400).json({ error: 'Invalid transaction metadata (training amount mismatch). Paystack charged a different KES amount than expected.ᐟ' });
             }
 
             const { error: updateTraineeStatusError } = await supabase
@@ -331,6 +331,7 @@ const verifyPayment = async (req, res, io) => {
                         client_id: metadataClientId,
                         transcriber_id: metadataClientId, // Trainee ID is used as transcriber_id for training payments
                         amount: actualAmountPaidUsd,
+                        transcriber_earning: actualAmountPaidUsd, // For training, full amount is earning
                         currency: 'USD',
                         paystack_reference: transaction.reference,
                         paystack_status: transaction.status,
@@ -351,14 +352,14 @@ const verifyPayment = async (req, res, io) => {
             if (io) {
                 io.to(metadataClientId).emit('training_payment_successful', {
                     traineeId: metadataClientId,
-                    message: 'Your training payment was successful! You now have access to the training dashboard.',
+                    message: 'Your training payment was successful! You now have access to the training dashboard.ᐟ',
                     newStatus: 'paid_training_fee'
                 });
                 console.log(`Emitted 'training_payment_successful' to trainee ${metadataClientId}`);
             }
 
             return res.status(200).json({
-                message: 'Training payment verified successfully and access granted.',
+                message: 'Training payment verified successfully and access granted.ᐟ',
                 transaction: transaction
             });
         }
@@ -377,14 +378,14 @@ const verifyPayment = async (req, res, io) => {
                 .single();
             if (error || !data) {
                 console.error(`Error fetching negotiation ${relatedJobId} during payment verification: `, error);
-                return res.status(404).json({ error: 'Negotiation not found for verification.' });
+                return res.status(404).json({ error: 'Negotiation not found for verification.ᐟ' });
             }
             currentJob = data;
             updateTable = 'negotiations';
             updateStatusColumn = 'status';
             newJobStatus = 'hired'; // For negotiation, status becomes 'hired'
             if (currentJob.status === 'hired') {
-                return res.status(200).json({ message: 'Payment already processed and job already hired.' });
+                return res.status(200).json({ message: 'Payment already processed and job already hired.ᐟ' });
             }
         } else if (jobType === 'direct_upload') {
             const { data, error } = await supabase
@@ -394,17 +395,17 @@ const verifyPayment = async (req, res, io) => {
                 .single();
             if (error || !data) {
                 console.error(`Error fetching direct upload job ${relatedJobId} during payment verification: `, error);
-                return res.status(404).json({ error: 'Direct upload job not found for verification.' });
+                return res.status(404).json({ error: 'Direct upload job not found for verification.ᐟ' });
             }
             currentJob = data;
             updateTable = 'direct_upload_jobs';
             updateStatusColumn = 'status';
             newJobStatus = 'available_for_transcriber'; // For direct upload, status becomes 'available_for_transcriber'
             if (currentJob.status === 'available_for_transcriber' || currentJob.status === 'taken' || currentJob.status === 'in_progress') {
-                 return res.status(200).json({ message: 'Payment already processed and direct upload job already active.' });
+                 return res.status(200).json({ message: 'Payment already processed and direct upload job already active.ᐟ' });
             }
         } else {
-            return res.status(400).json({ error: 'Unsupported job type for payment verification.' });
+            return res.status(400).json({ error: 'Unsupported job type for payment verification.ᐟ' });
         }
 
         const actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2));
@@ -481,30 +482,37 @@ const verifyPayment = async (req, res, io) => {
             io.to(metadataClientId).emit('payment_successful', {
                 relatedJobId: relatedJobId,
                 jobType: jobType,
-                message: 'Your payment was successful and the job is now active!',
+                message: 'Your payment was successful and the job is now active!ᐟ',
                 newStatus: newJobStatus
             });
             if (jobType === 'negotiation' && finalTranscriberId) { // Only emit job_hired for assigned transcribers in negotiation
                 io.to(finalTranscriberId).emit('job_hired', {
                     relatedJobId: relatedJobId,
                     jobType: jobType,
-                    message: 'A client has paid for your accepted job. The job is now active!',
+                    message: 'A client has paid for your accepted job. The job is now active!ᐟ',
                     newStatus: newJobStatus
                 });
                 console.log(`Emitted 'payment_successful' to client ${metadataClientId} and 'job_hired' to transcriber ${finalTranscriberId}`);
+            } else if (jobType === 'direct_upload') { // NEW: Emit direct_job_paid for direct uploads
+                io.emit('direct_job_paid', { // Emit to all for 'other jobs' pool update
+                    jobId: relatedJobId,
+                    message: `A direct upload job has been paid for and is now available!`,
+                    newStatus: newJobStatus
+                });
+                console.log(`Emitted 'payment_successful' to client ${metadataClientId} and 'direct_job_paid' to all transcribers.`);
             } else {
-                console.log(`Emitted 'payment_successful' to client ${metadataClientId}. No transcriber assigned yet for direct upload.`);
+                console.log(`Emitted 'payment_successful' to client ${metadataClientId}. No specific transcriber or direct job event emitted.`);
             }
         }
 
         res.status(200).json({
-            message: 'Payment verified successfully and job is now active.',
+            message: 'Payment verified successfully and job is now active.ᐟ',
             transaction: transaction
         });
 
     } catch (error) {
         console.error('[verifyPayment] Error verifying Paystack payment:', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Server error during payment verification. ' + (error.message || '') });
+        res.status(500).json({ error: 'Server error during payment verification.ᐟ' + (error.message || '') });
     }
 };
 
@@ -512,6 +520,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
     const transcriberId = req.user.userId;
 
     try {
+        // Fetch payments along with joined data for both negotiation and direct upload jobs
         const { data: payments, error } = await supabase
             .from('payments')
             .select(`
@@ -531,9 +540,11 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 currency_paid_by_client,
                 exchange_rate_used,
                 client:users!client_id(full_name, email),
-                negotiation:negotiation_id(id, status, requirements, deadline_hours, agreed_price_usd) // Join using negotiation_id
+                negotiation:negotiation_id(id, status, requirements, deadline_hours, agreed_price_usd),
+                direct_upload_job:direct_upload_jobs!direct_upload_job_id(id, status, client_instructions, agreed_deadline_hours, quote_amount)
             `)
             .eq('transcriber_id', transcriberId)
+            // Filter by payout_status for upcoming payouts
             .or('payout_status.eq.awaiting_completion,payout_status.eq.paid_out')
             .order('transaction_date', { ascending: false });
 
@@ -542,24 +553,33 @@ const getTranscriberPaymentHistory = async (req, res) => {
             return res.status(500).json({ error: error.message });
         }
 
-        const paymentsWithJobDetails = await Promise.all((payments || []).map(async (payment) => {
-            let jobDetails = {};
-            if (payment.related_job_type === 'negotiation') {
-                jobDetails = { negotiation: payment.negotiation || null };
-            } else if (payment.related_job_type === 'direct_upload') {
-                // Fetch direct_upload_job details separately using direct_upload_job_id
-                const { data: directJob, error: directJobError } = await supabase
-                    .from('direct_upload_jobs')
-                    .select('id, status, client_instructions, agreed_deadline_hours, quote_amount')
-                    .eq('id', payment.direct_upload_job_id)
-                    .single();
-                if (directJobError) {
-                    console.error(`Error fetching direct upload job ${payment.direct_upload_job_id} for payment:`, directJobError);
-                }
-                jobDetails = { direct_upload_job: directJob || null };
+        const paymentsWithJobDetails = (payments || []).map(payment => {
+            let jobRequirements = 'N/A';
+            let jobStatus = 'N/A'; // Initialize jobStatus
+            let jobAmount = 0;
+            let jobDeadline = 'N/A';
+
+            if (payment.related_job_type === 'negotiation' && payment.negotiation) {
+                jobRequirements = payment.negotiation.requirements;
+                jobStatus = payment.negotiation.status; // Correctly get status for negotiation jobs
+                jobAmount = payment.negotiation.agreed_price_usd;
+                jobDeadline = payment.negotiation.deadline_hours;
+            } else if (payment.related_job_type === 'direct_upload' && payment.direct_upload_job) {
+                jobRequirements = payment.direct_upload_job.client_instructions;
+                jobStatus = payment.direct_upload_job.status; // Correctly get status for direct upload jobs
+                jobAmount = payment.direct_upload_job.quote_amount;
+                jobDeadline = payment.direct_upload_job.agreed_deadline_hours;
             }
-            return { ...payment, ...jobDetails };
-        }));
+
+            return {
+                ...payment,
+                jobRequirements: jobRequirements,
+                job_status: jobStatus, // Ensure job_status is set here
+                job_amount: jobAmount,
+                job_deadline: jobDeadline
+            };
+        });
+
 
         const groupedUpcomingPayouts = {};
         let totalUpcomingPayouts = 0;
@@ -567,7 +587,17 @@ const getTranscriberPaymentHistory = async (req, res) => {
         let monthlyEarnings = 0;
 
         paymentsWithJobDetails.forEach(payout => {
-            if (payout.payout_status === 'awaiting_completion') {
+            // Log payout details before filtering for debugging
+            console.log(`[getTranscriberPaymentHistory] Processing payout ${payout.id}. Related job type: ${payout.related_job_type}, Payout status: ${payout.payout_status}, Derived Job status: ${payout.job_status}`);
+
+            // Only consider payments that are 'awaiting_completion' AND whose related job is 'completed' or 'client_completed'
+            const isEligibleForUpcomingPayout =
+                payout.payout_status === 'awaiting_completion' &&
+                (payout.job_status === 'completed' || payout.job_status === 'client_completed');
+
+            console.log(`[getTranscriberPaymentHistory] Payout ${payout.id} is eligible for upcoming payout: ${isEligibleForUpcomingPayout}`);
+
+            if (isEligibleForUpcomingPayout) {
                 const transactionDate = new Date(payout.transaction_date);
                 const dayOfWeek = transactionDate.getDay();
                 const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
@@ -591,10 +621,10 @@ const getTranscriberPaymentHistory = async (req, res) => {
                     direct_upload_job_id: payout.direct_upload_job_id,
                     related_job_type: payout.related_job_type,
                     clientName: payout.client?.full_name || 'N/A',
-                    jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || 'N/A',
+                    jobRequirements: payout.jobRequirements ? payout.jobRequirements.substring(0, 50) + '...' : 'N/A',
                     amount: payout.transcriber_earning,
                     status: payout.payout_status,
-                    job_status: payout.negotiation?.status || payout.direct_upload_job?.status || 'N/A',
+                    job_status: payout.job_status, // Ensure job_status is passed to frontend
                     created_at: new Date(payout.transaction_date).toLocaleDateString()
                 });
                 totalUpcomingPayouts += payout.transcriber_earning;
@@ -613,7 +643,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
 
         res.status(200).json({
             message: `Upcoming payouts for transcriber ${transcriberId} retrieved successfully.`,
-            payments: [],
+            payments: [], // Keep empty as 'All Past Transactions' table is removed
             upcomingPayouts: upcomingPayoutsArray,
             totalUpcomingPayouts: totalUpcomingPayouts,
             summary: {
@@ -624,7 +654,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
 
     } catch (error) {
         console.error('Server error fetching transcriber payment history: ', error);
-        res.status(500).json({ error: 'Server error fetching payment history.' });
+        res.status(500).json({ error: 'Server error fetching payment history.ᐟ' });
     }
 };
 
@@ -651,7 +681,7 @@ const getClientPaymentHistory = async (req, res) => {
                 currency_paid_by_client,
                 exchange_rate_used,
                 transcriber:users!transcriber_id(full_name, email),
-                negotiation:negotiation_id(id, status, requirements, deadline_hours, agreed_price_usd) // Join using negotiation_id
+                negotiation:negotiation_id(id, status, requirements, deadline_hours, agreed_price_usd)
             `)
             .eq('client_id', clientId)
             .order('transaction_date', { ascending: false });
@@ -667,14 +697,14 @@ const getClientPaymentHistory = async (req, res) => {
                 const { data: negotiation, error: negError } = await supabase
                     .from('negotiations')
                     .select('requirements, deadline_hours, agreed_price_usd')
-                    .eq('id', payment.negotiation_id) // Use negotiation_id here
+                    .eq('id', payment.negotiation_id)
                     .single();
                 jobDetails = { negotiation: negotiation || null };
             } else if (payment.related_job_type === 'direct_upload') {
                 const { data: directJob, error: directJobError } = await supabase
                     .from('direct_upload_jobs')
                     .select('client_instructions, agreed_deadline_hours, quote_amount')
-                    .eq('id', payment.direct_upload_job_id) // Use direct_upload_job_id here
+                    .eq('id', payment.direct_upload_job_id)
                     .single();
                 jobDetails = { direct_upload_job: directJob || null };
             }
@@ -701,7 +731,7 @@ const getClientPaymentHistory = async (req, res) => {
 
     } catch (error) {
         console.error('Server error fetching client payment history: ', error);
-        res.status(500).json({ error: 'Server error fetching client payment history.' });
+        res.status(500).json({ error: 'Server error fetching client payment history.ᐟ' });
     }
 };
 
@@ -741,14 +771,14 @@ const getAllPaymentHistoryForAdmin = async (req, res) => {
             const { data: negotiation, error: negError } = await supabase
                 .from('negotiations')
                 .select('requirements, deadline_hours, agreed_price_usd')
-                .eq('id', payment.negotiation_id) // Use negotiation_id here
+                .eq('id', payment.negotiation_id)
                 .single();
             jobDetails = { negotiation: negotiation || null };
         } else if (payment.related_job_type === 'direct_upload') {
             const { data: directJob, error: directJobError } = await supabase
                 .from('direct_upload_jobs')
                 .select('client_instructions, agreed_deadline_hours, quote_amount')
-                .eq('id', payment.direct_upload_job_id) // Use direct_upload_job_id here
+                .eq('id', payment.direct_upload_job_id)
                 .single();
             jobDetails = { direct_upload_job: directJob || null };
         } else if (payment.related_job_type === 'training') {
@@ -765,7 +795,7 @@ const getAllPaymentHistoryForAdmin = async (req, res) => {
     return res.status(200).json(paymentsWithJobDetails);
   } catch (error) {
     console.error('Server error fetching all payment history for admin:', error);
-    return res.status(500).json({ error: 'Failed to fetch all payment history for admin.' });
+    return res.status(500).json({ error: 'Failed to fetch all payment history for admin.ᐟ' });
   }
 };
 
@@ -780,7 +810,7 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
         .single();
 
     if (adminError || adminUser?.user_type !== 'admin') {
-        return res.status(403).json({ error: 'Unauthorized: Only administrators can view transcriber payouts.' });
+        return res.status(403).json({ error: 'Unauthorized: Only administrators can view transcriber payouts.ᐟ' });
     }
 
     try {
@@ -819,14 +849,14 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
                 const { data: negotiation, error: negError } = await supabase
                     .from('negotiations')
                     .select('requirements, deadline_hours, agreed_price_usd, created_at')
-                    .eq('id', payment.negotiation_id) // Use negotiation_id here
+                    .eq('id', payment.negotiation_id)
                     .single();
                 jobDetails = { negotiation: negotiation || null };
             } else if (payment.related_job_type === 'direct_upload') {
                 const { data: directJob, error: directJobError } = await supabase
                     .from('direct_upload_jobs')
                     .select('client_instructions, agreed_deadline_hours, quote_amount, created_at')
-                    .eq('id', payment.direct_upload_job_id) // Use direct_upload_job_id here
+                    .eq('id', payment.direct_upload_job_id)
                     .single();
                 if (directJobError) {
                     console.error(`Error fetching direct upload job ${payment.direct_upload_job_id} for payment:`, directJobError);
@@ -881,7 +911,7 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
 
     } catch (error) {
         console.error(`Server error fetching upcoming payouts for transcriber ${transcriberId}:`, error);
-        res.status(500).json({ error: 'Server error fetching upcoming payouts.' });
+        res.status(500).json({ error: 'Server error fetching upcoming payouts.ᐟ' });
     }
 };
 
@@ -896,18 +926,18 @@ const markPaymentAsPaidOut = async (req, res, io) => {
         .single();
 
     if (adminError || adminUser?.user_type !== 'admin') {
-        return res.status(403).json({ error: 'Unauthorized: Only administrators can mark payments as paid out.' });
+        return res.status(403).json({ error: 'Unauthorized: Only administrators can mark payments as paid out.ᐟ' });
     }
 
     try {
         const { data: payment, error: fetchError } = await supabase
             .from('payments')
-            .select('*')
+            .select('id, transcriber_id, transcriber_earning, related_job_type, negotiation_id, direct_upload_job_id, payout_status')
             .eq('id', paymentId)
             .single();
 
         if (fetchError || !payment) {
-            return res.status(404).json({ error: 'Payment record not found.' });
+            return res.status(404).json({ error: 'Payment record not found.ᐟ' });
         }
 
         if (payment.payout_status !== 'awaiting_completion') {
@@ -916,7 +946,7 @@ const markPaymentAsPaidOut = async (req, res, io) => {
 
         const { data: updatedPayment, error: updateError } = await supabase
             .from('payments')
-            .update({ payout_status: 'paid_out', paid_out_date: new Date().toISOString() })
+            .update({ payout_status: 'paid_out', paid_out_date: new Date().toISOString(), updated_at: new Date().toISOString() }) // Added updated_at
             .eq('id', paymentId)
             .select()
             .single();
@@ -930,7 +960,7 @@ const markPaymentAsPaidOut = async (req, res, io) => {
             io.to(payment.transcriber_id).emit('payout_processed', {
                 paymentId: updatedPayment.id,
                 amount: updatedPayment.transcriber_earning,
-                message: 'Your payment has been processed and disbursed!',
+                message: 'Your payment has been processed and disbursed!ᐟ',
                 status: 'paid_out'
             });
         }
@@ -948,13 +978,13 @@ const markPaymentAsPaidOut = async (req, res, io) => {
         }
 
         res.status(200).json({
-            message: 'Payment marked as paid out successfully.',
+            message: 'Payment marked as paid out successfully.ᐟ',
             payment: updatedPayment
         });
 
     } catch (error) {
         console.error(`Server error marking payment ${paymentId} as paid out:`, error);
-        res.status(500).json({ error: 'Server error marking payment as paid out.' });
+        res.status(500).json({ error: 'Server error marking payment as paid out.ᐟ' });
     }
 };
 
