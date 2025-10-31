@@ -132,7 +132,7 @@ const initializePayment = async (req, res, io) => {
         const amountInCentsKes = Math.round(amountKes * 100);
 
         const paystackResponse = await axios.post(
-            'https://paystack.co/transaction/initialize', // Corrected URL
+            'https://paystack.co/transaction/initialize',
             {
                 email: finalClientEmail, // Use finalClientEmail
                 amount: amountInCentsKes,
@@ -156,7 +156,7 @@ const initializePayment = async (req, res, io) => {
                 headers: {
                     Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
                     'Content-Type': 'application/json',
-                    'User-Agent': 'axios/0.21.1'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36' // More generic User-Agent
                 }
             }
         );
@@ -205,7 +205,7 @@ const initializeTrainingPayment = async (req, res, io) => {
         const amountInCentsKes = Math.round(amountKes * 100);
 
         const paystackResponse = await axios.post(
-            'https://paystack.co/transaction/initialize', // Corrected URL
+            'https://paystack.co/transaction/initialize',
             {
                 email: email,
                 amount: amountInCentsKes,
@@ -228,7 +228,7 @@ const initializeTrainingPayment = async (req, res, io) => {
                 headers: {
                     Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
                     'Content-Type': 'application/json',
-                    'User-Agent': 'axios/0.21.1'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36' // More generic User-Agent
                 }
             }
         );
@@ -264,11 +264,11 @@ const verifyPayment = async (req, res, io) => {
 
     try {
         const paystackResponse = await axios.get(
-            `https://paystack.co/transaction/verify/${reference}`, // Corrected URL
+            `https://paystack.co/transaction/verify/${reference}`,
             {
                 headers: {
                     Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-                    'User-Agent': 'axios/0.21.1'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36' // More generic User-Agent
                 }
             }
         );
