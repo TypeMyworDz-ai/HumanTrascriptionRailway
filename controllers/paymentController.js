@@ -110,7 +110,7 @@ const initializePayment = async (req, res, io) => {
             }
             jobDetails = traineeUser;
             transcriberId = traineeUser.id;
-            agreedPriceUsd = 0.50;
+            agreedPriceUsd = 2.00; // Updated training fee
             jobStatus = traineeUser.transcriber_status;
             
             if (Math.round(parsedAmountUsd * 100) !== Math.round(agreedPriceUsd * 100)) {
@@ -156,7 +156,7 @@ const initializePayment = async (req, res, io) => {
                 headers: {
                     Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
                     'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36' // More generic User-Agent
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
                 }
             }
         );
@@ -194,7 +194,7 @@ const initializeTrainingPayment = async (req, res, io) => {
         return res.status(400).json({ error: 'Invalid training payment amount.ᐟ' });
     }
 
-    const TRAINING_FEE_USD = 0.50;
+    const TRAINING_FEE_USD = 2.00; // Updated training fee
     if (Math.round(parsedAmountUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
         console.error('Training payment amount mismatch. Provided USD:', parsedAmountUsd, 'Expected USD:', TRAINING_FEE_USD);
         return res.status(400).json({ error: `Training payment amount must be USD ${TRAINING_FEE_USD}.` });
@@ -228,7 +228,7 @@ const initializeTrainingPayment = async (req, res, io) => {
                 headers: {
                     Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
                     'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36' // More generic User-Agent
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
                 }
             }
         );
@@ -268,7 +268,7 @@ const verifyPayment = async (req, res, io) => {
             {
                 headers: {
                     Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36' // More generic User-Agent
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
                 }
             }
         );
@@ -298,7 +298,7 @@ const verifyPayment = async (req, res, io) => {
         }
 
         if (jobType === 'training') {
-            const TRAINING_FEE_USD = 0.50;
+            const TRAINING_FEE_USD = 2.00; // Updated training fee
             if (Math.round(metadataAgreedPrice * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
                 console.error('Training metadata amount mismatch. Agreed USD:', metadataAgreedPrice, 'Expected USD:', TRAINING_FEE_USD);
                 return res.status(400).json({ error: 'Invalid transaction metadata (training amount mismatch).ᐟ' });
