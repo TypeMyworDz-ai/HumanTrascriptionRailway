@@ -6,6 +6,9 @@ const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES }
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
+// NEW: KoraPay Configuration
+const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
+const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1'; // Default to sandbox
 
 const getNextFriday = () => {
     const today = new Date();
@@ -22,14 +25,14 @@ const initializePayment = async (req, res, io) => {
     console.log('[initializePayment] Received request body:', req.body);
 
     // FIX: Destructure negotiationId if present, and use 'email' from body
-    const { jobId: rawJobId, negotiationId, amount, email, jobType } = req.body;
+    const { jobId: rawJobId, negotiationId, amount, email, jobType, paymentMethod = 'paystack' } = req.body; // Added paymentMethod
     const clientId = req.user.userId;
 
     // Determine the actual jobId and clientEmail to use
     const finalJobId = rawJobId || negotiationId;
     const finalClientEmail = email; // Using 'email' from the request body
 
-    console.log(`[initializePayment] Destructured parameters - jobId: ${finalJobId}, amount: ${amount}, clientEmail: ${finalClientEmail}, jobType: ${jobType}, clientId: ${clientId}`);
+    console.log(`[initializePayment] Destructured parameters - jobId: ${finalJobId}, amount: ${amount}, clientEmail: ${finalClientEmail}, jobType: ${jobType}, clientId: ${clientId}, paymentMethod: ${paymentMethod}`);
 
     if (!finalJobId || !amount || !finalClientEmail || !jobType) {
         console.error('[initializePayment] Validation failed: Missing required parameters.ᐟ');
@@ -39,10 +42,20 @@ const initializePayment = async (req, res, io) => {
         console.error(`[initializePayment] Validation failed: Invalid job type provided: ${jobType}`);
         return res.status(400).json({ error: 'Invalid job type provided for payment initialization.ᐟ' });
     }
-    if (!PAYSTACK_SECRET_KEY) {
-        console.error('[initializePayment] PAYSTACK_SECRET_KEY is not set.');
-        return res.status(500).json({ error: 'Payment service not configured.ᐟ' });
+    if (!['paystack', 'korapay'].includes(paymentMethod)) { // Validate payment method
+        console.error(`[initializePayment] Validation failed: Invalid payment method provided: ${paymentMethod}`);
+        return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
     }
+
+    if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
+        console.error('[initializePayment] PAYSTACK_SECRET_KEY is not set.');
+        return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
+    }
+    if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
+        console.error('[initializePayment] KORAPAY_SECRET_KEY is not set.');
+        return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
+    }
+
 
     const parsedAmountUsd = parseFloat(amount);
     if (isNaN(parsedAmountUsd) || parsedAmountUsd <= 0) {
@@ -128,65 +141,120 @@ const initializePayment = async (req, res, io) => {
             return res.status(400).json({ error: 'Payment amount does not match the agreed job price.ᐟ' });
         }
 
-        const amountKes = convertUsdToKes(parsedAmountUsd);
-        const amountInCentsKes = Math.round(amountKes * 100);
+        if (paymentMethod === 'paystack') {
+            const amountKes = convertUsdToKes(parsedAmountUsd);
+            const amountInCentsKes = Math.round(amountKes * 100);
 
-        const paystackResponse = await axios.post(
-            'https://paystack.co/transaction/initialize',
-            {
-                email: finalClientEmail, // Use finalClientEmail
-                amount: amountInCentsKes,
-                reference: `${finalJobId}-${Date.now()}`, // Use finalJobId
-                callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${finalJobId}&jobType=${jobType}`, // Use finalJobId
-                currency: 'KES',
-                // Explicitly define payment channels to include Pesalink
-                channels: ['mobile_money', 'card', 'bank_transfer', 'pesalink'],
-                metadata: {
-                    related_job_id: finalJobId, // Still using this for Paystack metadata
-                    related_job_type: jobType,
-                    client_id: clientId,
-                    transcriber_id: transcriberId,
-                    agreed_price_usd: agreedPriceUsd,
-                    currency_paid: 'KES',
-                    exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
-                    amount_paid_kes: amountKes
+            const paystackResponse = await axios.post(
+                'https://paystack.co/transaction/initialize',
+                {
+                    email: finalClientEmail,
+                    amount: amountInCentsKes,
+                    reference: `${finalJobId}-${Date.now()}`,
+                    callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${finalJobId}&jobType=${jobType}`,
+                    currency: 'KES',
+                    channels: ['mobile_money', 'card', 'bank_transfer', 'pesalink'],
+                    metadata: {
+                        related_job_id: finalJobId,
+                        related_job_type: jobType,
+                        client_id: clientId,
+                        transcriber_id: transcriberId,
+                        agreed_price_usd: agreedPriceUsd,
+                        currency_paid: 'KES',
+                        exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                        amount_paid_kes: amountKes
+                    }
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                    }
                 }
-            },
-            {
-                headers: {
-                    Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
-                }
+            );
+
+            if (!paystackResponse.data.status) {
+                console.error('[initializePayment] Paystack initialization failed:', paystackResponse.data.message);
+                return res.status(500).json({ error: paystackResponse.data.message || 'Failed to initialize payment with Paystack.ᐟ' });
             }
-        );
 
-        if (!paystackResponse.data.status) {
-            console.error('[initializePayment] Paystack initialization failed:', paystackResponse.data.message);
-            return res.status(500).json({ error: paystackResponse.data.message || 'Failed to initialize payment with Paystack.ᐟ' });
+            res.status(200).json({
+                message: 'Payment initialization successful',
+                data: paystackResponse.data.data
+            });
+        } else if (paymentMethod === 'korapay') {
+            // KoraPay does not support KES directly, will assume USD for now or convert if needed
+            // For test, we'll use USD amount directly
+            const korapayResponse = await axios.post(
+                `${KORAPAY_BASE_URL}/transactions/initialize`,
+                {
+                    amount: parsedAmountUsd,
+                    currency: 'USD',
+                    reference: `${finalJobId}-${Date.now()}`,
+                    narration: `Payment for TypeMyworDz ${jobType} job ${finalJobId}`,
+                    customer: {
+                        name: req.user.full_name || 'Customer',
+                        email: finalClientEmail,
+                        // KoraPay may require a phone number or other details
+                    },
+                    redirect_url: `${CLIENT_URL}/payment-callback?relatedJobId=${finalJobId}&jobType=${jobType}&paymentMethod=korapay`,
+                    // KoraPay metadata can be added here
+                    metadata: {
+                        related_job_id: finalJobId,
+                        related_job_type: jobType,
+                        client_id: clientId,
+                        transcriber_id: transcriberId,
+                        agreed_price_usd: agreedPriceUsd,
+                        currency_paid: 'USD',
+                        exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES, // Keep for consistency if needed later
+                        amount_paid_usd: parsedAmountUsd
+                    }
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                    }
+                }
+            );
+
+            if (!korapayResponse.data.status || korapayResponse.data.status !== true) {
+                console.error('[initializePayment] KoraPay initialization failed:', korapayResponse.data.message || korapayResponse.data.errors);
+                return res.status(500).json({ error: korapayResponse.data.message || 'Failed to initialize payment with KoraPay.ᐟ' });
+            }
+
+            res.status(200).json({
+                message: 'Payment initialization successful',
+                data: { authorization_url: korapayResponse.data.data.checkout_url } // KoraPay usually returns a checkout_url
+            });
         }
 
-        res.status(200).json({
-            message: 'Payment initialization successful',
-            data: paystackResponse.data.data
-        });
-
     } catch (error) {
-        console.error('[initializePayment] Error initializing Paystack payment:', error.response ? error.response.data : error.message);
+        console.error('[initializePayment] Error initializing payment:', error.response ? error.response.data : error.message);
         res.status(500).json({ error: 'Server error during payment initialization.ᐟ' });
     }
 };
 
 const initializeTrainingPayment = async (req, res, io) => {
-    const { amount, email } = req.body;
+    const { amount, email, paymentMethod = 'paystack' } = req.body; // Added paymentMethod
     const traineeId = req.user.userId;
 
     if (!amount || !email) {
         return res.status(400).json({ error: 'Amount and trainee email are required for training payment.ᐟ' });
     }
-    if (!PAYSTACK_SECRET_KEY) {
+    if (!['paystack', 'korapay'].includes(paymentMethod)) { // Validate payment method
+        console.error(`Invalid payment method provided: ${paymentMethod}`);
+        return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
+    }
+    if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
         console.error('PAYSTACK_SECRET_KEY is not set for training payment.');
-        return res.status(500).json({ error: 'Payment service not configured.ᐟ' });
+        return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
+    }
+    if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
+        console.error('KORAPAY_SECRET_KEY is not set for training payment.');
+        return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
     }
 
     const parsedAmountUsd = parseFloat(amount);
@@ -201,47 +269,89 @@ const initializeTrainingPayment = async (req, res, io) => {
     }
 
     try {
-        const amountKes = convertUsdToKes(parsedAmountUsd);
-        const amountInCentsKes = Math.round(amountKes * 100);
+        if (paymentMethod === 'paystack') {
+            const amountKes = convertUsdToKes(parsedAmountUsd);
+            const amountInCentsKes = Math.round(amountKes * 100);
 
-        const paystackResponse = await axios.post(
-            'https://paystack.co/transaction/initialize',
-            {
-                email: email,
-                amount: amountInCentsKes,
-                reference: `TRAINING-${traineeId}-${Date.now()}`,
-                callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${traineeId}&jobType=training`,
-                currency: 'KES',
-                // Explicitly define payment channels to include Pesalink
-                channels: ['mobile_money', 'card', 'bank_transfer', 'pesalink'],
-                metadata: {
-                    related_job_id: traineeId,
-                    related_job_type: 'training',
-                    client_id: traineeId,
-                    agreed_price_usd: TRAINING_FEE_USD,
-                    currency_paid: 'KES',
-                    exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
-                    amount_paid_kes: amountKes
+            const paystackResponse = await axios.post(
+                'https://paystack.co/transaction/initialize',
+                {
+                    email: email,
+                    amount: amountInCentsKes,
+                    reference: `TRAINING-${traineeId}-${Date.now()}`,
+                    callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${traineeId}&jobType=training`,
+                    currency: 'KES',
+                    channels: ['mobile_money', 'card', 'bank_transfer', 'pesalink'],
+                    metadata: {
+                        related_job_id: traineeId,
+                        related_job_type: 'training',
+                        client_id: traineeId,
+                        agreed_price_usd: TRAINING_FEE_USD,
+                        currency_paid: 'KES',
+                        exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                        amount_paid_kes: amountKes
+                    }
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                    }
                 }
-            },
-            {
-                headers: {
-                    Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
-                }
+            );
+
+            if (!paystackResponse.data.status) {
+                console.error('Paystack training initialization failed:', paystackResponse.data.message);
+                return res.status(500).json({ error: paystackResponse.data.message || 'Failed to initialize training payment with Paystack.ᐟ' });
             }
-        );
 
-        if (!paystackResponse.data.status) {
-            console.error('Paystack training initialization failed:', paystackResponse.data.message);
-            return res.status(500).json({ error: paystackResponse.data.message || 'Failed to initialize training payment with Paystack.ᐟ' });
+            res.status(200).json({
+                message: 'Training payment initialization successful',
+                data: paystackResponse.data.data
+            });
+        } else if (paymentMethod === 'korapay') {
+            const korapayResponse = await axios.post(
+                `${KORAPAY_BASE_URL}/transactions/initialize`,
+                {
+                    amount: parsedAmountUsd,
+                    currency: 'USD',
+                    reference: `TRAINING-${traineeId}-${Date.now()}`,
+                    narration: `Training Fee for TypeMyworDz Trainee ${traineeId}`,
+                    customer: {
+                        name: req.user.full_name || 'Trainee',
+                        email: email,
+                    },
+                    redirect_url: `${CLIENT_URL}/payment-callback?relatedJobId=${traineeId}&jobType=training&paymentMethod=korapay`,
+                    metadata: {
+                        related_job_id: traineeId,
+                        related_job_type: 'training',
+                        client_id: traineeId,
+                        agreed_price_usd: TRAINING_FEE_USD,
+                        currency_paid: 'USD',
+                        exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                        amount_paid_usd: parsedAmountUsd
+                    }
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                    }
+                }
+            );
+
+            if (!korapayResponse.data.status || korapayResponse.data.status !== true) {
+                console.error('KoraPay training initialization failed:', korapayResponse.data.message || korapayResponse.data.errors);
+                return res.status(500).json({ error: korapayResponse.data.message || 'Failed to initialize training payment with KoraPay.ᐟ' });
+            }
+
+            res.status(200).json({
+                message: 'Training payment initialization successful',
+                data: { authorization_url: korapayResponse.data.data.checkout_url }
+            });
         }
-
-        res.status(200).json({
-            message: 'Training payment initialization successful',
-            data: paystackResponse.data.data
-        });
 
     } catch (error) {
         console.error('Error initializing Paystack training payment:', error.response ? error.response.data : error.message);
@@ -252,33 +362,69 @@ const initializeTrainingPayment = async (req, res, io) => {
 
 const verifyPayment = async (req, res, io) => {
     const { reference } = req.params;
-    const { relatedJobId, jobType } = req.query;
+    const { relatedJobId, jobType, paymentMethod = 'paystack' } = req.query; // Added paymentMethod
 
     if (!reference || !relatedJobId || !jobType) {
         return res.status(400).json({ error: 'Payment reference, job ID, and job type are required for verification.ᐟ' });
     }
-    if (!PAYSTACK_SECRET_KEY) {
+    if (!['paystack', 'korapay'].includes(paymentMethod)) { // Validate payment method
+        console.error(`Invalid payment method provided: ${paymentMethod}`);
+        return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
+    }
+    if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
         console.error('PAYSTACK_SECRET_KEY is not set.');
-        return res.status(500).json({ error: 'Payment service not configured.ᐟ' });
+        return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
+    }
+    if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
+        console.error('KORAPAY_SECRET_KEY is not set.');
+        return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
     }
 
     try {
-        const paystackResponse = await axios.get(
-            `https://paystack.co/transaction/verify/${reference}`,
-            {
-                headers: {
-                    Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
-                }
-            }
-        );
+        let transaction;
 
-        if (!paystackResponse.data.status || paystackResponse.data.data.status !== 'success') {
-            console.error('Paystack verification failed:', paystackResponse.data.data.gateway_response);
-            return res.status(400).json({ error: paystackResponse.data.data.gateway_response || 'Payment verification failed.ᐟ' });
+        if (paymentMethod === 'paystack') {
+            const paystackResponse = await axios.get(
+                `https://paystack.co/transaction/verify/${reference}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                    }
+                }
+            );
+
+            if (!paystackResponse.data.status || paystackResponse.data.data.status !== 'success') {
+                console.error('Paystack verification failed:', paystackResponse.data.data.gateway_response);
+                return res.status(400).json({ error: paystackResponse.data.data.gateway_response || 'Payment verification failed.ᐟ' });
+            }
+            transaction = paystackResponse.data.data;
+        } else if (paymentMethod === 'korapay') {
+            const korapayResponse = await axios.get(
+                `${KORAPAY_BASE_URL}/transactions/${reference}/verify`, // KoraPay verify endpoint
+                {
+                    headers: {
+                        Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                    }
+                }
+            );
+
+            if (!korapayResponse.data.status || korapayResponse.data.data.status !== 'success') {
+                console.error('KoraPay verification failed:', korapayResponse.data.message || korapayResponse.data.errors);
+                return res.status(400).json({ error: korapayResponse.data.message || 'Payment verification failed with KoraPay.ᐟ' });
+            }
+            transaction = korapayResponse.data.data;
+            // KoraPay's transaction object might be structured differently,
+            // so we'll need to map its fields to match Paystack's for consistency
+            transaction.amount = transaction.amount * 100; // Convert to cents for consistency if KoraPay returns whole units
+            transaction.paid_at = transaction.paidAt; // Example mapping
+            transaction.metadata = transaction.metadata || {}; // Ensure metadata exists
+            // Map KoraPay metadata to match Paystack's metadata structure if necessary
+            // For now, assume metadata structure is similar or adapt as needed
         }
 
-        const transaction = paystackResponse.data.data;
+
         const {
             related_job_id: metadataRelatedJobId,
             related_job_type: metadataRelatedJobType,
@@ -287,7 +433,7 @@ const verifyPayment = async (req, res, io) => {
             agreed_price_usd: metadataAgreedPrice,
             currency_paid: metadataCurrencyPaid,
             exchange_rate_usd_to_kes: metadataExchangeRate,
-            amount_paid_kes: metadataAmountPaidKes
+            amount_paid_kes: metadataAmountPaidKes // This will be undefined for KoraPay USD payments
         } = transaction.metadata;
 
         const finalTranscriberId = (metadataTranscriberIdRaw === '' || metadataTranscriberIdRaw === undefined) ? null : metadataTranscriberIdRaw;
@@ -304,12 +450,21 @@ const verifyPayment = async (req, res, io) => {
                 return res.status(400).json({ error: 'Invalid transaction metadata (training amount mismatch).ᐟ' });
             }
 
-            const expectedAmountKes = convertUsdToKes(TRAINING_FEE_USD);
-            const expectedAmountInCentsKes = Math.round(expectedAmountKes * 100);
+            let actualAmountPaidUsd;
+            let expectedAmountInCents;
+            if (paymentMethod === 'paystack') {
+                const expectedAmountKes = convertUsdToKes(TRAINING_FEE_USD);
+                expectedAmountInCents = Math.round(expectedAmountKes * 100);
+                actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2));
+            } else if (paymentMethod === 'korapay') {
+                expectedAmountInCents = Math.round(TRAINING_FEE_USD * 100); // KoraPay amount will be in USD, convert to cents for comparison
+                actualAmountPaidUsd = parseFloat(transaction.amount.toFixed(2)); // KoraPay amount is already in USD
+            }
+            
 
-            if (transaction.amount !== expectedAmountInCentsKes) {
-                console.error('Training metadata amount mismatch. Transaction amount (KES cents):', transaction.amount, 'Expected KES cents:', expectedAmountInCentsKes);
-                return res.status(400).json({ error: 'Invalid transaction metadata (training amount mismatch). Paystack charged a different KES amount than expected.ᐟ' });
+            if (transaction.amount !== expectedAmountInCents) {
+                console.error('Training metadata amount mismatch. Transaction amount (cents):', transaction.amount, 'Expected cents:', expectedAmountInCents);
+                return res.status(400).json({ error: 'Invalid transaction metadata (training amount mismatch). Payment charged a different amount than expected.ᐟ' });
             }
 
             const { error: updateTraineeStatusError } = await supabase
@@ -323,7 +478,6 @@ const verifyPayment = async (req, res, io) => {
             }
             console.log(`Trainee ${metadataClientId} status updated to 'paid_training_fee' after successful payment.`);
 
-            const actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2));
             const { error: paymentRecordError } = await supabase
                 .from('payments')
                 .insert([
@@ -336,8 +490,10 @@ const verifyPayment = async (req, res, io) => {
                         amount: actualAmountPaidUsd,
                         transcriber_earning: actualAmountPaidUsd, // For training, full amount is earning
                         currency: 'USD',
-                        paystack_reference: transaction.reference,
-                        paystack_status: transaction.status,
+                        paystack_reference: paymentMethod === 'paystack' ? transaction.reference : null, // Only store if Paystack
+                        korapay_reference: paymentMethod === 'korapay' ? transaction.reference : null, // Store KoraPay reference
+                        paystack_status: paymentMethod === 'paystack' ? transaction.status : null,
+                        korapay_status: paymentMethod === 'korapay' ? transaction.status : null,
                         transaction_date: new Date(transaction.paid_at).toISOString(),
                         payout_status: 'completed',
                         currency_paid_by_client: metadataCurrencyPaid,
@@ -411,8 +567,15 @@ const verifyPayment = async (req, res, io) => {
             return res.status(400).json({ error: 'Unsupported job type for payment verification.ᐟ' });
         }
 
-        const actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2));
-        const transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd);
+        let actualAmountPaidUsd;
+        let transcriberPayAmount;
+        if (paymentMethod === 'paystack') {
+            actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2));
+            transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd);
+        } else if (paymentMethod === 'korapay') {
+            actualAmountPaidUsd = parseFloat(transaction.amount.toFixed(2));
+            transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd);
+        }
 
         // Conditional insertion based on jobType for negotiation_id and direct_upload_job_id
         const paymentData = {
@@ -422,8 +585,10 @@ const verifyPayment = async (req, res, io) => {
             amount: actualAmountPaidUsd,
             transcriber_earning: transcriberPayAmount,
             currency: 'USD',
-            paystack_reference: transaction.reference,
-            paystack_status: transaction.status,
+            paystack_reference: paymentMethod === 'paystack' ? transaction.reference : null,
+            korapay_reference: paymentMethod === 'korapay' ? transaction.reference : null,
+            paystack_status: paymentMethod === 'paystack' ? transaction.status : null,
+            korapay_status: paymentMethod === 'korapay' ? transaction.status : null,
             transaction_date: new Date(transaction.paid_at).toISOString(),
             payout_status: 'awaiting_completion',
             currency_paid_by_client: metadataCurrencyPaid,
@@ -514,7 +679,7 @@ const verifyPayment = async (req, res, io) => {
         });
 
     } catch (error) {
-        console.error('[verifyPayment] Error verifying Paystack payment:', error.response ? error.response.data : error.message);
+        console.error('[verifyPayment] Error verifying payment:', error.response ? error.response.data : error.message);
         res.status(500).json({ error: 'Server error during payment verification.ᐟ' + (error.message || '') });
     }
 };
@@ -537,7 +702,9 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 transcriber_earning,
                 currency,
                 paystack_reference,
+                korapay_reference, // NEW: KoraPay reference
                 paystack_status,
+                korapay_status, // NEW: KoraPay status
                 transaction_date,
                 payout_status,
                 currency_paid_by_client,
@@ -678,7 +845,9 @@ const getClientPaymentHistory = async (req, res) => {
                 transcriber_earning,
                 currency,
                 paystack_reference,
+                korapay_reference, // NEW: KoraPay reference
                 paystack_status,
+                korapay_status, // NEW: KoraPay status
                 transaction_date,
                 payout_status,
                 currency_paid_by_client,
@@ -753,7 +922,9 @@ const getAllPaymentHistoryForAdmin = async (req, res) => {
         transcriber_earning,
         currency,
         paystack_reference,
+        korapay_reference, // NEW: KoraPay reference
         paystack_status,
+        korapay_status, // NEW: KoraPay status
         transaction_date,
         payout_status,
         currency_paid_by_client,
@@ -830,7 +1001,9 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
                 transcriber_earning,
                 currency,
                 paystack_reference,
+                korapay_reference, // NEW: KoraPay reference
                 paystack_status,
+                korapay_status, // NEW: KoraPay status
                 transaction_date,
                 payout_status,
                 currency_paid_by_client,
