@@ -184,10 +184,8 @@ const initializePayment = async (req, res, io) => {
                 data: paystackResponse.data.data
             });
         } else if (paymentMethod === 'korapay') {
-            // KoraPay does not support KES directly, will assume USD for now or convert if needed
-            // For test, we'll use USD amount directly
             const korapayResponse = await axios.post(
-                `${KORAPAY_BASE_URL}/transactions/initialize`,
+                `${KORAPAY_BASE_URL}/charges/initiate`, // Corrected KoraPay endpoint
                 {
                     amount: parsedAmountUsd,
                     currency: 'USD',
@@ -199,7 +197,6 @@ const initializePayment = async (req, res, io) => {
                         // KoraPay may require a phone number or other details
                     },
                     redirect_url: `${CLIENT_URL}/payment-callback?relatedJobId=${finalJobId}&jobType=${jobType}&paymentMethod=korapay`,
-                    // KoraPay metadata can be added here
                     metadata: {
                         related_job_id: finalJobId,
                         related_job_type: jobType,
@@ -227,13 +224,13 @@ const initializePayment = async (req, res, io) => {
 
             res.status(200).json({
                 message: 'Payment initialization successful',
-                data: { authorization_url: korapayResponse.data.data.checkout_url } // KoraPay usually returns a checkout_url
+                data: { authorization_url: korapayResponse.data.data.checkout_url }
             });
         }
 
     } catch (error) {
-        console.error('[initializePayment] Error initializing payment:', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Server error during payment initialization.ᐟ' });
+        console.error(`[initializePayment] Error initializing ${paymentMethod} payment:`, error.response ? error.response.data : error.message);
+        res.status(500).json({ error: `Server error during ${paymentMethod} payment initialization.ᐟ` });
     }
 };
 
@@ -312,7 +309,7 @@ const initializeTrainingPayment = async (req, res, io) => {
             });
         } else if (paymentMethod === 'korapay') {
             const korapayResponse = await axios.post(
-                `${KORAPAY_BASE_URL}/transactions/initialize`,
+                `${KORAPAY_BASE_URL}/charges/initiate`, // Corrected KoraPay endpoint
                 {
                     amount: parsedAmountUsd,
                     currency: 'USD',
@@ -354,8 +351,8 @@ const initializeTrainingPayment = async (req, res, io) => {
         }
 
     } catch (error) {
-        console.error('Error initializing Paystack training payment:', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Server error during training payment initialization.ᐟ' });
+        console.error(`[initializeTrainingPayment] Error initializing ${paymentMethod} payment:`, error.response ? error.response.data : error.message);
+        res.status(500).json({ error: `Server error during ${paymentMethod} payment initialization.ᐟ` });
     }
 };
 
@@ -401,7 +398,7 @@ const verifyPayment = async (req, res, io) => {
             transaction = paystackResponse.data.data;
         } else if (paymentMethod === 'korapay') {
             const korapayResponse = await axios.get(
-                `${KORAPAY_BASE_URL}/transactions/${reference}/verify`, // KoraPay verify endpoint
+                `${KORAPAY_BASE_URL}/charges/${reference}/verify`, // Corrected KoraPay verify endpoint
                 {
                     headers: {
                         Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
@@ -679,8 +676,8 @@ const verifyPayment = async (req, res, io) => {
         });
 
     } catch (error) {
-        console.error('[verifyPayment] Error verifying payment:', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Server error during payment verification.ᐟ' + (error.message || '') });
+        console.error(`[verifyPayment] Error verifying ${paymentMethod} payment:`, error.response ? error.response.data : error.message);
+        res.status(500).json({ error: `Server error during ${paymentMethod} payment verification.ᐟ` + (error.message || '') });
     }
 };
 
@@ -1060,22 +1057,22 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
                     date: weekEndingString,
                     totalAmount: 0,
                     payouts: []
-                };
-            }
-            groupedPayouts[weekEndingString].totalAmount += payout.transcriber_earning;
-            groupedPayouts[weekEndingString].payouts.push({
-                id: payout.id,
-                negotiation_id: payout.negotiation_id,
-                direct_upload_job_id: payout.direct_upload_job_id,
-                related_job_type: payout.related_job_type,
-                clientName: payout.client?.full_name || 'N/A',
-                jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || 'N/A',
-                amount: payout.transcriber_earning,
-                status: payout.payout_status,
-                created_at: new Date(payout.transaction_date).toLocaleDateString()
+                    };
+                }
+                groupedPayouts[weekEndingString].totalAmount += payout.transcriber_earning;
+                groupedPayouts[weekEndingString].payouts.push({
+                    id: payout.id,
+                    negotiation_id: payout.negotiation_id,
+                    direct_upload_job_id: payout.direct_upload_job_id,
+                    related_job_type: payout.related_job_type,
+                    clientName: payout.client?.full_name || 'N/A',
+                    jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || 'N/A',
+                    amount: payout.transcriber_earning,
+                    status: payout.payout_status,
+                    created_at: new Date(payout.transaction_date).toLocaleDateString()
+                });
+                totalUpcomingPayouts += payout.transcriber_earning;
             });
-            totalUpcomingPayouts += payout.transcriber_earning;
-        });
 
         const upcomingPayoutsArray = Object.values(groupedPayouts).sort((a, b) => new Date(a.date) - new Date(b.date));
 
