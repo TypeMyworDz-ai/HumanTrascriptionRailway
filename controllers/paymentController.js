@@ -161,7 +161,7 @@ const initializePayment = async (req, res, io) => {
                         transcriber_id: transcriberId,
                         agreed_price_usd: agreedPriceUsd,
                         currency_paid: 'KES',
-                        exchange_rate_usd_to_kes: EXCHANGE_RATE_TO_KES,
+                        exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
                         amount_paid_kes: amountKes
                     }
                 },
@@ -313,9 +313,7 @@ const initializeTrainingPayment = async (req, res, io) => {
                 {
                     payment_reference: `TRAINING-${traineeId}-${Date.now()}`,
                     source: {
-                        // All fields previously nested here are disallowed.
-                        // We are sending an empty object for 'source' as it's required to be an object
-                        // but no internal fields are allowed for this specific endpoint/context.
+                        type: 'bank_transfer', // 'source.type' is required
                     }
                 },
                 {
