@@ -9,12 +9,9 @@ const https = require('https');
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
-const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY; // NEW: KoraPay Public Key for frontend
+const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY;
 const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1';
-// KORAPAY_MOBILE_MONEY_BASE_URL is generally used for initiating mobile money direct charges,
-// but KoraPay's 'Checkout Standard' typically uses a single base URL for initialization and verification.
-// We'll primarily use KORAPAY_BASE_URL for general KoraPay API interactions.
-const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook'; // NEW: KoraPay Webhook URL for server-side notifications
+const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook';
 
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
@@ -33,7 +30,7 @@ const getNextFriday = () => {
 const initializePayment = async (req, res, io) => {
     console.log('[initializePayment] Received request body:', req.body);
 
-    const { jobId: rawJobId, negotiationId, amount, email, jobType, paymentMethod = 'paystack', mobileNumber } = req.body; // Added mobileNumber
+    const { jobId: rawJobId, negotiationId, amount, email, jobType, paymentMethod = 'paystack', mobileNumber } = req.body;
     const clientId = req.user.userId;
 
     const finalJobId = rawJobId || negotiationId;
@@ -114,7 +111,6 @@ const initializePayment = async (req, res, io) => {
                 return res.status(400).json({ error: `Payment can only be initiated for direct upload jobs awaiting review or with assigned transcriber. Current status: ${jobStatus}` });
             }
         } else if (jobType === 'training') {
-            // This path should ideally be handled by initializeTrainingPayment, but kept for completeness
             const { data: traineeUser, error } = await supabase
                 .from('users')
                 .select('id, email, transcriber_status')
@@ -131,7 +127,7 @@ const initializePayment = async (req, res, io) => {
             }
             jobDetails = traineeUser;
             transcriberId = traineeUser.id;
-            agreedPriceUsd = 2.00; // Updated training fee
+            agreedPriceUsd = 2.00;
             jobStatus = traineeUser.transcriber_status;
             
             if (Math.round(parsedAmountUsd * 100) !== Math.round(agreedPriceUsd * 100)) {
@@ -192,16 +188,13 @@ const initializePayment = async (req, res, io) => {
                 data: paystackResponse.data.data
             });
         } else if (paymentMethod === 'korapay') {
-            // For general KoraPay checkout, we prepare data for the frontend to initialize KoraPay.
-            // The frontend will then handle the KoraPay popup and its callbacks.
             if (!KORAPAY_PUBLIC_KEY) {
                 console.error('[initializePayment] KORAPAY_PUBLIC_KEY is not set for KoraPay frontend integration.');
                 return res.status(500).json({ error: 'KoraPay public key not configured.ᐟ' });
             }
 
-            // MODIFIED: Shorten the KoraPay reference to be <= 50 characters
             const reference = `JOB-${finalJobId.substring(0, 8)}-${Date.now().toString(36)}`;
-            const amountInCentsUsd = Math.round(parsedAmountUsd * 100); // KoraPay expects amount in lowest denomination
+            const amountInCentsUsd = Math.round(parsedAmountUsd * 100);
 
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
@@ -211,9 +204,7 @@ const initializePayment = async (req, res, io) => {
                 customer: {
                     name: req.user.full_name || 'Customer',
                     email: finalClientEmail,
-                    // REMOVED: ...(mobileNumber && { phone: mobileNumber }) // Removed phone field to fix "customer.phone is not allowed"
                 },
-                // notification_url is where KoraPay sends webhooks, not a redirect for the user
                 notification_url: KORAPAY_WEBHOOK_URL, 
                 metadata: {
                     related_job_id: finalJobId,
@@ -229,7 +220,7 @@ const initializePayment = async (req, res, io) => {
             
             res.status(200).json({
                 message: 'KoraPay payment initialization data successful',
-                korapayData: korapayData // Send this data to the frontend
+                korapayData: korapayData
             });
         }
 
@@ -240,7 +231,7 @@ const initializePayment = async (req, res, io) => {
 };
 
 const initializeTrainingPayment = async (req, res, io) => {
-    const { amount, email, paymentMethod = 'paystack', mobileNumber, fullName } = req.body; // MODIFIED: Added fullName
+    const { amount, email, paymentMethod = 'paystack', mobileNumber, fullName } = req.body;
     const traineeId = req.user.userId;
 
     if (!amount || !email) {
@@ -254,20 +245,17 @@ const initializeTrainingPayment = async (req, res, io) => {
         console.error('PAYSTACK_SECRET_KEY is not set for training payment.');
         return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
     }
-    if (paymentMethod === 'korapay' && (!KORAPAY_SECRET_KEY || !KORAPAY_PUBLIC_KEY)) { // Ensure public key is also set
+    if (paymentMethod === 'korapay' && (!KORAPAY_SECRET_KEY || !KORAPAY_PUBLIC_KEY)) {
         console.error('KORAPAY_SECRET_KEY or KORAPAY_PUBLIC_KEY is not set for training payment.');
         return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
     }
-    // Mobile number is optional for KoraPay general checkout but required for mobile money methods.
-    // The frontend validation handles the "required if KoraPay selected" for now.
-
 
     const parsedAmountUsd = parseFloat(amount);
     if (isNaN(parsedAmountUsd) || parsedAmountUsd <= 0) {
         return res.status(400).json({ error: 'Invalid training payment amount.ᐟ' });
     }
 
-    const TRAINING_FEE_USD = 2.00; // Updated training fee
+    const TRAINING_FEE_USD = 2.00;
     if (Math.round(parsedAmountUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
         console.error('Training payment amount mismatch. Provided USD:', parsedAmountUsd, 'Expected USD:', TRAINING_FEE_USD);
         return res.status(400).json({ error: `Training payment amount must be USD ${TRAINING_FEE_USD}.` });
@@ -316,39 +304,36 @@ const initializeTrainingPayment = async (req, res, io) => {
                 data: paystackResponse.data.data
             });
         } else if (paymentMethod === 'korapay') {
-            // Prepare data for KoraPay frontend initialization
-            // MODIFIED: Shorten the KoraPay reference to be <= 50 characters
             const reference = `TR-${traineeId.substring(0, 8)}-${Date.now().toString(36)}`;
-            const amountInCentsUsd = Math.round(parsedAmountUsd * 100); // KoraPay expects amount in lowest denomination
+            
+            // MODIFIED: Convert USD to KES for KoraPay training payment
+            const amountKes = convertUsdToKes(parsedAmountUsd);
+            const amountInCentsKes = Math.round(amountKes * 100); // KoraPay expects amount in lowest denomination (cents)
 
             const korapayData = {
-                key: KORAPAY_PUBLIC_KEY, // Public key for frontend
+                key: KORAPAY_PUBLIC_KEY,
                 reference: reference,
-                amount: amountInCentsUsd,
-                currency: 'USD',
+                amount: amountInCentsKes, // Use KES in cents
+                currency: 'KES', // Explicitly set currency to KES
                 customer: {
                     name: fullName || req.user.full_name || 'Trainee',
                     email: email,
-                    // REMOVED: ...(mobileNumber && { phone: mobileNumber }) // Removed phone field to fix "customer.phone is not allowed"
                 },
-                // This notification_url is where KoraPay sends server-to-server webhooks
                 notification_url: KORAPAY_WEBHOOK_URL, 
                 metadata: {
                     related_job_id: traineeId,
                     related_job_type: 'training',
-                    client_id: traineeId, // Trainee is also the client for training payment
+                    client_id: traineeId,
                     agreed_price_usd: TRAINING_FEE_USD,
-                    currency_paid: 'USD',
+                    currency_paid: 'KES', // Updated to KES
                     exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
-                    amount_paid_usd: parsedAmountUsd,
-                    // Note: KoraPay metadata has limits (5 fields, 20 chars key length)
-                    // Ensure these keys are short and descriptive if used.
+                    amount_paid_kes: amountKes // Add KES amount to metadata
                 }
             };
             
             res.status(200).json({
                 message: 'KoraPay training payment initialization data successful',
-                korapayData: korapayData // Send this object to the frontend
+                korapayData: korapayData
             });
         }
 
@@ -390,7 +375,18 @@ const verifyKorapayTrainingPayment = async (req, res, io) => {
 
         const transaction = korapayResponse.data.data;
         const TRAINING_FEE_USD = 2.00;
-        const amountPaidInUsd = parseFloat((transaction.amount / 100).toFixed(2));
+
+        // MODIFIED: Robust date parsing with fallback
+        let transactionDate = transaction.createdAt ? new Date(transaction.createdAt) : new Date();
+        if (isNaN(transactionDate.getTime())) {
+            console.error('[verifyKorapayTrainingPayment] KoraPay transaction.createdAt is an invalid date:', transaction.createdAt);
+            transactionDate = new Date(); // Fallback to current date if invalid
+        }
+
+        // MODIFIED: Interpret amount as KES cents and convert to USD
+        const amountPaidKesCents = transaction.amount;
+        const amountPaidKes = parseFloat((amountPaidKesCents / 100).toFixed(2));
+        const amountPaidInUsd = parseFloat((amountPaidKes / EXCHANGE_RATE_USD_TO_KES).toFixed(2));
 
         if (Math.round(amountPaidInUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
             console.error('KoraPay training verification amount mismatch. Paid USD:', amountPaidInUsd, 'Expected USD:', TRAINING_FEE_USD);
@@ -422,10 +418,10 @@ const verifyKorapayTrainingPayment = async (req, res, io) => {
                     currency: 'USD',
                     korapay_reference: transaction.reference,
                     korapay_status: transaction.status,
-                    transaction_date: new Date(transaction.createdAt).toISOString(),
+                    transaction_date: transactionDate.toISOString(), // Use the validated/fallback date
                     payout_status: 'completed',
-                    currency_paid_by_client: 'USD',
-                    exchange_rate_used: 1
+                    currency_paid_by_client: 'KES', // Updated to KES
+                    exchange_rate_used: EXCHANGE_RATE_USD_TO_KES // Updated to actual exchange rate
                 }
             ])
             .select()
