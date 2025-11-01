@@ -67,7 +67,7 @@ io.on('connection', (socket) => {
         socket.join(roomUserId);
         console.log(`Socket ${socket.id} joined room for user ${roomUserId} (explicit event).`);
       } else {
-        console.warn(`Attempted to join incorrect room. Socket ID: ${socket.id}, Query User ID: ${userId}, Requested Room User ID: ${roomUserId}`);
+        console.warn(`Attempted to join incorrect room. Socket ID: ${socket.id}, Query User ID: ${roomUserId}, Requested Room User ID: ${roomUserId}`);
       }
     });
   } else {
@@ -163,7 +163,7 @@ const transcriberRouter = transcriberRoutes(io);
 const generalApiRouter = generalApiRoutes(io);
 
 // --- ROUTES ---
-app.use('/api/transcriber', transcriscriberRouter);
+app.use('/api/transcriber', transcriberRouter); // Corrected typo here
 app.use('/api/auth', authRoutes);
 app.use('/api/audio', audioRoutes);
 app.use('/api', generalApiRouter);
