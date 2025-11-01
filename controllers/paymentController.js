@@ -3,6 +3,9 @@ const supabase = require('../database');
 const { syncAvailabilityStatus } = require('../controllers/transcriberController');
 const emailService = require('../emailService');
 const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
+// NEW: Import http and https for custom agents
+const http = require('http');
+const https = require('https');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
@@ -11,6 +14,11 @@ const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
 const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1'; // Default to sandbox for generic KoraPay
 // NEW: Specific Base URL for KoraPay Mobile Money API (backend environment variable)
 const KORAPAY_MOBILE_MONEY_BASE_URL = process.env.KORAPAY_MOBILE_MONEY_API_BASE_URL || 'https://api-sandbox.korapay.com/merchant/api/v1';
+
+// NEW: Create custom agents to force IPv4 resolution
+const httpAgent = new http.Agent({ family: 4 });
+const httpsAgent = new https.Agent({ family: 4 });
+
 
 const getNextFriday = () => {
     const today = new Date();
@@ -215,7 +223,9 @@ const initializePayment = async (req, res, io) => {
                         Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
                         'Content-Type': 'application/json',
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
-                    }
+                    },
+                    httpsAgent: httpsAgent, // NEW: Force IPv4 for HTTPS requests
+                    httpAgent: httpAgent   // NEW: Force IPv4 for HTTP requests
                 }
             );
 
@@ -344,7 +354,9 @@ const initializeTrainingPayment = async (req, res, io) => {
                         Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
                         'Content-Type': 'application/json',
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
-                    }
+                    },
+                    httpsAgent: httpsAgent, // NEW: Force IPv4 for HTTPS requests
+                    httpAgent: httpAgent   // NEW: Force IPv4 for HTTP requests
                 }
             );
 
@@ -437,7 +449,9 @@ const verifyPayment = async (req, res, io) => {
                     headers: {
                         Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
-                    }
+                    },
+                    httpsAgent: httpsAgent, // NEW: Force IPv4 for HTTPS requests
+                    httpAgent: httpAgent   // NEW: Force IPv4 for HTTP requests
                 }
             );
 
@@ -788,7 +802,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 jobAmount = payment.negotiation.agreed_price_usd;
                 jobDeadline = payment.negotiation.deadline_hours;
             } else if (payment.related_job_type === 'direct_upload' && payment.direct_upload_job) {
-                jobRequirements = payment.direct_upload.client_instructions;
+                jobRequirements = payment.direct_upload_job.client_instructions;
                 jobStatus = payment.direct_upload_job.status; // Correctly get status for direct upload jobs
                 jobAmount = payment.direct_upload_job.quote_amount;
                 jobDeadline = payment.direct_upload_job.agreed_deadline_hours;
