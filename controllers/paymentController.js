@@ -314,6 +314,25 @@ const initializeTrainingPayment = async (req, res, io) => {
                     payment_reference: `TRAINING-${traineeId}-${Date.now()}`,
                     source: {
                         type: 'bank_transfer', // 'source.type' is required
+                        // Reintroducing payment details within source, based on iterative error handling
+                        amount: parsedAmountUsd,
+                        currency: 'USD',
+                        reference: `TRAINING-${traineeId}-${Date.now()}-source`,
+                        narration: `Training Fee for TypeMyworDz Trainee ${traineeId}`,
+                        customer: {
+                            name: req.user.full_name || 'Trainee',
+                            email: email,
+                        },
+                        redirect_url: `${CLIENT_URL}/payment-callback?relatedJobId=${traineeId}&jobType=training&paymentMethod=korapay`,
+                        metadata: {
+                            related_job_id: traineeId,
+                            related_job_type: 'training',
+                            client_id: traineeId,
+                            agreed_price_usd: TRAINING_FEE_USD,
+                            currency_paid: 'USD',
+                            exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                            amount_paid_usd: parsedAmountUsd
+                        }
                     }
                 },
                 {
