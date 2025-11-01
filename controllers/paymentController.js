@@ -211,7 +211,7 @@ const initializePayment = async (req, res, io) => {
                 customer: {
                     name: req.user.full_name || 'Customer',
                     email: finalClientEmail,
-                    ...(mobileNumber && { phone: mobileNumber }) // Add mobile number if available
+                    // REMOVED: ...(mobileNumber && { phone: mobileNumber }) // Removed phone field to fix "customer.phone is not allowed"
                 },
                 // notification_url is where KoraPay sends webhooks, not a redirect for the user
                 notification_url: KORAPAY_WEBHOOK_URL, 
@@ -329,7 +329,7 @@ const initializeTrainingPayment = async (req, res, io) => {
                 customer: {
                     name: fullName || req.user.full_name || 'Trainee',
                     email: email,
-                    ...(mobileNumber && { phone: mobileNumber }) // Add mobile number if provided
+                    // REMOVED: ...(mobileNumber && { phone: mobileNumber }) // Removed phone field to fix "customer.phone is not allowed"
                 },
                 // This notification_url is where KoraPay sends server-to-server webhooks
                 notification_url: KORAPAY_WEBHOOK_URL, 
@@ -358,10 +358,9 @@ const initializeTrainingPayment = async (req, res, io) => {
     }
 };
 
-// NEW: Function to verify KoraPay training payments initiated from the frontend
 const verifyKorapayTrainingPayment = async (req, res, io) => {
     const { reference } = req.body;
-    const traineeId = req.user.userId; // Assuming the user is authenticated and is the trainee
+    const traineeId = req.user.userId;
 
     if (!reference) {
         return res.status(400).json({ error: 'KoraPay transaction reference is required for verification.ᐟ' });
@@ -372,9 +371,8 @@ const verifyKorapayTrainingPayment = async (req, res, io) => {
     }
 
     try {
-        // Call KoraPay's API to verify the transaction
         const korapayResponse = await axios.get(
-            `${KORAPAY_BASE_URL}/charges/${reference}`, // KoraPay verification endpoint for generic charge
+            `${KORAPAY_BASE_URL}/charges/${reference}`,
             {
                 headers: {
                     Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
@@ -392,14 +390,13 @@ const verifyKorapayTrainingPayment = async (req, res, io) => {
 
         const transaction = korapayResponse.data.data;
         const TRAINING_FEE_USD = 2.00;
-        const amountPaidInUsd = parseFloat((transaction.amount / 100).toFixed(2)); // KoraPay returns amount in cents for USD
+        const amountPaidInUsd = parseFloat((transaction.amount / 100).toFixed(2));
 
         if (Math.round(amountPaidInUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
             console.error('KoraPay training verification amount mismatch. Paid USD:', amountPaidInUsd, 'Expected USD:', TRAINING_FEE_USD);
             return res.status(400).json({ error: 'KoraPay training payment amount mismatch.ᐟ' });
         }
 
-        // Update trainee status
         const { error: updateTraineeStatusError } = await supabase
             .from('users')
             .update({ transcriber_status: 'paid_training_fee', updated_at: new Date().toISOString() })
@@ -411,7 +408,6 @@ const verifyKorapayTrainingPayment = async (req, res, io) => {
         }
         console.log(`Trainee ${traineeId} status updated to 'paid_training_fee' after successful KoraPay payment.`);
 
-        // Record payment in payments table
         const { error: paymentRecordError } = await supabase
             .from('payments')
             .insert([
@@ -420,16 +416,16 @@ const verifyKorapayTrainingPayment = async (req, res, io) => {
                     direct_upload_job_id: null,
                     related_job_type: 'training',
                     client_id: traineeId,
-                    transcriber_id: traineeId, // Trainee ID is used as transcriber_id for training payments
+                    transcriber_id: traineeId,
                     amount: amountPaidInUsd,
-                    transcriber_earning: amountPaidInUsd, // For training, full amount is earning
+                    transcriber_earning: amountPaidInUsd,
                     currency: 'USD',
                     korapay_reference: transaction.reference,
                     korapay_status: transaction.status,
-                    transaction_date: new Date(transaction.createdAt).toISOString(), // Use createdAt from KoraPay response
+                    transaction_date: new Date(transaction.createdAt).toISOString(),
                     payout_status: 'completed',
-                    currency_paid_by_client: 'USD', // Assuming client paid in USD
-                    exchange_rate_used: 1 // Since payment is in USD, exchange rate is 1
+                    currency_paid_by_client: 'USD',
+                    exchange_rate_used: 1
                 }
             ])
             .select()
@@ -506,12 +502,10 @@ const verifyPayment = async (req, res, io) => {
             transaction = paystackResponse.data.data;
             metadataCurrencyPaid = transaction.metadata.currency_paid;
             metadataExchangeRate = transaction.metadata.exchange_rate_usd_to_kes;
-            actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2)); // Paystack amount is in cents KES
+            actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2));
         } else if (paymentMethod === 'korapay') {
-            // This block handles KoraPay verification if it comes via a redirect flow (less common for Checkout Standard)
-            // Or if it's a general payment initiated by initializePayment and redirected.
             const korapayResponse = await axios.get(
-                `${KORAPAY_BASE_URL}/charges/${reference}`, // Use general KoraPay verification endpoint
+                `${KORAPAY_BASE_URL}/charges/${reference}`,
                 {
                     headers: {
                         Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
@@ -527,24 +521,21 @@ const verifyPayment = async (req, res, io) => {
                 return res.status(400).json({ error: korapayResponse.data.message || 'Payment verification failed with KoraPay.ᐟ' });
             }
             transaction = korapayResponse.data.data;
-            // Map KoraPay transaction data to a consistent format
-            // KoraPay amount is in lowest denomination, so divide by 100 for USD
             actualAmountPaidUsd = parseFloat((transaction.amount / 100).toFixed(2));
-            metadataCurrencyPaid = transaction.currency; // e.g., 'USD'
-            metadataExchangeRate = (metadataCurrencyPaid === 'USD') ? 1 : EXCHANGE_RATE_USD_TO_KES; // Assume 1 if USD, otherwise our KES rate
+            metadataCurrencyPaid = transaction.currency;
+            metadataExchangeRate = (metadataCurrencyPaid === 'USD') ? 1 : EXCHANGE_RATE_USD_TO_KES;
             
-            // Reconstruct metadata from transaction if needed, or rely on query params
             transaction.metadata = {
                 related_job_id: relatedJobId,
                 related_job_type: jobType,
-                client_id: req.user.userId, // From authenticated user
-                transcriber_id: transaction.metadata?.transcriber_id || null, // Try to get from KoraPay metadata or set null
-                agreed_price_usd: actualAmountPaidUsd, // Assume paid amount is agreed amount for verification
+                client_id: req.user.userId,
+                transcriber_id: transaction.metadata?.transcriber_id || null,
+                agreed_price_usd: actualAmountPaidUsd,
                 currency_paid: metadataCurrencyPaid,
                 exchange_rate_usd_to_kes: metadataExchangeRate,
                 amount_paid_usd: actualAmountPaidUsd
             };
-            transaction.paid_at = transaction.createdAt; // Use createdAt from KoraPay response
+            transaction.paid_at = transaction.createdAt;
         }
 
 
@@ -554,8 +545,8 @@ const verifyPayment = async (req, res, io) => {
             client_id: metadataClientId,
             transcriber_id: metadataTranscriberIdRaw,
             agreed_price_usd: metadataAgreedPrice,
-            currency_paid: metadataCurrencyPaidFromMeta, // Use the currency_paid derived above for consistency
-            exchange_rate_usd_to_kes: metadataExchangeRateFromMeta, // Use the exchange_rate derived above for consistency
+            currency_paid: metadataCurrencyPaidFromMeta,
+            exchange_rate_usd_to_kes: metadataExchangeRateFromMeta,
             amount_paid_kes: metadataAmountPaidKes
         } = transaction.metadata;
 
@@ -567,15 +558,12 @@ const verifyPayment = async (req, res, io) => {
         }
 
         if (jobType === 'training') {
-            // This block should ideally not be reached if training is handled by verifyKorapayTrainingPayment or Paystack callback.
-            // However, ensuring its correctness for robustness.
             const TRAINING_FEE_USD = 2.00;
             if (Math.round(metadataAgreedPrice * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
                 console.error('Training metadata amount mismatch. Agreed USD:', metadataAgreedPrice, 'Expected USD:', TRAINING_FEE_USD);
                 return res.status(400).json({ error: 'Invalid transaction metadata (training amount mismatch).ᐟ' });
             }
 
-            // The actualAmountPaidUsd has already been calculated and is consistent.
             if (Math.round(actualAmountPaidUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
                 console.error('Training verification amount mismatch. Transaction amount (USD):', actualAmountPaidUsd, 'Expected USD:', TRAINING_FEE_USD);
                 return res.status(400).json({ error: 'Invalid transaction metadata (training amount mismatch). Payment charged a different amount than expected.ᐟ' });
@@ -681,7 +669,6 @@ const verifyPayment = async (req, res, io) => {
             return res.status(400).json({ error: 'Unsupported job type for payment verification.ᐟ' });
         }
 
-        // Transcriber earning calculation
         const transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd);
         
         const paymentData = {
@@ -1275,7 +1262,7 @@ module.exports = {
     initializePayment,
     initializeTrainingPayment,
     verifyPayment,
-    verifyKorapayTrainingPayment, // NEW: Export the new verification function
+    verifyKorapayTrainingPayment,
     getTranscriberPaymentHistory,
     getClientPaymentHistory,
     getAllPaymentHistoryForAdmin,
