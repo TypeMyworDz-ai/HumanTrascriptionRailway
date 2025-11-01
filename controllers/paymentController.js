@@ -3,22 +3,21 @@ const supabase = require('../database');
 const { syncAvailabilityStatus } = require('../controllers/transcriberController');
 const emailService = require('../emailService');
 const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
-// NEW: Import http and https for custom agents
 const http = require('http');
 const https = require('https');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
-// NEW: KoraPay Configuration
 const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
-const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1'; // Default to sandbox for generic KoraPay
-// NEW: Specific Base URL for KoraPay Mobile Money API (backend environment variable)
-const KORAPAY_MOBILE_MONEY_BASE_URL = process.env.KORAPAY_MOBILE_MONEY_API_BASE_URL || 'https://api-sandbox.korapay.com/merchant/api/v1';
+const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY; // NEW: KoraPay Public Key for frontend
+const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1';
+// KORAPAY_MOBILE_MONEY_BASE_URL is generally used for initiating mobile money direct charges,
+// but KoraPay's 'Checkout Standard' typically uses a single base URL for initialization and verification.
+// We'll primarily use KORAPAY_BASE_URL for general KoraPay API interactions.
+const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook'; // NEW: KoraPay Webhook URL for server-side notifications
 
-// NEW: Create custom agents to force IPv4 resolution
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
-
 
 const getNextFriday = () => {
     const today = new Date();
@@ -34,15 +33,13 @@ const getNextFriday = () => {
 const initializePayment = async (req, res, io) => {
     console.log('[initializePayment] Received request body:', req.body);
 
-    // FIX: Destructure negotiationId if present, and use 'email' from body
-    const { jobId: rawJobId, negotiationId, amount, email, jobType, paymentMethod = 'paystack' } = req.body; // Added paymentMethod
+    const { jobId: rawJobId, negotiationId, amount, email, jobType, paymentMethod = 'paystack', mobileNumber } = req.body; // Added mobileNumber
     const clientId = req.user.userId;
 
-    // Determine the actual jobId and clientEmail to use
     const finalJobId = rawJobId || negotiationId;
-    const finalClientEmail = email; // Using 'email' from the request body
+    const finalClientEmail = email;
 
-    console.log(`[initializePayment] Destructured parameters - jobId: ${finalJobId}, amount: ${amount}, clientEmail: ${finalClientEmail}, jobType: ${jobType}, clientId: ${clientId}, paymentMethod: ${paymentMethod}`);
+    console.log(`[initializePayment] Destructured parameters - jobId: ${finalJobId}, amount: ${amount}, clientEmail: ${finalClientEmail}, jobType: ${jobType}, clientId: ${clientId}, paymentMethod: ${paymentMethod}, mobileNumber: ${mobileNumber}`);
 
     if (!finalJobId || !amount || !finalClientEmail || !jobType) {
         console.error('[initializePayment] Validation failed: Missing required parameters.ᐟ');
@@ -52,7 +49,7 @@ const initializePayment = async (req, res, io) => {
         console.error(`[initializePayment] Validation failed: Invalid job type provided: ${jobType}`);
         return res.status(400).json({ error: 'Invalid job type provided for payment initialization.ᐟ' });
     }
-    if (!['paystack', 'korapay'].includes(paymentMethod)) { // Validate payment method
+    if (!['paystack', 'korapay'].includes(paymentMethod)) {
         console.error(`[initializePayment] Validation failed: Invalid payment method provided: ${paymentMethod}`);
         return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
     }
@@ -82,7 +79,7 @@ const initializePayment = async (req, res, io) => {
             const { data, error } = await supabase
                 .from('negotiations')
                 .select('id, client_id, transcriber_id, agreed_price_usd, status')
-                .eq('id', finalJobId) // Use finalJobId
+                .eq('id', finalJobId)
                 .eq('client_id', clientId)
                 .single();
             if (error || !data) {
@@ -101,7 +98,7 @@ const initializePayment = async (req, res, io) => {
             const { data, error } = await supabase
                 .from('direct_upload_jobs')
                 .select('id, client_id, transcriber_id, quote_amount, status')
-                .eq('id', finalJobId) // Use finalJobId
+                .eq('id', finalJobId)
                 .eq('client_id', clientId)
                 .single();
             if (error || !data) {
@@ -117,10 +114,11 @@ const initializePayment = async (req, res, io) => {
                 return res.status(400).json({ error: `Payment can only be initiated for direct upload jobs awaiting review or with assigned transcriber. Current status: ${jobStatus}` });
             }
         } else if (jobType === 'training') {
+            // This path should ideally be handled by initializeTrainingPayment, but kept for completeness
             const { data: traineeUser, error } = await supabase
                 .from('users')
                 .select('id, email, transcriber_status')
-                .eq('id', finalJobId) // Use finalJobId
+                .eq('id', finalJobId)
                 .eq('user_type', 'trainee')
                 .single();
             
@@ -194,49 +192,43 @@ const initializePayment = async (req, res, io) => {
                 data: paystackResponse.data.data
             });
         } else if (paymentMethod === 'korapay') {
-            const korapayResponse = await axios.post(
-                `${KORAPAY_BASE_URL}/charges/initiate`, // This is for generic KoraPay, not mobile money
-                {
-                    amount: parsedAmountUsd,
-                    currency: 'USD',
-                    reference: `${finalJobId}-${Date.now()}`,
-                    narration: `Payment for TypeMyworDz ${jobType} job ${finalJobId}`,
-                    customer: {
-                        name: req.user.full_name || 'Customer',
-                        email: finalClientEmail,
-                        // KoraPay may require a phone number or other details
-                    },
-                    redirect_url: `${CLIENT_URL}/payment-callback?relatedJobId=${finalJobId}&jobType=${jobType}&paymentMethod=korapay`,
-                    metadata: {
-                        related_job_id: finalJobId,
-                        related_job_type: jobType,
-                        client_id: clientId,
-                        transcriber_id: transcriberId,
-                        agreed_price_usd: agreedPriceUsd,
-                        currency_paid: 'USD',
-                        exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES, // Keep for consistency if needed later
-                        amount_paid_usd: parsedAmountUsd
-                    }
-                },
-                {
-                    headers: {
-                        Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
-                    },
-                    httpsAgent: httpsAgent, // NEW: Force IPv4 for HTTPS requests
-                    httpAgent: httpAgent   // NEW: Force IPv4 for HTTP requests
-                }
-            );
-
-            if (!korapayResponse.data.status || korapayResponse.data.status !== true) {
-                console.error('[initializePayment] KoraPay initialization failed:', korapayResponse.data.message || korapayResponse.data.errors);
-                return res.status(500).json({ error: korapayResponse.data.message || 'Failed to initialize payment with KoraPay.ᐟ' });
+            // For general KoraPay checkout, we prepare data for the frontend to initialize KoraPay.
+            // The frontend will then handle the KoraPay popup and its callbacks.
+            if (!KORAPAY_PUBLIC_KEY) {
+                console.error('[initializePayment] KORAPAY_PUBLIC_KEY is not set for KoraPay frontend integration.');
+                return res.status(500).json({ error: 'KoraPay public key not configured.ᐟ' });
             }
 
+            const reference = `${finalJobId}-${Date.now()}`;
+            const amountInCentsUsd = Math.round(parsedAmountUsd * 100); // KoraPay expects amount in lowest denomination
+
+            const korapayData = {
+                key: KORAPAY_PUBLIC_KEY,
+                reference: reference,
+                amount: amountInCentsUsd,
+                currency: 'USD',
+                customer: {
+                    name: req.user.full_name || 'Customer',
+                    email: finalClientEmail,
+                    ...(mobileNumber && { phone: mobileNumber }) // Add mobile number if available
+                },
+                // notification_url is where KoraPay sends webhooks, not a redirect for the user
+                notification_url: KORAPAY_WEBHOOK_URL, 
+                metadata: {
+                    related_job_id: finalJobId,
+                    related_job_type: jobType,
+                    client_id: clientId,
+                    transcriber_id: transcriberId,
+                    agreed_price_usd: agreedPriceUsd,
+                    currency_paid: 'USD',
+                    exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                    amount_paid_usd: parsedAmountUsd
+                }
+            };
+            
             res.status(200).json({
-                message: 'Payment initialization successful',
-                data: { authorization_url: korapayResponse.data.data.checkout_url }
+                message: 'KoraPay payment initialization data successful',
+                korapayData: korapayData // Send this data to the frontend
             });
         }
 
@@ -247,13 +239,13 @@ const initializePayment = async (req, res, io) => {
 };
 
 const initializeTrainingPayment = async (req, res, io) => {
-    const { amount, email, paymentMethod = 'paystack', mobileNumber } = req.body; // MODIFIED: Added mobileNumber
+    const { amount, email, paymentMethod = 'paystack', mobileNumber, fullName } = req.body; // MODIFIED: Added fullName
     const traineeId = req.user.userId;
 
     if (!amount || !email) {
         return res.status(400).json({ error: 'Amount and trainee email are required for training payment.ᐟ' });
     }
-    if (!['paystack', 'korapay'].includes(paymentMethod)) { // Validate payment method
+    if (!['paystack', 'korapay'].includes(paymentMethod)) {
         console.error(`Invalid payment method provided: ${paymentMethod}`);
         return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
     }
@@ -261,14 +253,12 @@ const initializeTrainingPayment = async (req, res, io) => {
         console.error('PAYSTACK_SECRET_KEY is not set for training payment.');
         return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
     }
-    if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
-        console.error('KORAPAY_SECRET_KEY is not set for training payment.');
+    if (paymentMethod === 'korapay' && (!KORAPAY_SECRET_KEY || !KORAPAY_PUBLIC_KEY)) { // Ensure public key is also set
+        console.error('KORAPAY_SECRET_KEY or KORAPAY_PUBLIC_KEY is not set for training payment.');
         return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
     }
-    // NEW: Validate mobile number for KoraPay
-    if (paymentMethod === 'korapay' && !mobileNumber) {
-        return res.status(400).json({ error: 'Mobile number is required for KoraPay mobile money payment.ᐟ' });
-    }
+    // Mobile number is optional for KoraPay general checkout but required for mobile money methods.
+    // The frontend validation handles the "required if KoraPay selected" for now.
 
 
     const parsedAmountUsd = parseFloat(amount);
@@ -325,72 +315,39 @@ const initializeTrainingPayment = async (req, res, io) => {
                 data: paystackResponse.data.data
             });
         } else if (paymentMethod === 'korapay') {
-            // MODIFIED: Use the correct KoraPay Mobile Money endpoint
-            const korapayEndpoint = `${KORAPAY_MOBILE_MONEY_BASE_URL}/charges/mobile-money`;
-            
-            // MODIFIED: Convert amount to KES for KoraPay Mobile Money, as per documentation
-            const amountKes = convertUsdToKes(parsedAmountUsd);
+            // Prepare data for KoraPay frontend initialization
+            const reference = `TRAINING-${traineeId}-${Date.now()}`;
+            const amountInCentsUsd = Math.round(parsedAmountUsd * 100); // KoraPay expects amount in lowest denomination
 
-            const korapayResponse = await axios.post(
-                korapayEndpoint,
-                {
-                    reference: `TRAINING-${traineeId}-${Date.now()}`, // Unique reference for the payment
-                    amount: amountKes, // Use KES amount
-                    currency: 'KES', // Use KES currency
-                    redirect_url: `${CLIENT_URL}/payment-callback?relatedJobId=${traineeId}&jobType=training&paymentMethod=korapay`,
-                    customer: {
-                        name: req.user.full_name || 'Trainee',
-                        email: email,
-                    },
-                    mobile_money: {
-                        number: mobileNumber, // Use the mobile number from the frontend
-                    },
-                    description: `Training Fee for TypeMyworDz Trainee ${traineeId}`, // Optional description
-                    // metadata is optional, but if included, must not be empty and adhere to field length limits.
-                    // For now, omitting it to simplify based on past errors, unless specifically required.
+            const korapayData = {
+                key: KORAPAY_PUBLIC_KEY, // Public key for frontend
+                reference: reference,
+                amount: amountInCentsUsd,
+                currency: 'USD',
+                customer: {
+                    name: fullName || req.user.full_name || 'Trainee',
+                    email: email,
+                    ...(mobileNumber && { phone: mobileNumber }) // Add mobile number if provided
                 },
-                {
-                    headers: {
-                        Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
-                    },
-                    httpsAgent: httpsAgent, // NEW: Force IPv4 for HTTPS requests
-                    httpAgent: httpAgent   // NEW: Force IPv4 for HTTP requests
+                // This notification_url is where KoraPay sends server-to-server webhooks
+                notification_url: KORAPAY_WEBHOOK_URL, 
+                metadata: {
+                    related_job_id: traineeId,
+                    related_job_type: 'training',
+                    client_id: traineeId, // Trainee is also the client for training payment
+                    agreed_price_usd: TRAINING_FEE_USD,
+                    currency_paid: 'USD',
+                    exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                    amount_paid_usd: parsedAmountUsd,
+                    // Note: KoraPay metadata has limits (5 fields, 20 chars key length)
+                    // Ensure these keys are short and descriptive if used.
                 }
-            );
-
-            // The Korapay mobile money API returns 'auth_model' in data.
-            // We need to check for this to redirect the user for OTP/STK prompt.
-            if (!korapayResponse.data.status) {
-                console.error('KoraPay training initialization failed:', korapayResponse.data.message || korapayResponse.data.errors);
-                return res.status(500).json({ error: korapayResponse.data.message || 'Failed to initialize training payment with KoraPay.ᐟ' });
-            }
-
-            // MODIFIED: Handle different authorization models (OTP/STK_PROMPT)
-            const authModel = korapayResponse.data.data?.auth_model;
-            const transactionReference = korapayResponse.data.data?.transaction_reference;
+            };
             
-            if (authModel === 'OTP' || authModel === 'STK_PROMPT') {
-                // For mobile money, the authorization happens via OTP/STK prompt on the user's phone.
-                // The frontend will likely need to display a message to the user and potentially
-                // collect an OTP if authModel is 'OTP' for a subsequent authorization step.
-                // For now, we'll return a success message and the transaction reference.
-                res.status(200).json({
-                    message: 'KoraPay mobile money payment initiated. Please check your phone for authorization.',
-                    data: {
-                        auth_model: authModel,
-                        transaction_reference: transactionReference,
-                        // No authorization_url for this flow, user interacts with their phone
-                    }
-                });
-            } else {
-                // Unexpected response, or immediate success (less likely for mobile money)
-                res.status(200).json({
-                    message: 'KoraPay payment successful or awaiting further action.',
-                    data: korapayResponse.data.data
-                });
-            }
+            res.status(200).json({
+                message: 'KoraPay training payment initialization data successful',
+                korapayData: korapayData // Send this object to the frontend
+            });
         }
 
     } catch (error) {
@@ -399,15 +356,118 @@ const initializeTrainingPayment = async (req, res, io) => {
     }
 };
 
+// NEW: Function to verify KoraPay training payments initiated from the frontend
+const verifyKorapayTrainingPayment = async (req, res, io) => {
+    const { reference } = req.body;
+    const traineeId = req.user.userId; // Assuming the user is authenticated and is the trainee
+
+    if (!reference) {
+        return res.status(400).json({ error: 'KoraPay transaction reference is required for verification.ᐟ' });
+    }
+    if (!KORAPAY_SECRET_KEY) {
+        console.error('KORAPAY_SECRET_KEY is not set for KoraPay verification.');
+        return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
+    }
+
+    try {
+        // Call KoraPay's API to verify the transaction
+        const korapayResponse = await axios.get(
+            `${KORAPAY_BASE_URL}/charges/${reference}`, // KoraPay verification endpoint for generic charge
+            {
+                headers: {
+                    Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                },
+                httpsAgent: httpsAgent,
+                httpAgent: httpAgent
+            }
+        );
+
+        if (!korapayResponse.data.status || korapayResponse.data.data.status !== 'success') {
+            console.error('KoraPay training verification failed:', korapayResponse.data.message || korapayResponse.data.errors);
+            return res.status(400).json({ error: korapayResponse.data.message || 'KoraPay training payment verification failed.ᐟ' });
+        }
+
+        const transaction = korapayResponse.data.data;
+        const TRAINING_FEE_USD = 2.00;
+        const amountPaidInUsd = parseFloat((transaction.amount / 100).toFixed(2)); // KoraPay returns amount in cents for USD
+
+        if (Math.round(amountPaidInUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
+            console.error('KoraPay training verification amount mismatch. Paid USD:', amountPaidInUsd, 'Expected USD:', TRAINING_FEE_USD);
+            return res.status(400).json({ error: 'KoraPay training payment amount mismatch.ᐟ' });
+        }
+
+        // Update trainee status
+        const { error: updateTraineeStatusError } = await supabase
+            .from('users')
+            .update({ transcriber_status: 'paid_training_fee', updated_at: new Date().toISOString() })
+            .eq('id', traineeId);
+
+        if (updateTraineeStatusError) {
+            console.error(`Error updating trainee ${traineeId} status after KoraPay payment:`, updateTraineeStatusError);
+            throw updateTraineeStatusError;
+        }
+        console.log(`Trainee ${traineeId} status updated to 'paid_training_fee' after successful KoraPay payment.`);
+
+        // Record payment in payments table
+        const { error: paymentRecordError } = await supabase
+            .from('payments')
+            .insert([
+                {
+                    negotiation_id: null,
+                    direct_upload_job_id: null,
+                    related_job_type: 'training',
+                    client_id: traineeId,
+                    transcriber_id: traineeId, // Trainee ID is used as transcriber_id for training payments
+                    amount: amountPaidInUsd,
+                    transcriber_earning: amountPaidInUsd, // For training, full amount is earning
+                    currency: 'USD',
+                    korapay_reference: transaction.reference,
+                    korapay_status: transaction.status,
+                    transaction_date: new Date(transaction.createdAt).toISOString(), // Use createdAt from KoraPay response
+                    payout_status: 'completed',
+                    currency_paid_by_client: 'USD', // Assuming client paid in USD
+                    exchange_rate_used: 1 // Since payment is in USD, exchange rate is 1
+                }
+            ])
+            .select()
+            .single();
+
+        if (paymentRecordError) {
+            console.error('Error recording KoraPay training payment in Supabase:', paymentRecordError);
+            throw paymentRecordError;
+        }
+
+        if (io) {
+            io.to(traineeId).emit('training_payment_successful', {
+                traineeId: traineeId,
+                message: 'Your training payment was successful! You now have access to the training dashboard.ᐟ',
+                newStatus: 'paid_training_fee'
+            });
+            console.log(`Emitted 'training_payment_successful' to trainee ${traineeId}`);
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'KoraPay training payment verified successfully and access granted.ᐟ',
+            transaction: transaction
+        });
+
+    } catch (error) {
+        console.error('[verifyKorapayTrainingPayment] Error verifying KoraPay training payment:', error.response ? error.response.data : error.message);
+        res.status(500).json({ error: 'Server error during KoraPay training payment verification.ᐟ' + (error.message || '') });
+    }
+};
+
 
 const verifyPayment = async (req, res, io) => {
     const { reference } = req.params;
-    const { relatedJobId, jobType, paymentMethod = 'paystack' } = req.query; // Added paymentMethod
+    const { relatedJobId, jobType, paymentMethod = 'paystack' } = req.query;
 
     if (!reference || !relatedJobId || !jobType) {
         return res.status(400).json({ error: 'Payment reference, job ID, and job type are required for verification.ᐟ' });
     }
-    if (!['paystack', 'korapay'].includes(paymentMethod)) { // Validate payment method
+    if (!['paystack', 'korapay'].includes(paymentMethod)) {
         console.error(`Invalid payment method provided: ${paymentMethod}`);
         return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
     }
@@ -422,10 +482,13 @@ const verifyPayment = async (req, res, io) => {
 
     try {
         let transaction;
+        let metadataCurrencyPaid;
+        let metadataExchangeRate;
+        let actualAmountPaidUsd;
 
         if (paymentMethod === 'paystack') {
             const paystackResponse = await axios.get(
-                `https://paystack.co/transaction/verify/${reference}`, // Original PAYSTACK_BASE_URL was not defined, assuming direct URL
+                `https://paystack.co/transaction/verify/${reference}`,
                 {
                     headers: {
                         Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
@@ -439,19 +502,21 @@ const verifyPayment = async (req, res, io) => {
                 return res.status(400).json({ error: paystackResponse.data.data.gateway_response || 'Payment verification failed.ᐟ' });
             }
             transaction = paystackResponse.data.data;
+            metadataCurrencyPaid = transaction.metadata.currency_paid;
+            metadataExchangeRate = transaction.metadata.exchange_rate_usd_to_kes;
+            actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2)); // Paystack amount is in cents KES
         } else if (paymentMethod === 'korapay') {
-            // MODIFIED: Use the correct KoraPay Mobile Money verify endpoint
-            const korapayVerifyEndpoint = `${KORAPAY_MOBILE_MONEY_BASE_URL}/charges/${reference}`;
-            
+            // This block handles KoraPay verification if it comes via a redirect flow (less common for Checkout Standard)
+            // Or if it's a general payment initiated by initializePayment and redirected.
             const korapayResponse = await axios.get(
-                korapayVerifyEndpoint,
+                `${KORAPAY_BASE_URL}/charges/${reference}`, // Use general KoraPay verification endpoint
                 {
                     headers: {
                         Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
                     },
-                    httpsAgent: httpsAgent, // NEW: Force IPv4 for HTTPS requests
-                    httpAgent: httpAgent   // NEW: Force IPv4 for HTTP requests
+                    httpsAgent: httpsAgent,
+                    httpAgent: httpAgent
                 }
             );
 
@@ -460,26 +525,24 @@ const verifyPayment = async (req, res, io) => {
                 return res.status(400).json({ error: korapayResponse.data.message || 'Payment verification failed with KoraPay.ᐟ' });
             }
             transaction = korapayResponse.data.data;
-            // KoraPay's transaction object might be structured differently,
-            // so we'll need to map its fields to match Paystack's for consistency
-            // For mobile money, the amount is already in the expected currency (KES)
-            // The metadata will also be different.
-            transaction.amount = transaction.amount; // Already in KES
-            transaction.paid_at = transaction.createdAt; // Assuming 'createdAt' for transaction date
-            // The metadata for mobile money payments won't have all the fields we previously assumed.
-            // We need to re-evaluate how to get client_id, related_job_id, etc.
-            // For now, let's assume `payment_reference` from the initial charge is enough to link.
+            // Map KoraPay transaction data to a consistent format
+            // KoraPay amount is in lowest denomination, so divide by 100 for USD
+            actualAmountPaidUsd = parseFloat((transaction.amount / 100).toFixed(2));
+            metadataCurrencyPaid = transaction.currency; // e.g., 'USD'
+            metadataExchangeRate = (metadataCurrencyPaid === 'USD') ? 1 : EXCHANGE_RATE_USD_TO_KES; // Assume 1 if USD, otherwise our KES rate
+            
+            // Reconstruct metadata from transaction if needed, or rely on query params
             transaction.metadata = {
-                related_job_id: relatedJobId, // Passed from query
-                related_job_type: jobType,   // Passed from query
-                client_id: req.user.userId,  // From authenticated user
-                agreed_price_usd: TRAINING_FEE_USD, // From constant
-                currency_paid: transaction.currency,
-                exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
-                amount_paid_kes: transaction.amount
+                related_job_id: relatedJobId,
+                related_job_type: jobType,
+                client_id: req.user.userId, // From authenticated user
+                transcriber_id: transaction.metadata?.transcriber_id || null, // Try to get from KoraPay metadata or set null
+                agreed_price_usd: actualAmountPaidUsd, // Assume paid amount is agreed amount for verification
+                currency_paid: metadataCurrencyPaid,
+                exchange_rate_usd_to_kes: metadataExchangeRate,
+                amount_paid_usd: actualAmountPaidUsd
             };
-            // For training, transcriber_id will be the traineeId
-            transaction.metadata.transcriber_id = req.user.userId;
+            transaction.paid_at = transaction.createdAt; // Use createdAt from KoraPay response
         }
 
 
@@ -489,9 +552,9 @@ const verifyPayment = async (req, res, io) => {
             client_id: metadataClientId,
             transcriber_id: metadataTranscriberIdRaw,
             agreed_price_usd: metadataAgreedPrice,
-            currency_paid: metadataCurrencyPaid,
-            exchange_rate_usd_to_kes: metadataExchangeRate,
-            amount_paid_kes: metadataAmountPaidKes // This will be undefined for KoraPay USD payments
+            currency_paid: metadataCurrencyPaidFromMeta, // Use the currency_paid derived above for consistency
+            exchange_rate_usd_to_kes: metadataExchangeRateFromMeta, // Use the exchange_rate derived above for consistency
+            amount_paid_kes: metadataAmountPaidKes
         } = transaction.metadata;
 
         const finalTranscriberId = (metadataTranscriberIdRaw === '' || metadataTranscriberIdRaw === undefined) ? null : metadataTranscriberIdRaw;
@@ -502,37 +565,19 @@ const verifyPayment = async (req, res, io) => {
         }
 
         if (jobType === 'training') {
-            const TRAINING_FEE_USD = 2.00; // Updated training fee
+            // This block should ideally not be reached if training is handled by verifyKorapayTrainingPayment or Paystack callback.
+            // However, ensuring its correctness for robustness.
+            const TRAINING_FEE_USD = 2.00;
             if (Math.round(metadataAgreedPrice * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
                 console.error('Training metadata amount mismatch. Agreed USD:', metadataAgreedPrice, 'Expected USD:', TRAINING_FEE_USD);
                 return res.status(400).json({ error: 'Invalid transaction metadata (training amount mismatch).ᐟ' });
             }
 
-            let actualAmountPaidUsd;
-            let expectedAmountInCents;
-            if (paymentMethod === 'paystack') {
-                const expectedAmountKes = convertUsdToKes(TRAINING_FEE_USD);
-                expectedAmountInCents = Math.round(expectedAmountKes * 100);
-                actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2));
-            } else if (paymentMethod === 'korapay') {
-                // For KoraPay mobile money, transaction.amount is in KES, not cents.
-                // We need to convert it back to USD for comparison with TRAINING_FEE_USD.
-                const expectedAmountKes = convertUsdToKes(TRAINING_FEE_USD);
-                expectedAmountInCents = Math.round(expectedAmountKes); // KoraPay mobile money amount is not in cents in response
-                actualAmountPaidUsd = parseFloat((transaction.amount / metadataExchangeRate).toFixed(2)); // Convert KES to USD
-            }
-            
-
-            // For KoraPay mobile money, transaction.amount is in KES, not cents.
-            // Adjust comparison accordingly.
-            const transactionAmountToCompare = paymentMethod === 'paystack' ? transaction.amount : Math.round(transaction.amount);
-            const expectedAmountToCompare = paymentMethod === 'paystack' ? expectedAmountInCents : expectedAmountInCents;
-
-            if (transactionAmountToCompare !== expectedAmountToCompare) {
-                console.error('Training metadata amount mismatch. Transaction amount (raw):', transactionAmountToCompare, 'Expected raw:', expectedAmountToCompare);
+            // The actualAmountPaidUsd has already been calculated and is consistent.
+            if (Math.round(actualAmountPaidUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
+                console.error('Training verification amount mismatch. Transaction amount (USD):', actualAmountPaidUsd, 'Expected USD:', TRAINING_FEE_USD);
                 return res.status(400).json({ error: 'Invalid transaction metadata (training amount mismatch). Payment charged a different amount than expected.ᐟ' });
             }
-
 
             const { error: updateTraineeStatusError } = await supabase
                 .from('users')
@@ -553,18 +598,18 @@ const verifyPayment = async (req, res, io) => {
                         direct_upload_job_id: null,
                         related_job_type: 'training',
                         client_id: metadataClientId,
-                        transcriber_id: metadataClientId, // Trainee ID is used as transcriber_id for training payments
+                        transcriber_id: metadataClientId,
                         amount: actualAmountPaidUsd,
-                        transcriber_earning: actualAmountPaidUsd, // For training, full amount is earning
+                        transcriber_earning: actualAmountPaidUsd,
                         currency: 'USD',
-                        paystack_reference: paymentMethod === 'paystack' ? transaction.reference : null, // Only store if Paystack
-                        korapay_reference: paymentMethod === 'korapay' ? transaction.reference : null, // Store KoraPay reference
+                        paystack_reference: paymentMethod === 'paystack' ? transaction.reference : null,
+                        korapay_reference: paymentMethod === 'korapay' ? transaction.reference : null,
                         paystack_status: paymentMethod === 'paystack' ? transaction.status : null,
                         korapay_status: paymentMethod === 'korapay' ? transaction.status : null,
                         transaction_date: new Date(transaction.paid_at).toISOString(),
                         payout_status: 'completed',
-                        currency_paid_by_client: metadataCurrencyPaid,
-                        exchange_rate_used: metadataExchangeRate
+                        currency_paid_by_client: metadataCurrencyPaidFromMeta,
+                        exchange_rate_used: metadataExchangeRateFromMeta
                     }
                 ])
                 .select()
@@ -594,7 +639,7 @@ const verifyPayment = async (req, res, io) => {
         let currentJob;
         let updateTable;
         let updateStatusColumn;
-        let newJobStatus; // Define a variable for the new job status
+        let newJobStatus;
 
         if (jobType === 'negotiation') {
             const { data, error } = await supabase
@@ -609,7 +654,7 @@ const verifyPayment = async (req, res, io) => {
             currentJob = data;
             updateTable = 'negotiations';
             updateStatusColumn = 'status';
-            newJobStatus = 'hired'; // For negotiation, status becomes 'hired'
+            newJobStatus = 'hired';
             if (currentJob.status === 'hired') {
                 return res.status(200).json({ message: 'Payment already processed and job already hired.ᐟ' });
             }
@@ -626,7 +671,7 @@ const verifyPayment = async (req, res, io) => {
             currentJob = data;
             updateTable = 'direct_upload_jobs';
             updateStatusColumn = 'status';
-            newJobStatus = 'available_for_transcriber'; // For direct upload, status becomes 'available_for_transcriber'
+            newJobStatus = 'available_for_transcriber';
             if (currentJob.status === 'available_for_transcriber' || currentJob.status === 'taken' || currentJob.status === 'in_progress') {
                  return res.status(200).json({ message: 'Payment already processed and direct upload job already active.ᐟ' });
             }
@@ -634,17 +679,9 @@ const verifyPayment = async (req, res, io) => {
             return res.status(400).json({ error: 'Unsupported job type for payment verification.ᐟ' });
         }
 
-        let actualAmountPaidUsd;
-        let transcriberPayAmount;
-        if (paymentMethod === 'paystack') {
-            actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2));
-            transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd);
-        } else if (paymentMethod === 'korapay') {
-            actualAmountPaidUsd = parseFloat((transaction.amount / metadataExchangeRate).toFixed(2)); // KES to USD
-            transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd);
-        }
-
-        // Conditional insertion based on jobType for negotiation_id and direct_upload_job_id
+        // Transcriber earning calculation
+        const transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd);
+        
         const paymentData = {
             related_job_type: jobType,
             client_id: metadataClientId,
@@ -658,8 +695,8 @@ const verifyPayment = async (req, res, io) => {
             korapay_status: paymentMethod === 'korapay' ? transaction.status : null,
             transaction_date: new Date(transaction.paid_at).toISOString(),
             payout_status: 'awaiting_completion',
-            currency_paid_by_client: metadataCurrencyPaid,
-            exchange_rate_used: metadataExchangeRate
+            currency_paid_by_client: metadataCurrencyPaidFromMeta,
+            exchange_rate_used: metadataExchangeRateFromMeta
         };
 
         if (jobType === 'negotiation') {
@@ -668,9 +705,6 @@ const verifyPayment = async (req, res, io) => {
         } else if (jobType === 'direct_upload') {
             paymentData.direct_upload_job_id = relatedJobId;
             paymentData.negotiation_id = null;
-        } else if (jobType === 'training') { // This block should ideally not be reached if training is handled above
-            paymentData.negotiation_id = null;
-            paymentData.direct_upload_job_id = null;
         }
 
         const { data: paymentRecord, error: paymentError } = await supabase
@@ -686,7 +720,7 @@ const verifyPayment = async (req, res, io) => {
 
         const { error: jobUpdateError } = await supabase
             .from(updateTable)
-            .update({ [updateStatusColumn]: newJobStatus, updated_at: new Date().toISOString() }) // Use newJobStatus here
+            .update({ [updateStatusColumn]: newJobStatus, updated_at: new Date().toISOString() })
             .eq('id', relatedJobId);
 
         if (jobUpdateError) {
@@ -694,22 +728,19 @@ const verifyPayment = async (req, res, io) => {
             throw jobUpdateError;
         }
 
-        // Only sync availability if a transcriber was directly assigned (negotiation)
         if (jobType === 'negotiation' && finalTranscriberId) {
             await syncAvailabilityStatus(finalTranscriberId, false, relatedJobId);
         }
 
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', metadataClientId).single();
-        // Only fetch transcriber if one is assigned (negotiation)
         const transcriberUser = (jobType === 'negotiation' && finalTranscriberId)
             ? (await supabase.from('users').select('full_name, email').eq('id', finalTranscriberId).single()).data
             : null;
 
         if (clientError) console.error('Error fetching client for payment email: ', clientError);
-        // FIX: Corrected error variable name from transcriberError to clientError (as transcriberError is not defined here)
         if (transcriberUser === null && jobType === 'negotiation') console.error('Error fetching transcriber for payment email: ', clientError);
 
-        if (clientUser) { // Send email to client for both negotiation and direct upload
+        if (clientUser) {
             await emailService.sendPaymentConfirmationEmail(clientUser, transcriberUser, currentJob, paymentRecord);
         }
 
@@ -720,7 +751,7 @@ const verifyPayment = async (req, res, io) => {
                 message: 'Your payment was successful and the job is now active!ᐟ',
                 newStatus: newJobStatus
             });
-            if (jobType === 'negotiation' && finalTranscriberId) { // Only emit job_hired for assigned transcribers in negotiation
+            if (jobType === 'negotiation' && finalTranscriberId) {
                 io.to(finalTranscriberId).emit('job_hired', {
                     relatedJobId: relatedJobId,
                     jobType: jobType,
@@ -728,8 +759,8 @@ const verifyPayment = async (req, res, io) => {
                     newStatus: newJobStatus
                 });
                 console.log(`Emitted 'payment_successful' to client ${metadataClientId} and 'job_hired' to transcriber ${finalTranscriberId}`);
-            } else if (jobType === 'direct_upload') { // NEW: Emit direct_job_paid for direct uploads
-                io.emit('direct_job_paid', { // Emit to all for 'other jobs' pool update
+            } else if (jobType === 'direct_upload') {
+                io.emit('direct_job_paid', {
                     jobId: relatedJobId,
                     message: `A direct upload job has been paid for and is now available!`,
                     newStatus: newJobStatus
@@ -755,7 +786,6 @@ const getTranscriberPaymentHistory = async (req, res) => {
     const transcriberId = req.user.userId;
 
     try {
-        // Fetch payments along with joined data for both negotiation and direct upload jobs
         const { data: payments, error } = await supabase
             .from('payments')
             .select(`
@@ -769,9 +799,9 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 transcriber_earning,
                 currency,
                 paystack_reference,
-                korapay_reference, // NEW: KoraPay reference
+                korapay_reference,
                 paystack_status,
-                korapay_status, // NEW: KoraPay status
+                korapay_status,
                 transaction_date,
                 payout_status,
                 currency_paid_by_client,
@@ -781,7 +811,6 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 direct_upload_job:direct_upload_jobs!direct_upload_job_id(id, status, client_instructions, agreed_deadline_hours, quote_amount)
             `)
             .eq('transcriber_id', transcriberId)
-            // Filter by payout_status for upcoming payouts
             .or('payout_status.eq.awaiting_completion,payout_status.eq.paid_out')
             .order('transaction_date', { ascending: false });
 
@@ -792,26 +821,31 @@ const getTranscriberPaymentHistory = async (req, res) => {
 
         const paymentsWithJobDetails = (payments || []).map(payment => {
             let jobRequirements = 'N/A';
-            let jobStatus = 'N/A'; // Initialize jobStatus
+            let jobStatus = 'N/A';
             let jobAmount = 0;
             let jobDeadline = 'N/A';
 
             if (payment.related_job_type === 'negotiation' && payment.negotiation) {
                 jobRequirements = payment.negotiation.requirements;
-                jobStatus = payment.negotiation.status; // Correctly get status for negotiation jobs
+                jobStatus = payment.negotiation.status;
                 jobAmount = payment.negotiation.agreed_price_usd;
                 jobDeadline = payment.negotiation.deadline_hours;
             } else if (payment.related_job_type === 'direct_upload' && payment.direct_upload_job) {
                 jobRequirements = payment.direct_upload_job.client_instructions;
-                jobStatus = payment.direct_upload_job.status; // Correctly get status for direct upload jobs
+                jobStatus = payment.direct_upload_job.status;
                 jobAmount = payment.direct_upload_job.quote_amount;
                 jobDeadline = payment.direct_upload_job.agreed_deadline_hours;
+            } else if (payment.related_job_type === 'training') {
+                jobRequirements = 'Training Fee';
+                jobStatus = 'paid_training_fee';
+                jobAmount = payment.amount;
+                jobDeadline = 'N/A';
             }
 
             return {
                 ...payment,
                 jobRequirements: jobRequirements,
-                job_status: jobStatus, // Ensure job_status is set here
+                job_status: jobStatus,
                 job_amount: jobAmount,
                 job_deadline: jobDeadline
             };
@@ -824,10 +858,8 @@ const getTranscriberPaymentHistory = async (req, res) => {
         let monthlyEarnings = 0;
 
         paymentsWithJobDetails.forEach(payout => {
-            // Log payout details before filtering for debugging
             console.log(`[getTranscriberPaymentHistory] Processing payout ${payout.id}. Related job type: ${payout.related_job_type}, Payout status: ${payout.payout_status}, Derived Job status: ${payout.job_status}`);
 
-            // Only consider payments that are 'awaiting_completion' AND whose related job is 'completed' or 'client_completed'
             const isEligibleForUpcomingPayout =
                 payout.payout_status === 'awaiting_completion' &&
                 (payout.job_status === 'completed' || payout.job_status === 'client_completed');
@@ -861,7 +893,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
                     jobRequirements: payout.jobRequirements ? payout.jobRequirements.substring(0, 50) + '...' : 'N/A',
                     amount: payout.transcriber_earning,
                     status: payout.payout_status,
-                    job_status: payout.job_status, // Ensure job_status is passed to frontend
+                    job_status: payout.job_status,
                     created_at: new Date(payout.transaction_date).toLocaleDateString()
                 });
                 totalUpcomingPayouts += payout.transcriber_earning;
@@ -880,7 +912,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
 
         res.status(200).json({
             message: `Upcoming payouts for transcriber ${transcriberId} retrieved successfully.`,
-            payments: [], // Keep empty as 'All Past Transactions' table is removed
+            payments: [],
             upcomingPayouts: upcomingPayoutsArray,
             totalUpcomingPayouts: totalUpcomingPayouts,
             summary: {
@@ -912,9 +944,9 @@ const getClientPaymentHistory = async (req, res) => {
                 transcriber_earning,
                 currency,
                 paystack_reference,
-                korapay_reference, // NEW: KoraPay reference
+                korapay_reference,
                 paystack_status,
-                korapay_status, // NEW: KoraPay status
+                korapay_status,
                 transaction_date,
                 payout_status,
                 currency_paid_by_client,
@@ -946,6 +978,9 @@ const getClientPaymentHistory = async (req, res) => {
                     .eq('id', payment.direct_upload_job_id)
                     .single();
                 jobDetails = { direct_upload_job: directJob || null };
+            } else if (payment.related_job_type === 'training') {
+                // For training, provide generic details
+                jobDetails = { training_info: { requirements: 'Training Fee Payment', agreed_price_usd: payment.amount } };
             }
             return { ...payment, ...jobDetails };
         }));
@@ -989,9 +1024,9 @@ const getAllPaymentHistoryForAdmin = async (req, res) => {
         transcriber_earning,
         currency,
         paystack_reference,
-        korapay_reference, // NEW: KoraPay reference
+        korapay_reference,
         paystack_status,
-        korapay_status, // NEW: KoraPay status
+        korapay_status,
         transaction_date,
         payout_status,
         currency_paid_by_client,
@@ -1028,7 +1063,7 @@ const getAllPaymentHistoryForAdmin = async (req, res) => {
                 .select('full_name, email')
                 .eq('id', payment.client_id)
                 .single();
-            jobDetails = { trainee_info: traineeUser || null };
+            jobDetails = { trainee_info: traineeUser || null, training_fee: payment.amount };
         }
         return { ...payment, ...jobDetails };
     }));
@@ -1068,9 +1103,9 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
                 transcriber_earning,
                 currency,
                 paystack_reference,
-                korapay_reference, // NEW: KoraPay reference
+                korapay_reference,
                 paystack_status,
-                korapay_status, // NEW: KoraPay status
+                korapay_status,
                 transaction_date,
                 payout_status,
                 currency_paid_by_client,
@@ -1105,6 +1140,8 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
                     console.error(`Error fetching direct upload job ${payment.direct_upload_job_id} for payment:`, directJobError);
                 }
                 jobDetails = { direct_upload_job: directJob || null };
+            } else if (payment.related_job_type === 'training') {
+                jobDetails = { training_info: { requirements: 'Training Fee Payment', agreed_price_usd: payment.amount, created_at: payment.transaction_date } };
             }
             return { ...payment, ...jobDetails };
         }));
@@ -1136,7 +1173,7 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
                     direct_upload_job_id: payout.direct_upload_job_id,
                     related_job_type: payout.related_job_type,
                     clientName: payout.client?.full_name || 'N/A',
-                    jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || 'N/A',
+                    jobRequirements: payout.negotiation?.requirements || payout.direct_upload_job?.client_instructions || payout.training_info?.requirements || 'N/A',
                     amount: payout.transcriber_earning,
                     status: payout.payout_status,
                     created_at: new Date(payout.transaction_date).toLocaleDateString()
@@ -1189,7 +1226,7 @@ const markPaymentAsPaidOut = async (req, res, io) => {
 
         const { data: updatedPayment, error: updateError } = await supabase
             .from('payments')
-            .update({ payout_status: 'paid_out', paid_out_date: new Date().toISOString(), updated_at: new Date().toISOString() }) // Added updated_at
+            .update({ payout_status: 'paid_out', paid_out_date: new Date().toISOString(), updated_at: new Date().toISOString() })
             .eq('id', paymentId)
             .select()
             .single();
@@ -1236,6 +1273,7 @@ module.exports = {
     initializePayment,
     initializeTrainingPayment,
     verifyPayment,
+    verifyKorapayTrainingPayment, // NEW: Export the new verification function
     getTranscriberPaymentHistory,
     getClientPaymentHistory,
     getAllPaymentHistoryForAdmin,

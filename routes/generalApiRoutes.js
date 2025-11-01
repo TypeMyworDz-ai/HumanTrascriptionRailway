@@ -21,9 +21,6 @@ const {
   clientRejectCounter,
   clientCounterBack,
   markJobCompleteByClient,
-  // NEW: Assuming this function exists or will be added to negotiationController.js
-  // For now, the logic is embedded directly in the route for clarity.
-  // In a real application, you would move this into negotiationController.js
   markNegotiationJobCompleteByTranscriber
 } = require('../controllers/negotiationController');
 
@@ -63,7 +60,7 @@ const {
     handleChatAttachmentUpload
 } = require('../controllers/chatController');
 
-// NEW: Import payment controller functions
+// NEW: Import payment controller functions including the new KoraPay verification
 const {
     initializePayment,
     verifyPayment,
@@ -71,6 +68,7 @@ const {
     getClientPaymentHistory,
     getAllPaymentHistoryForAdmin,
     initializeTrainingPayment,
+    verifyKorapayTrainingPayment, // NEW: Import the new KoraPay training verification function
     getTranscriberUpcomingPayoutsForAdmin,
     markPaymentAsPaidOut
 } = require('../controllers/paymentController');
@@ -332,9 +330,6 @@ module.exports = (io) => {
     if (req.user.userType !== 'transcriber') {
       return res.status(403).json({ error: 'Access denied. Only transcribers can mark their negotiation jobs as complete.' });
     }
-    // Assuming a function in negotiationController.js or transcriberController.js handles this
-    // For now, let's assume it's in negotiationController.js
-    // You might need to adjust this if your actual backend structure is different.
     markNegotiationJobCompleteByTranscriber(req, res, io); 
   });
 
@@ -619,7 +614,7 @@ module.exports = (io) => {
       getAllDisputesForAdmin(req, res, io);
   });
 
-  // --- NEW: Paystack Payment Routes ---
+  // --- NEW: Payment Routes ---
   router.post('/payment/initialize', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'client' && req.user.userType !== 'trainee') {
       return res.status(403).json({ error: 'Access denied. Only clients or trainees can initiate payments.' });
@@ -637,6 +632,14 @@ module.exports = (io) => {
 
   router.get('/payment/verify/:reference', authMiddleware, (req, res, next) => {
     verifyPayment(req, res, io);
+  });
+
+  // NEW: KoraPay specific route for verifying training payments
+  router.post('/payment/verify-korapay-training', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'trainee') {
+          return res.status(403).json({ error: 'Access denied. Only trainees can verify KoraPay training payments.' });
+      }
+      verifyKorapayTrainingPayment(req, res, io);
   });
 
   // --- NEW: Transcriber Payment History Route ---
