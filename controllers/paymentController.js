@@ -199,7 +199,8 @@ const initializePayment = async (req, res, io) => {
                 return res.status(500).json({ error: 'KoraPay public key not configured.ᐟ' });
             }
 
-            const reference = `${finalJobId}-${Date.now()}`;
+            // MODIFIED: Shorten the KoraPay reference to be <= 50 characters
+            const reference = `JOB-${finalJobId.substring(0, 8)}-${Date.now().toString(36)}`;
             const amountInCentsUsd = Math.round(parsedAmountUsd * 100); // KoraPay expects amount in lowest denomination
 
             const korapayData = {
@@ -316,7 +317,8 @@ const initializeTrainingPayment = async (req, res, io) => {
             });
         } else if (paymentMethod === 'korapay') {
             // Prepare data for KoraPay frontend initialization
-            const reference = `TRAINING-${traineeId}-${Date.now()}`;
+            // MODIFIED: Shorten the KoraPay reference to be <= 50 characters
+            const reference = `TR-${traineeId.substring(0, 8)}-${Date.now().toString(36)}`;
             const amountInCentsUsd = Math.round(parsedAmountUsd * 100); // KoraPay expects amount in lowest denomination
 
             const korapayData = {
