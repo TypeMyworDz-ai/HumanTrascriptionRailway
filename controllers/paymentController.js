@@ -307,12 +307,14 @@ const initializeTrainingPayment = async (req, res, io) => {
             const reference = `TR-${traineeId.substring(0, 8)}-${Date.now().toString(36)}`;
             
             const amountKes = convertUsdToKes(parsedAmountUsd);
-            const amountInCentsKes = Math.round(amountKes * 100);
+            // MODIFIED: Send amount in KES, not KES cents, for KoraPay Checkout Standard
+            // Assuming KoraPay Checkout Standard for KES expects amount in base unit.
+            const amountInKes = parseFloat(amountKes.toFixed(2)); 
 
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
                 reference: reference,
-                amount: amountInCentsKes,
+                amount: amountInKes, // Send amount in KES
                 currency: 'KES',
                 customer: {
                     name: fullName || req.user.full_name || 'Trainee',
@@ -381,8 +383,8 @@ const verifyKorapayTrainingPayment = async (req, res, io) => {
             transactionDate = new Date();
         }
 
-        const amountPaidKesCents = transaction.amount;
-        const amountPaidKes = parseFloat((amountPaidKesCents / 100).toFixed(2));
+        // MODIFIED: Interpret amount received from KoraPay as KES (base unit), then convert to USD
+        const amountPaidKes = parseFloat(transaction.amount); // KoraPay returns amount in base unit for KES
         const amountPaidInUsd = parseFloat((amountPaidKes / EXCHANGE_RATE_USD_TO_KES).toFixed(2));
 
         if (Math.round(amountPaidInUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
@@ -412,14 +414,14 @@ const verifyKorapayTrainingPayment = async (req, res, io) => {
                     transcriber_id: traineeId,
                     amount: amountPaidInUsd,
                     transcriber_earning: amountPaidInUsd,
-                    currency: 'USD', // Storing the amount in USD in the payments table
-                    paystack_reference: null, // Explicitly null for KoraPay payments
-                    paystack_status: null,   // Explicitly null for KoraPay payments
+                    currency: 'USD',
+                    paystack_reference: null,
+                    paystack_status: null,
                     korapay_reference: transaction.reference,
                     korapay_status: transaction.status,
                     transaction_date: transactionDate.toISOString(),
                     payout_status: 'completed',
-                    currency_paid_by_client: 'KES', // Client paid in KES for KoraPay training
+                    currency_paid_by_client: 'KES',
                     exchange_rate_used: EXCHANGE_RATE_USD_TO_KES
                 }
             ])
@@ -675,7 +677,7 @@ const verifyPayment = async (req, res, io) => {
             currency: 'USD',
             paystack_reference: paymentMethod === 'paystack' ? transaction.reference : null,
             korapay_reference: paymentMethod === 'korapay' ? transaction.reference : null,
-            paystack_status: paymentMethod === 'paystack' ? transaction.status : null,
+            paystack_status: paymentMethod === 'korapay' ? transaction.status : null,
             korapay_status: paymentMethod === 'korapay' ? transaction.status : null,
             transaction_date: new Date(transaction.paid_at).toISOString(),
             payout_status: 'awaiting_completion',

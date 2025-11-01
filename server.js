@@ -110,6 +110,22 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// NEW: Content Security Policy (CSP) Middleware to allow KoraPay scripts and connections
+app.use((req, res, next) => {
+  res.setHeader(
+    'Content-Security-Policy',
+    `default-src 'self' ${ALLOWED_ORIGINS.join(' ')};` +
+    `script-src 'self' 'unsafe-inline' 'unsafe-eval' https://korablobstorage.blob.core.windows.net;` +
+    `connect-src 'self' ${ALLOWED_ORIGINS.join(' ')} https://api.korapay.com https://test-checkout.korapay.com https://korablobstorage.blob.core.windows.net;` +
+    `img-src 'self' data: https://korablobstorage.blob.core.windows.net;` +
+    `style-src 'self' 'unsafe-inline' https://korablobstorage.blob.core.windows.net;` +
+    `font-src 'self' data: https://korablobstorage.blob.core.windows.net;` +
+    `frame-src 'self' https://api.korapay.com https://test-checkout.korapay.com;`
+  );
+  next();
+});
+
+
 // Serve static files from the 'uploads' directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // NEW: Serve static files from the 'uploads/temp_negotiation_files' directory for temporary uploads
@@ -147,7 +163,7 @@ const transcriberRouter = transcriberRoutes(io);
 const generalApiRouter = generalApiRoutes(io);
 
 // --- ROUTES ---
-app.use('/api/transcriber', transcriberRouter);
+app.use('/api/transcriber', transcriscriberRouter);
 app.use('/api/auth', authRoutes);
 app.use('/api/audio', audioRoutes);
 app.use('/api', generalApiRouter);
