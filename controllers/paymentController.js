@@ -306,15 +306,14 @@ const initializeTrainingPayment = async (req, res, io) => {
         } else if (paymentMethod === 'korapay') {
             const reference = `TR-${traineeId.substring(0, 8)}-${Date.now().toString(36)}`;
             
-            // MODIFIED: Convert USD to KES for KoraPay training payment
             const amountKes = convertUsdToKes(parsedAmountUsd);
-            const amountInCentsKes = Math.round(amountKes * 100); // KoraPay expects amount in lowest denomination (cents)
+            const amountInCentsKes = Math.round(amountKes * 100);
 
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
                 reference: reference,
-                amount: amountInCentsKes, // Use KES in cents
-                currency: 'KES', // Explicitly set currency to KES
+                amount: amountInCentsKes,
+                currency: 'KES',
                 customer: {
                     name: fullName || req.user.full_name || 'Trainee',
                     email: email,
@@ -325,9 +324,9 @@ const initializeTrainingPayment = async (req, res, io) => {
                     related_job_type: 'training',
                     client_id: traineeId,
                     agreed_price_usd: TRAINING_FEE_USD,
-                    currency_paid: 'KES', // Updated to KES
+                    currency_paid: 'KES',
                     exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
-                    amount_paid_kes: amountKes // Add KES amount to metadata
+                    amount_paid_kes: amountKes
                 }
             };
             
@@ -376,14 +375,12 @@ const verifyKorapayTrainingPayment = async (req, res, io) => {
         const transaction = korapayResponse.data.data;
         const TRAINING_FEE_USD = 2.00;
 
-        // MODIFIED: Robust date parsing with fallback
         let transactionDate = transaction.createdAt ? new Date(transaction.createdAt) : new Date();
         if (isNaN(transactionDate.getTime())) {
             console.error('[verifyKorapayTrainingPayment] KoraPay transaction.createdAt is an invalid date:', transaction.createdAt);
-            transactionDate = new Date(); // Fallback to current date if invalid
+            transactionDate = new Date();
         }
 
-        // MODIFIED: Interpret amount as KES cents and convert to USD
         const amountPaidKesCents = transaction.amount;
         const amountPaidKes = parseFloat((amountPaidKesCents / 100).toFixed(2));
         const amountPaidInUsd = parseFloat((amountPaidKes / EXCHANGE_RATE_USD_TO_KES).toFixed(2));
@@ -415,13 +412,15 @@ const verifyKorapayTrainingPayment = async (req, res, io) => {
                     transcriber_id: traineeId,
                     amount: amountPaidInUsd,
                     transcriber_earning: amountPaidInUsd,
-                    currency: 'USD',
+                    currency: 'USD', // Storing the amount in USD in the payments table
+                    paystack_reference: null, // Explicitly null for KoraPay payments
+                    paystack_status: null,   // Explicitly null for KoraPay payments
                     korapay_reference: transaction.reference,
                     korapay_status: transaction.status,
-                    transaction_date: transactionDate.toISOString(), // Use the validated/fallback date
+                    transaction_date: transactionDate.toISOString(),
                     payout_status: 'completed',
-                    currency_paid_by_client: 'KES', // Updated to KES
-                    exchange_rate_used: EXCHANGE_RATE_USD_TO_KES // Updated to actual exchange rate
+                    currency_paid_by_client: 'KES', // Client paid in KES for KoraPay training
+                    exchange_rate_used: EXCHANGE_RATE_USD_TO_KES
                 }
             ])
             .select()
