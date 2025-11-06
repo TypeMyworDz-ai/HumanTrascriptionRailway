@@ -2,9 +2,8 @@ const supabase = require('../database');
 const fs = require('fs');
 const path = require('path');
 const emailService = require('../emailService');
-const multer = require('multer'); // FIX: Import multer
+const multer = require('multer');
 
-// NEW: Import payment-related modules and constants
 const axios = require('axios');
 const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
 const http = require('http');
@@ -20,10 +19,9 @@ const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
 
-const TRAINING_FEE_USD = 2.00; // Define the fixed training fee here
+const TRAINING_FEE_USD = 2.00;
 
 
-// Multer configuration for Training Room attachments (allowing audio/video)
 const trainingRoomFileStorage = multer.diskStorage({
     destination: (req, file, cb) => {
         const uploadDir = 'uploads/training_room_attachments';
@@ -58,12 +56,11 @@ const uploadTrainingRoomAttachment = multer({
     storage: trainingRoomFileStorage,
     fileFilter: trainingRoomFileFilter,
     limits: {
-        fileSize: 500 * 1024 * 1024 // 500MB limit for training materials
+        fileSize: 500 * 1024 * 1024
     }
 }).single('trainingRoomAttachment');
 
 
-// NEW: Function to handle training room attachment upload (after multer processing)
 const handleTrainingRoomAttachmentUpload = async (req, res) => {
     try {
         if (!req.file) {
@@ -89,7 +86,6 @@ const handleTrainingRoomAttachmentUpload = async (req, res) => {
 };
 
 
-// Get trainee's training status
 const getTraineeTrainingStatus = async (req, res) => {
     try {
         const traineeId = req.user.userId;
@@ -123,7 +119,6 @@ const getTraineeTrainingStatus = async (req, res) => {
     }
 };
 
-// Get training materials (can be static or fetched from DB)
 const getTrainingMaterials = async (req, res) => {
     try {
         const { data: materials, error } = await supabase
@@ -151,7 +146,6 @@ const getTrainingMaterials = async (req, res) => {
     }
 };
 
-// NEW: Admin function to create a new training material
 const createTrainingMaterial = async (req, res) => {
     try {
         const { title, description, link, order_index } = req.body;
@@ -175,7 +169,6 @@ const createTrainingMaterial = async (req, res) => {
     }
 };
 
-// NEW: Admin function to update an existing training material
 const updateTrainingMaterial = async (req, res) => {
     try {
         const { materialId } = req.params;
@@ -193,7 +186,7 @@ const updateTrainingMaterial = async (req, res) => {
             .single();
 
         if (error) {
-            if (error.code === 'PGRST116') { // No rows found to update
+            if (error.code === 'PGRST116') {
                 return res.status(404).json({ error: 'Training material not found.' });
             }
             throw error;
@@ -206,7 +199,6 @@ const updateTrainingMaterial = async (req, res) => {
     }
 };
 
-// NEW: Admin function to delete a training material
 const deleteTrainingMaterial = async (req, res) => {
     try {
         const { materialId } = req.params;
@@ -217,7 +209,7 @@ const deleteTrainingMaterial = async (req, res) => {
             .eq('id', materialId);
 
         if (error) {
-            if (error.code === 'PGRST116') { // No rows found to delete
+            if (error.code === 'PGRST116') {
                 return res.status(404).json({ error: 'Training material not found.' });
             }
             throw error;
@@ -231,28 +223,25 @@ const deleteTrainingMaterial = async (req, res) => {
 };
 
 
-// Get messages for the training room
 const getTraineeTrainingRoomMessages = async (req, res, io) => {
     try {
-        const { chatId } = req.params; // In this context, chatId is the trainee's user ID
-        const userId = req.user.userId; // The user making the request (trainee or admin)
+        const { chatId } = req.params;
+        const userId = req.user.userId;
 
-        // Authorization check: User must be the trainee or an admin
         if (userId !== chatId && req.user.userType !== 'admin') {
             return res.status(403).json({ error: 'Access denied. You can only view your own training room messages.' });
         }
 
-        const adminId = process.env.ADMIN_USER_ID; // Assuming you have a specific admin for training
+        const adminId = process.env.ADMIN_USER_ID;
         if (!adminId) {
             console.error('ADMIN_USER_ID is not configured.');
             return res.status(500).json({ error: 'Training chat admin not configured.' });
         }
 
-        // Fetch messages where negotiation_id is null AND training_room_id is the trainee's ID
         const { data: messages, error } = await supabase
             .from('messages')
-            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, training_room_id') // Ensure training_room_id is selected
-            .eq('training_room_id', chatId) // Filter by training_room_id
+            .select('id, sender_id, receiver_id, content, timestamp, is_read, file_url, file_name, training_room_id')
+            .eq('training_room_id', chatId)
             .order('timestamp', { ascending: true });
 
         if (error) {
@@ -260,7 +249,6 @@ const getTraineeTrainingRoomMessages = async (req, res, io) => {
             throw error;
         }
 
-        // Mark messages sent by the admin to the trainee as read, or vice-versa
         if (messages && messages.length > 0 && io) {
             const unreadMessagesForUser = messages.filter(msg => msg.receiver_id === userId && !msg.is_read);
             if (unreadMessagesForUser.length > 0) {
@@ -273,14 +261,13 @@ const getTraineeTrainingRoomMessages = async (req, res, io) => {
                 if (updateError) {
                     console.error('Error marking training room messages as read:', updateError);
                 } else {
-                    // Emit update to the sender of these messages (admin or trainee)
                     const senderOfUnreadMessages = unreadMessagesForUser[0].sender_id;
                     if (senderOfUnreadMessages !== userId) {
                          io.to(senderOfUnreadMessages).emit('unreadMessageCountUpdate', { userId: senderOfUnreadMessages, change: -unreadIds.length });
                          io.to(senderOfUnreadMessages).emit('messageRead', {
                              senderId: userId,
                              receiverId: senderOfUnreadMessages,
-                             trainingRoomId: chatId, // NEW: Include trainingRoomId
+                             trainingRoomId: chatId,
                              messageIds: unreadIds
                          });
                     }
@@ -295,10 +282,9 @@ const getTraineeTrainingRoomMessages = async (req, res, io) => {
     }
 };
 
-// Send message in the training room
 const sendTraineeTrainingRoomMessage = async (req, res, io) => {
     try {
-        const { trainingRoomId, receiverId, messageText, fileUrl, fileName } = req.body; // trainingRoomId is the trainee's user ID
+        const { trainingRoomId, receiverId, messageText, fileUrl, fileName } = req.body;
         const senderId = req.user.userId;
         const senderFullName = req.user.full_name || (req.user.userType === 'admin' ? 'Admin' : 'Trainee');
 
@@ -306,7 +292,6 @@ const sendTraineeTrainingRoomMessage = async (req, res, io) => {
             return res.status(400).json({ error: 'Training Room ID, Receiver ID, and either message text or a file are required.' });
         }
 
-        // Authorization check: Sender must be the trainee (trainingRoomId) or an admin
         if (senderId !== trainingRoomId && req.user.userType !== 'admin') {
             return res.status(403).json({ error: 'Access denied. You can only send messages in your own training room or as an admin.' });
         }
@@ -316,7 +301,7 @@ const sendTraineeTrainingRoomMessage = async (req, res, io) => {
             .insert({
                 sender_id: senderId,
                 receiver_id: receiverId,
-                training_room_id: trainingRoomId, // Store training_room_id
+                training_room_id: trainingRoomId,
                 content: messageText,
                 is_read: false,
                 file_url: fileUrl,
@@ -333,11 +318,8 @@ const sendTraineeTrainingRoomMessage = async (req, res, io) => {
                 sender_name: senderFullName,
             };
 
-            // --- START DEBUGGING LOG ---
             console.log("[sendTraineeTrainingRoomMessage] Emitting messagePayload:", messagePayload);
-            // --- END DEBUGGING LOG ---
 
-            // Emit to both sender and receiver rooms for real-time update
             io.to(receiverId).emit('newChatMessage', messagePayload);
             io.to(senderId).emit('newChatMessage', messagePayload);
             io.to(receiverId).emit('unreadMessageCountUpdate', { userId: receiverId, change: 1 });
@@ -352,18 +334,15 @@ const sendTraineeTrainingRoomMessage = async (req, res, io) => {
 };
 
 
-// NEW: Function to transition a trainee to an active transcriber
 const completeTraining = async (req, res) => {
     try {
-        const { traineeId } = req.params; // The ID of the trainee to transition
-        const adminId = req.user.userId; // The admin performing the action
+        const { traineeId } = req.params;
+        const adminId = req.user.userId;
 
-        // Authorization: Only admins can complete training
         if (req.user.userType !== 'admin') {
             return res.status(403).json({ error: 'Access denied. Only admins can complete training.' });
         }
 
-        // Fetch trainee details to ensure they exist and are in the correct state
         const { data: traineeUser, error: fetchError } = await supabase
             .from('users')
             .select('id, full_name, email, user_type, transcriber_status, transcriber_user_level')
@@ -376,20 +355,18 @@ const completeTraining = async (req, res) => {
             return res.status(404).json({ error: 'Trainee not found or not a valid trainee user.' });
         }
 
-        // Ensure the trainee has paid for training before completing
         if (traineeUser.transcriber_status !== 'paid_training_fee') {
             return res.status(400).json({ error: 'Trainee has not paid the training fee. Cannot complete training.' });
         }
 
-        // Update the trainee's status and user_type in the 'users' table
         const { data: updatedUser, error: updateError } = await supabase
             .from('users')
             .update({
-                user_type: 'transcriber', // Change user_type to 'transcriber'
-                transcriber_status: 'active_transcriber', // Set transcriber_status to active
-                transcriber_user_level: 'transcriber', // Set user_level to transcriber
-                is_active: true, // Ensure account is active
-                is_available: true, // Make available for jobs
+                user_type: 'transcriber',
+                transcriber_status: 'active_transcriber',
+                transcriber_user_level: 'transcriber',
+                is_active: true,
+                // REMOVED: is_available: true, // This line was causing the error
                 updated_at: new Date().toISOString()
             })
             .eq('id', traineeId)
@@ -401,17 +378,14 @@ const completeTraining = async (req, res) => {
             throw updateError;
         }
 
-        // Create an entry in the 'transcribers' marker table
         const { error: transcriberMarkerError } = await supabase
             .from('transcribers')
             .insert([{ id: traineeId }]);
         
         if (transcriberMarkerError) {
             console.error(`Error creating transcriber marker for ${traineeId}:`, transcriberMarkerError);
-            // Log error but don't fail, as the main user status is updated
         }
 
-        // Send a notification email to the now active transcriber
         await emailService.sendTrainingCompletionEmail(updatedUser);
 
         res.status(200).json({
@@ -425,7 +399,6 @@ const completeTraining = async (req, res) => {
     }
 };
 
-// NEW: initializeTrainingPayment function (moved from paymentController.js)
 const initializeTrainingPayment = async (req, res, io) => {
     const { amount, email, paymentMethod = 'paystack', mobileNumber, fullName } = req.body;
     const traineeId = req.user.userId;
@@ -462,7 +435,7 @@ const initializeTrainingPayment = async (req, res, io) => {
             const amountInCentsKes = Math.round(amountKes * 100);
 
             const paystackResponse = await axios.post(
-                'https://paystack.co/transaction/initialize',
+                'https://api.paystack.co/transaction/initialize',
                 {
                     email: email,
                     amount: amountInCentsKes,
@@ -537,7 +510,6 @@ const initializeTrainingPayment = async (req, res, io) => {
     }
 };
 
-// NEW: verifyKorapayTrainingPayment function (moved from paymentController.js)
 const verifyKorapayTrainingPayment = async (req, res, io) => {
     const { reference } = req.body;
     const traineeId = req.user.userId;
@@ -659,6 +631,6 @@ module.exports = {
     uploadTrainingRoomAttachment,
     handleTrainingRoomAttachmentUpload,
     completeTraining,
-    initializeTrainingPayment, // NEW: Export initializeTrainingPayment
-    verifyKorapayTrainingPayment // NEW: Export verifyKorapayTrainingPayment
+    initializeTrainingPayment,
+    verifyKorapayTrainingPayment
 };
