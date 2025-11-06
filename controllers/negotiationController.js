@@ -1212,7 +1212,7 @@ const initializeNegotiationPayment = async (req, res, io) => {
             const amountInCentsKes = Math.round(amountKes * 100);
 
             const paystackResponse = await axios.post(
-                'https://paystack.co/transaction/initialize',
+                'https://api.paystack.co/transaction/initialize', // Corrected Paystack API endpoint
                 {
                     email: finalClientEmail,
                     amount: amountInCentsKes,
@@ -1257,29 +1257,30 @@ const initializeNegotiationPayment = async (req, res, io) => {
 
             const reference = `JOB-${finalJobId.substring(0, 8)}-${Date.now().toString(36)}`;
             
-            // FIX 1: Send amount in base units (e.g., 1 for USD 1.00)
-            const amountForKorapay = Math.round(parsedAmountUsd); 
+            // Convert amount to KES for KoraPay to enable mobile money options
+            const amountKes = convertUsdToKes(parsedAmountUsd);
+            const amountForKorapay = Math.round(amountKes); // KoraPay expects base units for KES
 
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
                 reference: reference,
-                amount: amountForKorapay, // FIXED: Sending amount in base units
-                currency: 'USD',
+                amount: amountForKorapay, 
+                currency: 'KES', // Changed to KES to enable mobile money
                 customer: {
                     name: req.user.full_name || 'Customer',
                     email: finalClientEmail,
                 },
                 notification_url: KORAPAY_WEBHOOK_URL,
-                channels: ['card', 'mobile_money'], // FIXED: Explicitly specify channels
+                channels: ['card', 'mobile_money'], // Explicitly specify channels
                 metadata: {
                     related_job_id: finalJobId,
-                    related_job_type: 'negotiation', // jobType is 'negotiation'
+                    related_job_type: 'negotiation',
                     client_id: clientId,
                     transcriber_id: transcriberId,
                     agreed_price_usd: agreedPriceUsd,
-                    currency_paid: 'USD',
+                    currency_paid: 'KES', // Updated to KES
                     exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
-                    amount_paid_usd: parsedAmountUsd
+                    amount_paid_kes: amountKes // Storing KES amount
                 }
             };
             
@@ -1324,7 +1325,7 @@ const verifyNegotiationPayment = async (req, res, io) => {
 
         if (paymentMethod === 'paystack') {
             const paystackResponse = await axios.get(
-                `https://paystack.co/transaction/verify/${reference}`,
+                `https://api.paystack.co/transaction/verify/${reference}`, // Corrected Paystack API endpoint
                 {
                     headers: {
                         Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
@@ -1334,7 +1335,7 @@ const verifyNegotiationPayment = async (req, res, io) => {
             );
 
             if (!paystackResponse.data.status || paystackResponse.data.data.status !== 'success') {
-                console.error('Paystack verification failed:', paystackResponse.data.data.gateway_response);
+                console.error('Paystack verification failed:ᐟ', paystackResponse.data.data.gateway_response);
                 return res.status(400).json({ error: paystackResponse.data.data.gateway_response || 'Payment verification failed.ᐟ' });
             }
             transaction = paystackResponse.data.data;
@@ -1355,11 +1356,16 @@ const verifyNegotiationPayment = async (req, res, io) => {
             );
 
             if (!korapayResponse.data.status || korapayResponse.data.data.status !== 'success') {
-                console.error('KoraPay verification failed:', korapayResponse.data.message || korapayResponse.data.errors);
+                console.error('KoraPay verification failed:ᐟ', korapayResponse.data.message || korapayResponse.data.errors);
                 return res.status(400).json({ error: korapayResponse.data.message || 'Payment verification failed with KoraPay.ᐟ' });
             }
             transaction = korapayResponse.data.data;
-            actualAmountPaidUsd = parseFloat((transaction.amount).toFixed(2)); // FIXED: Removed / 100 as amount is now in base units
+            // Calculate actualAmountPaidUsd based on the currency of the transaction
+            if (transaction.currency === 'KES') {
+                actualAmountPaidUsd = parseFloat((transaction.amount / EXCHANGE_RATE_USD_TO_KES).toFixed(2));
+            } else { // Assume USD if not KES, or handle other currencies as needed
+                actualAmountPaidUsd = parseFloat((transaction.amount).toFixed(2));
+            }
             metadataCurrencyPaid = transaction.currency;
             metadataExchangeRate = (metadataCurrencyPaid === 'USD') ? 1 : EXCHANGE_RATE_USD_TO_KES;
             
@@ -1379,7 +1385,7 @@ const verifyNegotiationPayment = async (req, res, io) => {
 
         const {
             related_job_id: metadataRelatedJobId,
-            related_job_type: metadataRelatedJobType, // This should be 'negotiation'
+            related_job_type: metadataRelatedJobType,
             client_id: metadataClientId,
             transcriber_id: metadataTranscriberIdRaw,
             agreed_price_usd: metadataAgreedPrice,
@@ -1391,12 +1397,12 @@ const verifyNegotiationPayment = async (req, res, io) => {
         const finalTranscriberId = (metadataTranscriberIdRaw === '' || metadataTranscriberIdRaw === undefined) ? null : metadataTranscriberIdRaw;
 
         if (metadataRelatedJobId !== relatedJobId || metadataRelatedJobType !== 'negotiation') {
-            console.error('Metadata job ID or type mismatch:', metadataRelatedJobId, relatedJobId, metadataRelatedJobType);
+            console.error('Metadata job ID or type mismatch:ᐟ', metadataRelatedJobId, relatedJobId, metadataRelatedJobType);
             return res.status(400).json({ error: 'Invalid transaction metadata (job ID or type mismatch).ᐟ' });
         }
 
         if (Math.round(actualAmountPaidUsd * 100) !== Math.round(metadataAgreedPrice * 100)) {
-            console.error('Payment verification amount mismatch. Transaction amount (USD):', actualAmountPaidUsd, 'Expected USD:', metadataAgreedPrice);
+            console.error('Payment verification amount mismatch. Transaction amount (USD):ᐟ', actualAmountPaidUsd, 'Expected USD:', metadataAgreedPrice);
             return res.status(400).json({ error: 'Invalid transaction metadata (amount mismatch). Payment charged a different amount than expected.ᐟ' });
         }
         
@@ -1463,7 +1469,7 @@ const verifyNegotiationPayment = async (req, res, io) => {
         }
 
         if (finalTranscriberId) {
-            await syncAvailabilityStatus(finalTranscriberId, null, relatedJobId); // Set current_job_id to the new job
+            await syncAvailabilityStatus(finalTranscriberId, null, relatedJobId);
         }
 
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', metadataClientId).single();
@@ -1525,6 +1531,6 @@ module.exports = {
     clientRejectCounter,
     clientCounterBack,
     markJobCompleteByClient,
-    initializeNegotiationPayment, // NEW: Export negotiation-specific payment initiation
-    verifyNegotiationPayment // NEW: Export negotiation-specific payment verification
+    initializeNegotiationPayment,
+    verifyNegotiationPayment
 };
