@@ -1256,18 +1256,21 @@ const initializeNegotiationPayment = async (req, res, io) => {
             }
 
             const reference = `JOB-${finalJobId.substring(0, 8)}-${Date.now().toString(36)}`;
-            const amountInCentsUsd = Math.round(parsedAmountUsd * 100);
+            
+            // FIX 1: Send amount in base units (e.g., 1 for USD 1.00)
+            const amountForKorapay = Math.round(parsedAmountUsd); 
 
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
                 reference: reference,
-                amount: amountInCentsUsd,
+                amount: amountForKorapay, // FIXED: Sending amount in base units
                 currency: 'USD',
                 customer: {
                     name: req.user.full_name || 'Customer',
                     email: finalClientEmail,
                 },
-                notification_url: KORAPAY_WEBHOOK_URL, 
+                notification_url: KORAPAY_WEBHOOK_URL,
+                channels: ['card', 'mobile_money'], // FIXED: Explicitly specify channels
                 metadata: {
                     related_job_id: finalJobId,
                     related_job_type: 'negotiation', // jobType is 'negotiation'
@@ -1356,7 +1359,7 @@ const verifyNegotiationPayment = async (req, res, io) => {
                 return res.status(400).json({ error: korapayResponse.data.message || 'Payment verification failed with KoraPay.ᐟ' });
             }
             transaction = korapayResponse.data.data;
-            actualAmountPaidUsd = parseFloat((transaction.amount / 100).toFixed(2));
+            actualAmountPaidUsd = parseFloat((transaction.amount).toFixed(2)); // FIXED: Removed / 100 as amount is now in base units
             metadataCurrencyPaid = transaction.currency;
             metadataExchangeRate = (metadataCurrencyPaid === 'USD') ? 1 : EXCHANGE_RATE_USD_TO_KES;
             
