@@ -2,19 +2,17 @@ const supabase = require('..//database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-// UPDATED: Import specific email functions for clarity and separation
 const {
     sendNewNegotiationRequestEmail,
     sendTranscriberCounterOfferEmail,
     sendClientCounterBackEmail,
     sendNegotiationAcceptedEmail,
-    sendPaymentConfirmationEmail, // Still used for general payment confirmation email
+    sendPaymentConfirmationEmail,
     sendNegotiationRejectedEmail,
     sendJobCompletedEmailToTranscriber,
     sendJobCompletedEmailToClient
 } = require('..//emailService');
 
-// NEW: Import payment-related modules and constants
 const axios = require('axios');
 const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
 const http = require('http');
@@ -25,28 +23,25 @@ const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
 const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY;
 const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1';
-const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook'; // Keeping this general webhook URL for consistency, though specific job types might use it differently
+const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook';
 
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
 
-// NEW: Import syncAvailabilityStatus from transcriberController
 const { syncAvailabilityStatus } = require('./transcriberController');
 
-const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB limit
+const MAX_FILE_SIZE = 500 * 1024 * 1024;
 
-// Helper function to calculate the next Friday's date
 const getNextFriday = () => {
     const today = new Date();
-    const dayOfWeek = today.getDay(); // Sunday - 0, Monday - 1, ..., Saturday - 6
+    const dayOfWeek = today.getDay();
     const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
     const nextFriday = new Date(today);
     nextFriday.setDate(today.getDate() + daysUntilFriday);
-    nextFriday.setHours(23, 59, 59, 999); // Set to end of day Friday
+    nextFriday.setHours(23, 59, 59, 999);
     return nextFriday.toISOString();
 };
 
-// Multer configuration for negotiation files (used by clientCounterBack)
 const negotiationFileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = 'uploads/negotiation_files';
@@ -62,20 +57,18 @@ const negotiationFileStorage = multer.diskStorage({
 });
 
 const negotiationFileFilter = (req, file, cb) => {
-  // Allowed MIME types for negotiation attachments
   const allowedTypes = [
     'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/mp4', 'audio/m4a', 'audio/ogg',
     'video/mp4', 'video/webm', 'video/ogg',
     'application/pdf',
-    'application/msword', // .doc
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'text/plain',
     'image/jpeg', 'image/jpg', 'image/png', 'image/gif'
   ];
   if (allowedTypes.includes(file.mimetype)) {
-    cb(null, true); // Accept the file
+    cb(null, true);
   } else {
-    // Reject the file and provide a MulterError for consistent handling in the route
     cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'Only audio, video, PDF, DOC, DOCX, TXT, and image files are allowed for negotiation attachments!'), false);
   }
 };
@@ -84,14 +77,13 @@ const uploadNegotiationFiles = multer({
   storage: negotiationFileStorage,
   fileFilter: negotiationFileFilter,
   limits: {
-    fileSize: MAX_FILE_SIZE // 500MB limit
+    fileSize: MAX_FILE_SIZE
   }
-}).single('negotiationFile'); // Expecting a single file with the field name 'negotiationFile'
+}).single('negotiationFile');
 
-// Multer configuration for temporary file uploads (used by /api/negotiations/temp-upload)
 const tempNegotiationFileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = 'uploads/temp_negotiation_files'; // Separate directory for temporary files
+    const uploadDir = 'uploads/temp_negotiation_files';
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
@@ -105,11 +97,11 @@ const tempNegotiationFileStorage = multer.diskStorage({
 
 const uploadTempNegotiationFile = multer({
   storage: tempNegotiationFileStorage,
-  fileFilter: negotiationFileFilter, // Reuse the same file filter
+  fileFilter: negotiationFileFilter,
   limits: {
-    fileSize: MAX_FILE_SIZE // 500MB limit
+    fileSize: MAX_FILE_SIZE
   }
-}).single('negotiationFile'); // Expecting a single file with the field name 'negotiationFile'
+}).single('negotiationFile');
 
 
 const getAvailableTranscribers = async (req, res) => {
@@ -229,7 +221,6 @@ const getAvailableTranscribers = async (req, res) => {
   }
 };
 
-// NEW: Endpoint for temporary file upload
 const tempUploadNegotiationFile = async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded or file type not allowed.ᐟ' });
@@ -1013,7 +1004,6 @@ const clientCounterBack = async (req, res, io) => {
     }
 };
 
-// NEW: Function to allow a client to mark a job as complete
 const markJobCompleteByClient = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
@@ -1140,14 +1130,13 @@ const markJobCompleteByClient = async (req, res, io) => {
     }
 };
 
-// NEW: initializeNegotiationPayment function (moved from paymentController.js)
 const initializeNegotiationPayment = async (req, res, io) => {
     console.log('[initializeNegotiationPayment] Received request body:', req.body);
 
     const { negotiationId, amount, email, paymentMethod = 'paystack', mobileNumber } = req.body;
     const clientId = req.user.userId;
 
-    const finalJobId = negotiationId; // For negotiations, the jobId is the negotiationId
+    const finalJobId = negotiationId;
     const finalClientEmail = email;
 
     console.log(`[initializeNegotiationPayment] Destructured parameters - negotiationId: ${finalJobId}, amount: ${amount}, clientEmail: ${finalClientEmail}, clientId: ${clientId}, paymentMethod: ${paymentMethod}, mobileNumber: ${mobileNumber}`);
@@ -1162,11 +1151,11 @@ const initializeNegotiationPayment = async (req, res, io) => {
     }
 
     if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
-        console.error('[initializeNegotiationPayment] PAYSTACK_SECRET_KEY is not set.');
+        console.error('[initializeNegotiationPayment] PAYSTACK_SECRET_KEY is not set.ᐟ');
         return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
     }
     if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
-        console.error('[initializeNegotiationPayment] KORAPAY_SECRET_KEY is not set.');
+        console.error('[initializeNegotiationPayment] KORAPAY_SECRET_KEY is not set.ᐟ');
         return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
     }
 
@@ -1182,7 +1171,6 @@ const initializeNegotiationPayment = async (req, res, io) => {
         let agreedPriceUsd;
         let jobStatus;
 
-        // Fetch negotiation details for this job type
         const { data, error } = await supabase
             .from('negotiations')
             .select('id, client_id, transcriber_id, agreed_price_usd, status')
@@ -1212,12 +1200,12 @@ const initializeNegotiationPayment = async (req, res, io) => {
             const amountInCentsKes = Math.round(amountKes * 100);
 
             const paystackResponse = await axios.post(
-                'https://api.paystack.co/transaction/initialize', // Corrected Paystack API endpoint
+                'https://api.paystack.co/transaction/initialize',
                 {
                     email: finalClientEmail,
                     amount: amountInCentsKes,
                     reference: `${finalJobId}-${Date.now()}`,
-                    callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${finalJobId}&jobType=negotiation`, // jobType is 'negotiation'
+                    callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${finalJobId}&jobType=negotiation`,
                     currency: 'KES',
                     channels: ['mobile_money', 'card', 'bank_transfer', 'pesalink'],
                     metadata: {
@@ -1241,7 +1229,7 @@ const initializeNegotiationPayment = async (req, res, io) => {
             );
 
             if (!paystackResponse.data.status) {
-                console.error('[initializeNegotiationPayment] Paystack initialization failed:', paystackResponse.data.message);
+                console.error('[initializeNegotiationPayment] Paystack initialization failed:ᐟ', paystackResponse.data.message);
                 return res.status(500).json({ error: paystackResponse.data.message || 'Failed to initialize payment with Paystack.ᐟ' });
             }
 
@@ -1251,36 +1239,35 @@ const initializeNegotiationPayment = async (req, res, io) => {
             });
         } else if (paymentMethod === 'korapay') {
             if (!KORAPAY_PUBLIC_KEY) {
-                console.error('[initializeNegotiationPayment] KORAPAY_PUBLIC_KEY is not set for KoraPay frontend integration.');
+                console.error('[initializeNegotiationPayment] KORAPAY_PUBLIC_KEY is not set for KoraPay frontend integration.ᐟ');
                 return res.status(500).json({ error: 'KoraPay public key not configured.ᐟ' });
             }
 
             const reference = `JOB-${finalJobId.substring(0, 8)}-${Date.now().toString(36)}`;
             
-            // Convert amount to KES for KoraPay to enable mobile money options
             const amountKes = convertUsdToKes(parsedAmountUsd);
-            const amountForKorapay = Math.round(amountKes); // KoraPay expects base units for KES
+            const amountForKorapay = Math.round(amountKes);
 
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
                 reference: reference,
                 amount: amountForKorapay, 
-                currency: 'KES', // Changed to KES to enable mobile money
+                currency: 'KES',
                 customer: {
                     name: req.user.full_name || 'Customer',
                     email: finalClientEmail,
                 },
                 notification_url: KORAPAY_WEBHOOK_URL,
-                channels: ['card', 'mobile_money'], // Explicitly specify channels
+                // Removed explicit channels array to let KoraPay determine defaults for KES.
                 metadata: {
                     related_job_id: finalJobId,
                     related_job_type: 'negotiation',
                     client_id: clientId,
                     transcriber_id: transcriberId,
                     agreed_price_usd: agreedPriceUsd,
-                    currency_paid: 'KES', // Updated to KES
+                    currency_paid: 'KES',
                     exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
-                    amount_paid_kes: amountKes // Storing KES amount
+                    amount_paid_kes: amountKes
                 }
             };
             
@@ -1296,12 +1283,17 @@ const initializeNegotiationPayment = async (req, res, io) => {
     }
 };
 
-// NEW: verifyNegotiationPayment function (extracted and adapted from paymentController.js)
 const verifyNegotiationPayment = async (req, res, io) => {
-    const { reference } = req.params;
-    const { relatedJobId, paymentMethod = 'paystack' } = req.query; // jobType is implicitly 'negotiation'
+    console.log('[verifyNegotiationPayment] Received req.params:', req.params);
+    console.log('[verifyNegotiationPayment] Received req.query:', req.query);
+
+    const { negotiationId, reference } = req.params; // Correctly extract from req.params
+    const { paymentMethod = 'paystack' } = req.query;
+
+    const relatedJobId = negotiationId; // Assign negotiationId from params to relatedJobId
 
     if (!reference || !relatedJobId) {
+        console.error('[verifyNegotiationPayment] Validation failed: Missing reference or relatedJobId. Reference:', reference, 'relatedJobId:', relatedJobId);
         return res.status(400).json({ error: 'Payment reference and negotiation ID are required for verification.ᐟ' });
     }
     if (!['paystack', 'korapay'].includes(paymentMethod)) {
@@ -1309,11 +1301,11 @@ const verifyNegotiationPayment = async (req, res, io) => {
         return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
     }
     if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
-        console.error('PAYSTACK_SECRET_KEY is not set.');
+        console.error('PAYSTACK_SECRET_KEY is not set.ᐟ');
         return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
     }
     if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
-        console.error('KORAPAY_SECRET_KEY is not set.');
+        console.error('KORAPAY_SECRET_KEY is not set.ᐟ');
         return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
     }
 
@@ -1325,7 +1317,7 @@ const verifyNegotiationPayment = async (req, res, io) => {
 
         if (paymentMethod === 'paystack') {
             const paystackResponse = await axios.get(
-                `https://api.paystack.co/transaction/verify/${reference}`, // Corrected Paystack API endpoint
+                `https://api.paystack.co/transaction/verify/${reference}`,
                 {
                     headers: {
                         Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
@@ -1360,10 +1352,9 @@ const verifyNegotiationPayment = async (req, res, io) => {
                 return res.status(400).json({ error: korapayResponse.data.message || 'Payment verification failed with KoraPay.ᐟ' });
             }
             transaction = korapayResponse.data.data;
-            // Calculate actualAmountPaidUsd based on the currency of the transaction
             if (transaction.currency === 'KES') {
                 actualAmountPaidUsd = parseFloat((transaction.amount / EXCHANGE_RATE_USD_TO_KES).toFixed(2));
-            } else { // Assume USD if not KES, or handle other currencies as needed
+            } else {
                 actualAmountPaidUsd = parseFloat((transaction.amount).toFixed(2));
             }
             metadataCurrencyPaid = transaction.currency;
