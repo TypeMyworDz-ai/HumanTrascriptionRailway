@@ -21,7 +21,9 @@ const {
   clientRejectCounter,
   clientCounterBack,
   markJobCompleteByClient,
-  markNegotiationJobCompleteByTranscriber
+  markNegotiationJobCompleteByTranscriber,
+  initializeNegotiationPayment, // NEW: Import negotiation-specific payment initiation
+  verifyNegotiationPayment // NEW: Import negotiation-specific payment verification
 } = require('../controllers/negotiationController');
 
 // Import admin controller functions
@@ -60,15 +62,11 @@ const {
     handleChatAttachmentUpload
 } = require('../controllers/chatController');
 
-// NEW: Import payment controller functions including the new KoraPay verification
+// MODIFIED: Import ONLY general payment history functions from paymentController.js
 const {
-    initializePayment,
-    verifyPayment,
     getTranscriberPaymentHistory,
     getClientPaymentHistory,
     getAllPaymentHistoryForAdmin,
-    initializeTrainingPayment,
-    verifyKorapayTrainingPayment, // NEW: Import the new KoraPay training verification function
     getTranscriberUpcomingPayoutsForAdmin,
     markPaymentAsPaidOut
 } = require('../controllers/paymentController');
@@ -94,7 +92,9 @@ const {
     completeDirectUploadJob,
     clientCompleteDirectUploadJob,
     getAllDirectUploadJobsForAdmin,
-    handleQuoteCalculationRequest
+    handleQuoteCalculationRequest,
+    initializeDirectUploadPayment, // NEW: Import direct upload-specific payment initiation
+    verifyDirectUploadPayment // NEW: Import direct upload-specific payment verification
 } = require('../controllers/directUploadController');
 
 // NEW: Import training controller functions
@@ -108,7 +108,9 @@ const {
     sendTraineeTrainingRoomMessage,
     uploadTrainingRoomAttachment,
     handleTrainingRoomAttachmentUpload,
-    completeTraining
+    completeTraining,
+    initializeTrainingPayment, // NEW: Import training-specific payment initiation
+    verifyKorapayTrainingPayment // NEW: Import training-specific KoraPay verification
 } = require('../controllers/trainingController');
 
 // Import multer for direct use in this file for error handling
@@ -406,13 +408,12 @@ module.exports = (io) => {
   router.put(
     '/negotiations/:negotiationId/client/counter-back',
     authMiddleware,
-    (req, res, next) => { // Custom middleware to check user type
+    (req, res, next) => {
       if (req.user.userType !== 'client') {
-        // If not authorized, clean up any potential files uploaded by Multer before this point
-        if (req.file) { // For single file upload
+        if (req.file) {
           fs.unlink(req.file.path, (err) => { if (err) console.error("Error deleting unauthorized temp file:", err); });
         }
-        if (req.files && typeof req.files === 'object') { // For multiple files
+        if (req.files && typeof req.files === 'object') {
           for (const key in req.files) {
             req.files[key].forEach(file => {
               fs.unlink(file.path, (err) => { if (err) console.error("Error deleting unauthorized temp file:", err); });
@@ -423,11 +424,11 @@ module.exports = (io) => {
       }
       next();
     },
-    uploadNegotiationFiles, // Multer middleware
-    (req, res, next) => { // Final handler
+    uploadNegotiationFiles,
+    (req, res, next) => {
       clientCounterBack(req, res, io);
     },
-    multerErrorHandler // Multer error handler
+    multerErrorHandler
   );
 
 
@@ -560,7 +561,7 @@ module.exports = (io) => {
 
   router.post('/user/chat/send-message', authMiddleware, (req, res, next) => {
       if (req.user.userType === 'admin') {
-          return res.status(403).json({ error: 'Admins should use their dedicated message sending route.' });
+          return res.status(403).json({ error: 'Admins should use their dedicated message sending route.&#x27;' });
       }
       sendUserDirectMessage(req, res, io);
   });
@@ -614,35 +615,49 @@ module.exports = (io) => {
       getAllDisputesForAdmin(req, res, io);
   });
 
-  // --- NEW: Payment Routes ---
-  router.post('/payment/initialize', authMiddleware, (req, res, next) => {
-    if (req.user.userType !== 'client' && req.user.userType !== 'trainee') {
-      return res.status(403).json({ error: 'Access denied. Only clients or trainees can initiate payments.' });
+  // --- MODIFIED: Dedicated Payment Routes for each job type ---
+
+  // Negotiation Payment Routes
+  router.post('/negotiations/:negotiationId/payment/initialize', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+      return res.status(403).json({ error: 'Access denied. Only clients can initiate negotiation payments.' });
     }
-    initializePayment(req, res, io);
+    initializeNegotiationPayment(req, res, io);
   });
 
-  // NEW: Route for initializing training payment (this is now active)
-  router.post('/payment/initialize-training', authMiddleware, (req, res, next) => {
+  router.get('/negotiations/:negotiationId/payment/verify/:reference', authMiddleware, (req, res, next) => {
+    verifyNegotiationPayment(req, res, io);
+  });
+
+  // Direct Upload Payment Routes
+  router.post('/direct-uploads/:jobId/payment/initialize', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'client') {
+      return res.status(403).json({ error: 'Access denied. Only clients can initiate direct upload payments.' });
+    }
+    initializeDirectUploadPayment(req, res, io);
+  });
+
+  router.get('/direct-uploads/:jobId/payment/verify/:reference', authMiddleware, (req, res, next) => {
+    verifyDirectUploadPayment(req, res, io);
+  });
+
+  // Training Payment Routes
+  router.post('/training/payment/initialize', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'trainee') {
           return res.status(403).json({ error: 'Access denied. Only trainees can initiate training payments.' });
       }
       initializeTrainingPayment(req, res, io);
   });
 
-  router.get('/payment/verify/:reference', authMiddleware, (req, res, next) => {
-    verifyPayment(req, res, io);
-  });
-
-  // NEW: KoraPay specific route for verifying training payments
-  router.post('/payment/verify-korapay-training', authMiddleware, (req, res, next) => {
+  router.post('/training/payment/verify-korapay', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'trainee') {
           return res.status(403).json({ error: 'Access denied. Only trainees can verify KoraPay training payments.' });
       }
       verifyKorapayTrainingPayment(req, res, io);
   });
 
-  // --- NEW: Transcriber Payment History Route ---
+
+  // --- General Payment History Routes (still from paymentController) ---
   router.get('/transcriber/payments', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'transcriber') {
       return res.status(403).json({ error: 'Access denied. Only transcribers can view their payment history.' });
@@ -650,7 +665,6 @@ module.exports = (io) => {
     getTranscriberPaymentHistory(req, res, next);
   });
 
-  // NEW: Client Payment History Route
   router.get('/client/payments', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'client') {
       return res.status(403).json({ error: 'Access denied. Only clients can view their payment history.' });
@@ -658,7 +672,6 @@ module.exports = (io) => {
     getClientPaymentHistory(req, res, io);
   });
 
-  // NEW: Admin Payment History Route
   router.get('/admin/payments', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only admins can view all payment history.' });
@@ -666,7 +679,6 @@ module.exports = (io) => {
     getAllPaymentHistoryForAdmin(req, res, io);
   });
   
-  // NEW: Admin route to get a specific transcriber's upcoming payouts
   router.get('/admin/transcriber/:transcriberId/upcoming-payouts', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only admins can view transcriber upcoming payouts.' });
@@ -674,7 +686,6 @@ module.exports = (io) => {
     getTranscriberUpcomingPayoutsForAdmin(req, res, io);
   });
 
-  // NEW: Admin route to mark a payment as 'paid out'
   router.put('/admin/payments/:paymentId/mark-paid', authMiddleware, (req, res, next) => {
     if (req.user.userType !== 'admin') {
       return res.status(403).json({ error: 'Access denied. Only admins can mark payments as paid out.' });

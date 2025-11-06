@@ -1,24 +1,35 @@
-const supabase = require('../database');
+const supabase = require('..//database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 // UPDATED: Import specific email functions for clarity and separation
 const {
     sendNewNegotiationRequestEmail,
-    sendTranscriberCounterOfferEmail, // NEW: For transcriber countering
-    sendClientCounterBackEmail,   // NEW: For client countering back
+    sendTranscriberCounterOfferEmail,
+    sendClientCounterBackEmail,
     sendNegotiationAcceptedEmail,
-    sendPaymentConfirmationEmail,
+    sendPaymentConfirmationEmail, // Still used for general payment confirmation email
     sendNegotiationRejectedEmail,
-    sendTrainingCompletionEmail,
-    sendPayoutConfirmationEmail,
-    sendTranscriberTestSubmittedEmail,
-    sendTranscriberTestResultEmail,
-    sendWelcomeEmail,
-    sendJobCompletedEmailToTranscriber, // Ensure this is imported if used
-    sendJobCompletedEmailToClient // Ensure this is imported if used
-} = require('../emailService');
-// Removed import for updateAverageRating as client rating is being removed.
+    sendJobCompletedEmailToTranscriber,
+    sendJobCompletedEmailToClient
+} = require('..//emailService');
+
+// NEW: Import payment-related modules and constants
+const axios = require('axios');
+const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
+const http = require('http');
+const https = require('https');
+
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
+const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
+const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY;
+const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1';
+const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook'; // Keeping this general webhook URL for consistency, though specific job types might use it differently
+
+const httpAgent = new http.Agent({ family: 4 });
+const httpsAgent = new https.Agent({ family: 4 });
+
 // NEW: Import syncAvailabilityStatus from transcriberController
 const { syncAvailabilityStatus } = require('./transcriberController');
 
@@ -105,8 +116,6 @@ const getAvailableTranscribers = async (req, res) => {
   try {
     console.log('Fetching available transcribers...');
 
-    // FIX: Select all relevant transcriber profile fields directly from the 'users' table
-    // REMOVED: is_available from select and query
     const { data: transcribers, error } = await supabase
       .from('users')
       .select(`
@@ -124,31 +133,27 @@ const getAvailableTranscribers = async (req, res) => {
         transcriber_paypal_email
       `)
       .eq('user_type', 'transcriber')
-      .eq('is_online', true) // Must be online (logged in and on website)
-      .is('current_job_id', null) // Must not have an active/hired job
-      .eq('transcriber_status', 'active_transcriber'); // Ensure their transcriber status is active
+      .eq('is_online', true)
+      .is('current_job_id', null)
+      .eq('transcriber_status', 'active_transcriber');
 
     if (error) {
         console.error('Supabase error fetching available transcribers:', error);
         throw error;
     }
 
-    // Filter out any users who are 'trainee' level, even if they somehow got into this list
     const filteredTranscribers = (transcribers || []).filter(
       (user) => user.transcriber_user_level !== 'trainee'
     );
 
-    // Map the data to the expected frontend format
     let availableTranscribers = filteredTranscribers
       .map(user => ({
         id: user.id,
-        // Transcriber profile data from 'users' table
         status: user.transcriber_status,
         user_level: user.transcriber_user_level,
         is_online: user.is_online,
-        // REMOVED: is_available
-        average_rating: user.transcriber_average_rating || 0.0, // Default to 0.0 if null
-        completed_jobs: user.transcriber_completed_jobs || 0, // Default to 0 if null
+        average_rating: user.transcriber_average_rating || 0.0,
+        completed_jobs: user.transcriber_completed_jobs || 0,
         mpesa_number: user.transcriber_mpesa_number,
         paypal_email: user.paypal_email,
         users: {
@@ -159,10 +164,8 @@ const getAvailableTranscribers = async (req, res) => {
         }
       }));
 
-    // Sort transcribers by rating in descending order
     availableTranscribers.sort((a, b) => b.average_rating - a.average_rating);
 
-    // Development-specific: Create sample data if no transcribers are found
     if (availableTranscribers.length === 0 && process.env.NODE_ENV === 'development') {
       console.log('No transcribers found, creating sample data...');
 
@@ -172,12 +175,11 @@ const getAvailableTranscribers = async (req, res) => {
         { full_name: 'Grace Akinyi', email: 'grace@example.com', password_hash: '$2b$10$sample.hash.for.demo', user_type: 'transcriber', is_online: true, current_job_id: null, transcriber_status: 'active_transcriber', transcriber_user_level: 'transcriber', transcriber_average_rating: 4.8, transcriber_completed_jobs: 20 }
       ];
 
-      // Insert sample users (these will go into the 'users' table directly now)
       const { data: insertedUsers, error: insertUserError } = await supabase
         .from('users')
         .insert(sampleUsers.map(u => ({
             ...u,
-            is_active: true, // Assuming active by default for sample users
+            is_active: true,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
         })))
@@ -186,8 +188,6 @@ const getAvailableTranscribers = async (req, res) => {
       if (insertUserError) {
         console.error('Error creating sample users for transcribers:', insertUserError);
       } else {
-        // Create corresponding transcriber marker profiles in the 'transcribers' table (if still needed)
-        // Note: The 'transcribers' table might be deprecated if all transcriber data moves to 'users'
         const sampleTranscriberMarkers = insertedUsers.map(user => ({ id: user.id }));
         const { error: insertProfileError } = await supabase
             .from('transcribers')
@@ -196,7 +196,6 @@ const getAvailableTranscribers = async (req, res) => {
         if (insertProfileError) {
           console.error('Error creating sample transcriber marker profiles:', insertProfileError);
         } else {
-          // Re-fetch and format the newly created sample data from the 'users' table
           availableTranscribers = insertedUsers.map(user => ({
             id: user.id,
             status: user.transcriber_status,
@@ -232,15 +231,12 @@ const getAvailableTranscribers = async (req, res) => {
 
 // NEW: Endpoint for temporary file upload
 const tempUploadNegotiationFile = async (req, res) => {
-    // This function will be called by the `uploadTempNegotiationFile` multer middleware
-    // The file will be available in req.file if upload is successful
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded or file type not allowed.ᐟ' });
     }
 
-    // Return the URL or filename of the temporarily stored file
-    const fileUrl = `/uploads/temp_negotiation_files/${req.file.filename}`; // Construct a URL for the frontend
-    res.status(200).json({ message: 'File uploaded temporarily.ᐟ', fileUrl: req.file.filename }); // Send back filename, frontend will construct full path
+    const fileUrl = `/uploads/temp_negotiation_files/${req.file.filename}`;
+    res.status(200).json({ message: 'File uploaded temporarily.ᐟ', fileUrl: req.file.filename });
 };
 
 
@@ -249,19 +245,15 @@ const createNegotiation = async (req, res, next, io) => {
     const { transcriber_id, requirements, proposed_price_usd, deadline_hours, negotiation_file_url } = req.body;
     const clientId = req.user.userId;
 
-    // Basic validation for required fields
     if (!transcriber_id || !requirements || !proposed_price_usd || !deadline_hours || !negotiation_file_url) {
       return res.status(400).json({ error: 'All fields (transcriber_id, requirements, proposed_price_usd, deadline_hours, and negotiation_file_url) are required.ᐟ' });
     }
 
-    // Check if the temporary file exists on the server
     const tempFilePath = path.join('uploads/temp_negotiation_files', negotiation_file_url);
     if (!fs.existsSync(tempFilePath)) {
         return res.status(400).json({ error: 'Uploaded file not found on server. Please re-upload the file.ᐟ' });
     }
 
-    // FIX: Check transcriber's availability and status directly from the 'users' table
-    // REMOVED: is_available from select and query
     const { data: transcriberUser, error: transcriberError } = await supabase
       .from('users')
       .select(`
@@ -277,33 +269,30 @@ const createNegotiation = async (req, res, next, io) => {
       .eq('user_type', 'transcriber')
       .eq('is_online', true)
       .is('current_job_id', null)
-      .eq('transcriber_status', 'active_transcriber') // Check transcriber_status from 'users'
+      .eq('transcriber_status', 'active_transcriber')
       .single();
 
     if (transcriberError || !transcriberUser) {
-      // Clean up the temporary file if the transcriber is not found or not available
       if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
       }
       console.error('createNegotiation: Transcriber not found or not available. Supabase Error:', transcriberError);
       return res.status(404).json({ error: 'Transcriber not found, not online, or not available for new jobs.ᐟ' });
     }
-    // REMOVED: Additional checks based on transcriber.is_available as it's removed
     if (transcriberUser.current_job_id) {
         if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
         return res.status(400).json({ error: 'Transcriber is currently busy with an active job.ᐟ' });
     }
 
-    // Check if a pending negotiation already exists between this client and transcriber
     const { data: existingNegotiation, error: existingNegError } = await supabase
       .from('negotiations')
       .select('id')
       .eq('client_id', clientId)
       .eq('transcriber_id', transcriber_id)
-      .eq('status', 'pending') // Only check for pending negotiations
+      .eq('status', 'pending')
       .single();
 
-    if (existingNegError && existingNegError.code !== 'PGRST116') { // PGRST116 means "No rows found"
+    if (existingNegError && existingNegError.code !== 'PGRST116') {
         console.error('createNegotiation: Supabase error checking existing negotiation:', existingNegError);
         if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
@@ -311,24 +300,20 @@ const createNegotiation = async (req, res, next, io) => {
         return res.status(500).json({ error: existingNegError.message });
     }
     if (existingNegotiation) {
-      // Clean up file if a pending negotiation already exists
       if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
       return res.status(400).json({ error: 'You already have a pending negotiation with this transcriber. Please wait for their response or cancel the existing one.ᐟ' });
     }
 
-    // Move the temporary file to its permanent location
     const permanentUploadDir = 'uploads/negotiation_files';
     if (!fs.existsSync(permanentUploadDir)) {
       fs.mkdirSync(permanentUploadDir, { recursive: true });
     }
     const permanentFilePath = path.join(permanentUploadDir, negotiation_file_url);
-    fs.renameSync(tempFilePath, permanentFilePath); // Atomically move the file
+    fs.renameSync(tempFilePath, permanentFilePath);
 
-    // Calculate due_date
     const createdAt = new Date();
-    const dueDate = new Date(createdAt.getTime() + deadline_hours * 60 * 60 * 1000); // Add hours to current time
+    const dueDate = new Date(createdAt.getTime() + deadline_hours * 60 * 60 * 1000);
 
-    // Insert the new negotiation request
     const { data, error: insertError } = await supabase
       .from('negotiations')
       .insert([
@@ -349,7 +334,6 @@ const createNegotiation = async (req, res, next, io) => {
 
     if (insertError) {
       console.error('createNegotiation: Supabase error inserting new negotiation:', insertError);
-      // Clean up the moved file if insertion fails
       if (fs.existsSync(permanentFilePath)) {
         fs.unlinkSync(permanentFilePath);
       }
@@ -358,7 +342,6 @@ const createNegotiation = async (req, res, next, io) => {
 
     const newNegotiation = data;
 
-    // Emit a real-time event to the transcriber
     if (io) {
       io.to(transcriber_id).emit('new_negotiation_request', {
         negotiationId: newNegotiation.id,
@@ -370,12 +353,10 @@ const createNegotiation = async (req, res, next, io) => {
       console.log(`Emitted 'new_negotiation_request' to transcriber ${transcriber_id}`);
     }
 
-    // Send an email notification to the transcriber
     const clientDetailsForEmail = {
         full_name: req.user.full_name,
         email: req.user.email
     };
-    // FIX: Directly use transcriberUser which is already fetched and is the object
     const transcriberDetailsForEmail = {
         full_name: transcriberUser.full_name,
         email: transcriberUser.email
@@ -402,7 +383,6 @@ const getClientNegotiations = async (req, res) => {
     const clientId = req.user.userId;
     console.log(`Fetching client negotiations for client ID: ${clientId}`);
 
-    // FIX: Fetch negotiations for the client, joining with transcriber details from 'users' table
     const { data: negotiations, error: negotiationsError } = await supabase
       .from('negotiations')
       .select(`
@@ -444,26 +424,22 @@ const getClientNegotiations = async (req, res) => {
       });
     }
 
-    // Process negotiations to format transcriber data cleanly
     const negotiationsWithTranscribers = negotiations.map(negotiation => {
         const { transcriber, ...rest } = negotiation;
 
-        // Safely access transcriber profile data from the 'users' table
-        const transcriberProfileData = transcriber || {}; // Transcriber object is directly from 'users' now
+        const transcriberProfileData = transcriber || {};
         console.log(`[getClientNegotiations] Processing negotiation ${negotiation.id}: Transcriber profile data:`, transcriberProfileData);
 
         return {
             ...rest,
-            // CHANGED: Use transcriber for the 'transcriber_info' key expected by the frontend
-            transcriber_info: transcriber ? { // This 'transcriber_info' key is for frontend consistency
+            transcriber_info: transcriber ? {
                 id: transcriber.id,
                 full_name: transcriber.full_name,
                 email: transcriber.email,
-                // Use new column names from 'users' table
-                transcriber_average_rating: transcriberProfileData.transcriber_average_rating || 0.0, // Corrected prop name
-                transcriber_completed_jobs: transcriberProfileData.transcriber_completed_jobs || 0, // Corrected prop name
+                transcriber_average_rating: transcriberProfileData.transcriber_average_rating || 0.0,
+                transcriber_completed_jobs: transcriberProfileData.transcriber_completed_jobs || 0,
             } : {
-                id: rest.transcriber_id, // Use rest.transcriber_id if transcriber object is null
+                id: rest.transcriber_id,
                 full_name: 'Unknown Transcriber',
                 transcriber_average_rating: 0.0,
                 transcriber_completed_jobs: 0
@@ -471,7 +447,7 @@ const getClientNegotiations = async (req, res) => {
         };
     });
 
-    console.log('[getClientNegotiations] Formatted negotiations sent to frontend:', negotiationsWithTranscribers.map(n => ({ id: n.id, transcriberRating: n.transcriber_info.transcriber_average_rating, transcriberJobs: n.transcriber_info.transcriber_completed_jobs, dueDate: n.due_date, status: n.status }))); // FIX: Log client_average_rating, ADDED status
+    console.log('[getClientNegotiations] Formatted negotiations sent to frontend:', negotiationsWithTranscribers.map(n => ({ id: n.id, transcriberRating: n.transcriber_info.transcriber_average_rating, transcriberJobs: n.transcriber_info.transcriber_completed_jobs, dueDate: n.due_date, status: n.status })));
     res.json({
       message: 'Negotiations retrieved successfully',
       negotiations: negotiationsWithTranscribers
@@ -543,29 +519,28 @@ const getTranscriberNegotiations = async (req, res) => {
       });
     }
 
-    // Process negotiations to format client and transcriber data cleanly
     const negotiationsWithClients = negotiations.map(negotiation => {
-        const { client, transcriber, ...rest } = negotiation; // Destructure client and transcriber data from join
+        const { client, transcriber, ...rest } = negotiation;
 
         return {
-            ...rest, // All negotiation details
-            client_info: client ? { // Client data from 'users' table
+            ...rest,
+            client_info: client ? {
                 id: client.id,
                 full_name: client.full_name,
                 email: client.email,
                 phone: client.phone,
-                client_average_rating: client.client_average_rating || 0.0, // FIX: Default to 0.0 for client_average_rating
+                client_average_rating: client.client_average_rating || 0.0,
                 client_completed_jobs: client.client_completed_jobs || 0,
                 client_comment: client.client_comment || null,
-            } : { // Fallback if client data is missing
+            } : {
                 id: negotiation.client_id,
                 full_name: 'Unknown Client',
                 email: 'unknown@example.com',
-                client_average_rating: 0.0, // FIX: Default to 0.0 for client_average_rating
+                client_average_rating: 0.0,
                 client_completed_jobs: 0,
                 client_comment: null,
             },
-            transcriber_info: transcriber ? { // Transcriber data from 'users' table
+            transcriber_info: transcriber ? {
                 id: transcriber.id,
                 full_name: transcriber.full_name,
                 email: transcriber.email,
@@ -576,11 +551,11 @@ const getTranscriberNegotiations = async (req, res) => {
                 completed_jobs: transcriber.transcriber_completed_jobs || 0,
                 mpesa_number: transcriber.transcriber_mpesa_number,
                 paypal_email: transcriber.transcriber_paypal_email,
-            } : null // Should not be null if query is correct for transcriber's own list
+            } : null
         };
     });
 
-    console.log('[getTranscriberNegotiations] Formatted negotiations sent to frontend:ᐟ', negotiationsWithClients.map(n => ({ id: n.id, clientRating: n.client_info.client_average_rating, clientJobs: n.client_info.client_completed_jobs, dueDate: n.due_date, status: n.status }))); // FIX: Log client_average_rating, ADDED status
+    console.log('[getTranscriberNegotiations] Formatted negotiations sent to frontend:ᐟ', negotiationsWithClients.map(n => ({ id: n.id, clientRating: n.client_info.client_average_rating, clientJobs: n.client_info.client_completed_jobs, dueDate: n.due_date, status: n.status })));
     res.json({
       message: 'Transcriber negotiations retrieved successfully',
       negotiations: negotiationsWithClients
@@ -598,7 +573,6 @@ const deleteNegotiation = async (req, res, io) => {
     const userId = req.user.userId;
     const userType = req.user.userType;
 
-    // Fetch negotiation details to verify ownership and status
     const { data: negotiation, error: fetchError } = await supabase
       .from('negotiations')
       .select('status, client_id, negotiation_files, transcriber_id')
@@ -609,29 +583,23 @@ const deleteNegotiation = async (req, res, io) => {
       return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
     }
 
-    // Admin bypasses all ownership and status checks for deletion
     if (userType !== 'admin') {
-        // Ensure the user attempting deletion is the client
         if (negotiation.client_id !== userId) {
           return res.status(403).json({ error: 'You are not authorized to delete this negotiation.ᐟ' });
         }
 
-        // Define allowed statuses for deletion by clients
         const deletableStatuses = ['pending', 'accepted_awaiting_payment', 'rejected', 'cancelled', 'transcriber_counter', 'client_counter', 'completed'];
         if (!deletableStatuses.includes(negotiation.status)) {
           return res.status(400).json({ error: `Negotiations with status '${negotiation.status}' cannot be deleted. Only ${deletableStatuses.join(', ')} can be deleted by a client.ᐟ` });
         }
     }
 
-    // NEW: Always clear transcriber's current_job_id if transcriber_id exists and the job was 'hired' or 'completed'
-    // REMOVED: is_available parameter
     if (negotiation.transcriber_id && (negotiation.status === 'hired' || negotiation.status === 'completed')) {
         console.log(`Attempting to free up transcriber ${negotiation.transcriber_id} for negotiation ${negotiationId}.`);
-        await syncAvailabilityStatus(negotiation.transcriber_id, null); // Only pass userId and currentJobId (null)
+        await syncAvailabilityStatus(negotiation.transcriber_id, null);
         console.log(`Transcriber ${negotiation.transcriber_id} availability status updated.`);
     }
 
-    // CRITICAL FIX: Delete associated messages first to satisfy FK constraint
     const { error: deleteMessagesError } = await supabase
         .from('messages')
         .delete()
@@ -644,7 +612,6 @@ const deleteNegotiation = async (req, res, io) => {
     console.log(`Deleted messages for negotiation ${negotiationId}.`);
 
 
-    // Delete the associated file from the server if it exists
     if (negotiation.negotiation_files) {
       const filePath = path.join('uploads/negotiation_files', negotiation.negotiation_files);
       if (fs.existsSync(filePath)) {
@@ -655,7 +622,6 @@ const deleteNegotiation = async (req, res, io) => {
       }
     }
 
-    // Delete the negotiation record from the database
     const { error: deleteError } = await supabase
       .from('negotiations')
       .delete()
@@ -663,7 +629,6 @@ const deleteNegotiation = async (req, res, io) => {
 
     if (deleteError) throw deleteError;
 
-    // Emit a real-time event to the transcriber if they exist
     if (io && negotiation.transcriber_id) {
       io.to(negotiation.transcriber_id).emit('negotiation_cancelled', {
         negotiationId: negotiation.id,
@@ -686,7 +651,6 @@ const acceptNegotiation = async (req, res, io) => {
         const { negotiationId } = req.params;
         const transcriberId = req.user.userId;
 
-        // Fetch negotiation details to verify status and user authorization
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
             .select('status, transcriber_id, client_id, agreed_price_usd, deadline_hours')
@@ -697,17 +661,14 @@ const acceptNegotiation = async (req, res, io) => {
             return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
-        // Authorize the user (must be the transcriber)
         if (negotiation.transcriber_id !== transcriberId) {
             return res.status(403).json({ error: 'You are not authorized to accept this negotiation.ᐟ' });
         }
 
-        // Check if the negotiation is in an acceptable state (pending or client countered)
         if (negotiation.status !== 'pending' && negotiation.status !== 'client_counter') {
             return res.status(400).json({ error: 'Negotiation is not in a state that can be accepted. Current status: ' + negotiation.status });
         }
 
-        // Update the negotiation status to 'accepted_awaiting_payment'
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
             .update({ status: 'accepted_awaiting_payment', updated_at: new Date().toISOString() })
@@ -717,7 +678,6 @@ const acceptNegotiation = async (req, res, io) => {
 
         if (updateError) throw updateError;
 
-        // Emit a real-time event to the client
         if (io) {
             io.to(negotiation.client_id).emit('negotiation_accepted', {
                 negotiationId: updatedNegotiation.id,
@@ -727,7 +687,6 @@ const acceptNegotiation = async (req, res, io) => {
             console.log(`Emitted 'negotiation_accepted' to client ${negotiation.client_id}`);
         }
 
-        // Send an email notification to the client
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.client_id).single();
         if (clientError) console.error('Error fetching client for negotiation accepted email:ᐟ', clientError);
 
@@ -746,19 +705,16 @@ const acceptNegotiation = async (req, res, io) => {
 const counterNegotiation = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
-        // FIX: Only allow proposed_price_usd and transcriber_response to be countered
         const { proposed_price_usd, transcriber_response } = req.body;
         const transcriberId = req.user.userId;
 
-        // Validate input fields - 'transcriber_response' is now optional
         if (!proposed_price_usd) {
             return res.status(400).json({ error: 'Proposed price is required for a counter-offer.ᐟ' });
         }
 
-        // Fetch negotiation details to verify status and authorization
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
-            .select('status, transcriber_id, client_id, deadline_hours') // Fetch deadline_hours to retain it
+            .select('status, transcriber_id, client_id, deadline_hours')
             .eq('id', negotiationId)
             .single();
 
@@ -766,25 +722,21 @@ const counterNegotiation = async (req, res, io) => {
             return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
-        // Authorize the user (must be the transcriber)
         if (negotiation.transcriber_id !== transcriberId) {
             return res.status(403).json({ error: 'You are not authorized to make a counter-offer on this negotiation.ᐟ' });
         }
 
-        // Check if the negotiation is in an acceptable state (pending or client countered)
         if (negotiation.status !== 'pending' && negotiation.status !== 'client_counter') {
             return res.status(400).json({ error: 'Negotiation is not in a state that allows for a counter-offer. Current status: ' + negotiation.status });
         }
 
-        // Update negotiation with counter-offer details
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
             .update({
                 status: 'transcriber_counter',
                 agreed_price_usd: proposed_price_usd,
-                // FIX: Keep the original deadline_hours from the client's initial offer
-                deadline_hours: negotiation.deadline_hours, 
-                transcriber_response: transcriber_response, // This can now be null/empty
+                deadline_hours: negotiation.deadline_hours,
+                transcriber_response: transcriber_response,
                 updated_at: new Date().toISOString()
             })
             .eq('id', negotiationId)
@@ -793,22 +745,19 @@ const counterNegotiation = async (req, res, io) => {
 
         if (updateError) throw updateError;
 
-        // Emit a real-time event to the client
         if (io) {
             io.to(negotiation.client_id).emit('negotiation_countered', {
                 negotiationId: updatedNegotiation.id,
-                message: `Transcriber ${req.user.full_name} sent a counter offer!`, // Changed message to reflect transcriber counter
+                message: `Transcriber ${req.user.full_name} sent a counter offer!`,
                 newStatus: 'transcriber_counter'
             });
             console.log(`Emitted 'negotiation_countered' to client ${negotiation.client_id}`);
         }
 
-        // Send an email notification to the client
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.client_id).single();
         if (clientError) console.error('Error fetching client for counter offer email:ᐟ', clientError);
 
         if (clientUser) {
-            // UPDATED: Call the specific email function for transcriber counter offers
             await sendTranscriberCounterOfferEmail(clientUser, req.user, updatedNegotiation);
         }
 
@@ -826,7 +775,6 @@ const rejectNegotiation = async (req, res, io) => {
         const { reason } = req.body;
         const transcriberId = req.user.userId;
 
-        // Fetch negotiation details to verify status and authorization
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
             .select('status, transcriber_id, client_id')
@@ -837,17 +785,14 @@ const rejectNegotiation = async (req, res, io) => {
             return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
-        // Authorize the user (must be the transcriber)
         if (negotiation.transcriber_id !== transcriberId) {
             return res.status(403).json({ error: 'You are not authorized to reject this negotiation.ᐟ' });
         }
 
-        // Check if the negotiation is in an acceptable state (pending or client countered)
         if (negotiation.status !== 'pending' && negotiation.status !== 'client_counter') {
             return res.status(400).json({ error: 'Negotiation is not in a state that can be rejected. Current status: ' + negotiation.status });
         }
 
-        // Update negotiation status to 'rejected' and store the rejection reason
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
             .update({ status: 'rejected', transcriber_response: reason, updated_at: new Date().toISOString() })
@@ -857,7 +802,6 @@ const rejectNegotiation = async (req, res, io) => {
 
         if (updateError) throw updateError;
 
-        // Emit a real-time event to the client
         if (io) {
             io.to(negotiation.client_id).emit('negotiation_rejected', {
                 negotiationId: updatedNegotiation.id,
@@ -867,7 +811,6 @@ const rejectNegotiation = async (req, res, io) => {
             console.log(`Emitted 'negotiation_rejected' to client ${negotiation.client_id}`);
         }
 
-        // Send an email notification to the client
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.client_id).single();
         if (clientError) console.error('Error fetching client for negotiation rejected email:ᐟ', clientError);
 
@@ -888,7 +831,6 @@ const clientAcceptCounter = async (req, res, io) => {
         const { negotiationId } = req.params;
         const clientId = req.user.userId;
 
-        // Fetch negotiation details to verify status and authorization
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
             .select('status, transcriber_id, client_id, agreed_price_usd, deadline_hours')
@@ -899,17 +841,14 @@ const clientAcceptCounter = async (req, res, io) => {
             return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
-        // Authorize the user (must be the client)
         if (negotiation.client_id !== clientId) {
             return res.status(403).json({ error: 'You are not authorized to accept this counter-offer.ᐟ' });
         }
 
-        // Check if the negotiation is in the 'transcriber_counter' state
         if (negotiation.status !== 'transcriber_counter') {
             return res.status(400).json({ error: 'Negotiation is not in a state to accept a counter-offer. Current status: ' + negotiation.status });
         }
 
-        // Update negotiation status to 'accepted_awaiting_payment'
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
             .update({ status: 'accepted_awaiting_payment', updated_at: new Date().toISOString() })
@@ -919,7 +858,6 @@ const clientAcceptCounter = async (req, res, io) => {
 
         if (updateError) throw updateError;
 
-        // Emit a real-time event to the transcriber
         if (io) {
             io.to(negotiation.transcriber_id).emit('negotiation_accepted', {
                 negotiationId: updatedNegotiation.id,
@@ -929,7 +867,6 @@ const clientAcceptCounter = async (req, res, io) => {
             console.log(`Emitted 'negotiation_accepted' to transcriber ${negotiation.transcriber_id}`);
         }
 
-        // Send an email notification to the transcriber
         const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
         if (transcriberError) console.error('Error fetching transcriber for client accept counter email:ᐟ', transcriberError);
 
@@ -951,7 +888,6 @@ const clientRejectCounter = async (req, res, io) => {
         const { client_response } = req.body;
         const clientId = req.user.userId;
 
-        // Fetch negotiation details to verify status and authorization
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
             .select('status, transcriber_id, client_id')
@@ -962,17 +898,14 @@ const clientRejectCounter = async (req, res, io) => {
             return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
-        // Authorize the user (must be the client)
         if (negotiation.client_id !== clientId) {
             return res.status(403).json({ error: 'You are not authorized to reject this counter-offer.ᐟ' });
         }
 
-        // Check if the negotiation is in the 'transcriber_counter' state
         if (negotiation.status !== 'transcriber_counter') {
             return res.status(400).json({ error: 'Negotiation is not in a state that allows for a counter-offer. Current status: ' + negotiation.status });
         }
 
-        // Update negotiation status to 'rejected' and store the client's response
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
             .update({ status: 'rejected', client_response: client_response, updated_at: new Date().toISOString() })
@@ -982,7 +915,6 @@ const clientRejectCounter = async (req, res, io) => {
 
         if (updateError) throw error;
 
-        // Emit a real-time event to the transcriber
         if (io) {
             io.to(negotiation.transcriber_id).emit('negotiation_rejected', {
                 negotiationId: updatedNegotiation.id,
@@ -992,7 +924,6 @@ const clientRejectCounter = async (req, res, io) => {
             console.log(`Emitted 'negotiation_rejected' to transcriber ${negotiation.transcriber_id}`);
         }
 
-        // Send an email notification to the transcriber
         const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
         if (transcriberError) console.error('Error fetching transcriber for client reject counter email:ᐟ', transcriberError);
 
@@ -1009,60 +940,43 @@ const clientRejectCounter = async (req, res, io) => {
 };
 
 const clientCounterBack = async (req, res, io) => {
-    // FIX: negotiationFile is no longer expected for client counter-back
-    // let negotiationFile = req.file; 
     try {
         const { negotiationId } = req.params;
-        // FIX: Only destructure proposed_price_usd and client_response
         const { proposed_price_usd, client_response } = req.body;
         const clientId = req.user.userId;
 
-        // Basic validation for required fields
-        // FIX: Removed deadline_hours from validation, 'client_response' is now optional
         if (!proposed_price_usd) {
-            // FIX: Removed file cleanup logic as file is not expected
             return res.status(400).json({ error: 'Proposed price is required for a counter-offer back.ᐟ' });
         }
 
-        // Fetch negotiation details to verify status and authorization
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
-            // FIX: Also fetch deadline_hours to retain it
             .select('status, transcriber_id, client_id, negotiation_files, deadline_hours')
             .eq('id', negotiationId)
             .single();
 
         if (fetchError || !negotiation) {
-            // FIX: Removed file cleanup as file is not expected
             return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
-        // Authorize the user (must be the client)
         if (negotiation.client_id !== clientId) {
-            // FIX: Removed file cleanup as file is not expected
             return res.status(403).json({ error: 'You are not authorized to counter back on this negotiation.ᐟ' });
         }
 
-        // Check if the negotiation is in the 'transcriber_counter' state
         if (negotiation.status !== 'transcriber_counter') {
-            // FIX: Removed file cleanup as file is not expected
             return res.status(400).json({ error: 'Negotiation is not in a state that allows for a counter-offer back. Current status: ' + negotiation.status });
         }
 
-        // FIX: Retain original negotiation_files and deadline_hours
         const fileToUpdate = negotiation.negotiation_files;
         const retainedDeadlineHours = negotiation.deadline_hours;
 
-        // Update negotiation with the client's counter-offer
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
             .update({
                 status: 'client_counter',
                 agreed_price_usd: proposed_price_usd,
-                // FIX: Retain the original deadline_hours
                 deadline_hours: retainedDeadlineHours,
-                client_message: client_response, // This can now be null/empty
-                // FIX: Retain the original negotiation_files
+                client_message: client_response,
                 negotiation_files: fileToUpdate,
                 updated_at: new Date().toISOString()
             })
@@ -1072,11 +986,9 @@ const clientCounterBack = async (req, res, io) => {
 
         if (updateError) {
             console.error('Client counter back: Supabase error updating negotiation:', updateError);
-            // FIX: Removed file cleanup as file is not expected
             throw updateError;
         }
 
-        // Emit a real-time event to the transcriber
         if (io) {
             io.to(negotiation.transcriber_id).emit('negotiation_countered', {
                 negotiationId: updatedNegotiation.id,
@@ -1086,12 +998,10 @@ const clientCounterBack = async (req, res, io) => {
             console.log(`Emitted 'negotiation_countered' to transcriber ${negotiation.transcriber_id}`);
         }
 
-        // Send an email notification to the transcriber
         const { data: transcriberUser, error: transcriberError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
         if (transcriberError) console.error('Error fetching transcriber for client counter back email:ᐟ', transcriberError);
 
         if (transcriberUser) {
-            // UPDATED: Call the specific email function for client counter offers
             await sendClientCounterBackEmail(transcriberUser, req.user, updatedNegotiation);
         }
 
@@ -1099,7 +1009,6 @@ const clientCounterBack = async (req, res, io) => {
 
     } catch (error) {
         console.error('Client counter back error: UNCAUGHT EXCEPTION:ᐟ', error);
-        // FIX: Removed file cleanup as file is not expected
         res.status(500).json({ error: error.message || 'Failed to send counter-offer due to server error.ᐟ' });
     }
 };
@@ -1108,17 +1017,14 @@ const clientCounterBack = async (req, res, io) => {
 const markJobCompleteByClient = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
-        // NEW: Extract clientFeedbackComment and clientFeedbackRating from the request body
-        const { clientFeedbackComment, clientFeedbackRating } = req.body; 
+        const { clientFeedbackComment, clientFeedbackRating } = req.body;
         const clientId = req.user.userId;
         const userType = req.user.userType;
 
-        // 1. Authorization: Only clients can mark a job as complete
         if (userType !== 'client') {
             return res.status(403).json({ error: 'Only clients are authorized to mark jobs as complete.ᐟ' });
         }
 
-        // 2. Fetch negotiation details to verify ownership and status
         const { data: negotiation, error: fetchError } = await supabase
             .from('negotiations')
             .select('status, client_id, transcriber_id, agreed_price_usd, deadline_hours')
@@ -1129,24 +1035,21 @@ const markJobCompleteByClient = async (req, res, io) => {
             return res.status(404).json({ error: 'Negotiation not found.ᐟ' });
         }
 
-        // 3. Ownership check: Ensure the client owns this negotiation
         if (negotiation.client_id !== clientId) {
             return res.status(403).json({ error: 'You are not authorized to mark this job as complete.ᐟ' });
         }
 
-        // 4. Status check: Ensure the job is currently 'hired'
         if (negotiation.status !== 'hired') {
             return res.status(400).json({ error: `Job must be in 'hired' status to be marked as complete. Current status: ${negotiation.status}` });
         }
 
-        // 5. Update negotiation status to 'completed' and store feedback
         const { data: updatedNegotiation, error: updateError } = await supabase
             .from('negotiations')
             .update({ 
                 status: 'completed', 
                 completed_at: new Date().toISOString(), 
-                client_feedback_comment: clientFeedbackComment, // NEW: Store client feedback comment
-                client_feedback_rating: clientFeedbackRating,   // NEW: Store client feedback rating
+                client_feedback_comment: clientFeedbackComment,
+                client_feedback_rating: clientFeedbackRating,
                 updated_at: new Date().toISOString() 
             })
             .eq('id', negotiationId)
@@ -1155,17 +1058,14 @@ const markJobCompleteByClient = async (req, res, io) => {
 
         if (updateError) throw updateError;
 
-        // 6. Update transcriber's availability (set current_job_id to null)
-        // REMOVED: is_available parameter
         if (negotiation.transcriber_id) {
-            await syncAvailabilityStatus(negotiation.transcriber_id, null); // Only pass userId and currentJobId (null)
+            await syncAvailabilityStatus(negotiation.transcriber_id, null);
             console.log(`Transcriber ${negotiation.transcriber_id} freed up after client marked job ${negotiationId} as complete.`);
         }
 
-        // 7. Increment transcriber's completed_jobs count (now in 'users' table)
         const { data: updatedUser, error: incrementError } = await supabase
             .from('users')
-            .select('transcriber_completed_jobs') // Select the current count
+            .select('transcriber_completed_jobs')
             .eq('id', negotiation.transcriber_id)
             .single();
 
@@ -1185,10 +1085,9 @@ const markJobCompleteByClient = async (req, res, io) => {
             }
         }
 
-        // NEW: Increment client's completed_jobs count (now in 'users' table)
         const { data: updatedClientUser, error: fetchClientError } = await supabase
             .from('users')
-            .select('client_completed_jobs') // Select the current count
+            .select('client_completed_jobs')
             .eq('id', clientId)
             .single();
 
@@ -1209,7 +1108,6 @@ const markJobCompleteByClient = async (req, res, io) => {
         }
 
 
-        // 8. Emit a real-time event to both client and transcriber
         if (io) {
             io.to(negotiation.client_id).emit('job_completed', {
                 negotiationId: updatedNegotiation.id,
@@ -1226,7 +1124,6 @@ const markJobCompleteByClient = async (req, res, io) => {
             }
         }
 
-        // 9. Send email notifications
         const { data: transcriberUser, error: transcriberUserError } = await supabase.from('users').select('full_name, email').eq('id', negotiation.transcriber_id).single();
         if (transcriberUserError) console.error('Error fetching transcriber for job completed email:ᐟ', transcriberUserError);
 
@@ -1243,6 +1140,370 @@ const markJobCompleteByClient = async (req, res, io) => {
     }
 };
 
+// NEW: initializeNegotiationPayment function (moved from paymentController.js)
+const initializeNegotiationPayment = async (req, res, io) => {
+    console.log('[initializeNegotiationPayment] Received request body:', req.body);
+
+    const { negotiationId, amount, email, paymentMethod = 'paystack', mobileNumber } = req.body;
+    const clientId = req.user.userId;
+
+    const finalJobId = negotiationId; // For negotiations, the jobId is the negotiationId
+    const finalClientEmail = email;
+
+    console.log(`[initializeNegotiationPayment] Destructured parameters - negotiationId: ${finalJobId}, amount: ${amount}, clientEmail: ${finalClientEmail}, clientId: ${clientId}, paymentMethod: ${paymentMethod}, mobileNumber: ${mobileNumber}`);
+
+    if (!finalJobId || !amount || !finalClientEmail) {
+        console.error('[initializeNegotiationPayment] Validation failed: Missing required parameters.ᐟ');
+        return res.status(400).json({ error: 'Negotiation ID, amount, and client email are required.ᐟ' });
+    }
+    if (!['paystack', 'korapay'].includes(paymentMethod)) {
+        console.error(`[initializeNegotiationPayment] Validation failed: Invalid payment method provided: ${paymentMethod}`);
+        return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
+    }
+
+    if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
+        console.error('[initializeNegotiationPayment] PAYSTACK_SECRET_KEY is not set.');
+        return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
+    }
+    if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
+        console.error('[initializeNegotiationPayment] KORAPAY_SECRET_KEY is not set.');
+        return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
+    }
+
+
+    const parsedAmountUsd = parseFloat(amount);
+    if (isNaN(parsedAmountUsd) || parsedAmountUsd <= 0) {
+        return res.status(400).json({ error: 'Invalid payment amount.ᐟ' });
+    }
+
+    try {
+        let jobDetails;
+        let transcriberId;
+        let agreedPriceUsd;
+        let jobStatus;
+
+        // Fetch negotiation details for this job type
+        const { data, error } = await supabase
+            .from('negotiations')
+            .select('id, client_id, transcriber_id, agreed_price_usd, status')
+            .eq('id', finalJobId)
+            .eq('client_id', clientId)
+            .single();
+        if (error || !data) {
+            console.error(`[initializeNegotiationPayment] Error fetching negotiation ${finalJobId} for payment:`, error);
+            return res.status(404).json({ error: 'Negotiation not found or not accessible.ᐟ' });
+        }
+        jobDetails = data;
+        transcriberId = data.transcriber_id;
+        agreedPriceUsd = data.agreed_price_usd;
+        jobStatus = data.status;
+        if (jobStatus !== 'accepted_awaiting_payment') {
+            console.error(`[initializeNegotiationPayment] Negotiation ${finalJobId} status is ${jobStatus}, not 'accepted_awaiting_payment'.`);
+            return res.status(400).json({ error: `Payment can only be initiated for accepted negotiations (status: accepted_awaiting_payment). Current status: ${jobStatus}` });
+        }
+
+        if (Math.round(parsedAmountUsd * 100) !== Math.round(agreedPriceUsd * 100)) {
+            console.error('[initializeNegotiationPayment] Payment amount mismatch. Provided USD:', parsedAmountUsd, 'Agreed USD:', agreedPriceUsd);
+            return res.status(400).json({ error: 'Payment amount does not match the agreed job price.ᐟ' });
+        }
+
+        if (paymentMethod === 'paystack') {
+            const amountKes = convertUsdToKes(parsedAmountUsd);
+            const amountInCentsKes = Math.round(amountKes * 100);
+
+            const paystackResponse = await axios.post(
+                'https://paystack.co/transaction/initialize',
+                {
+                    email: finalClientEmail,
+                    amount: amountInCentsKes,
+                    reference: `${finalJobId}-${Date.now()}`,
+                    callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${finalJobId}&jobType=negotiation`, // jobType is 'negotiation'
+                    currency: 'KES',
+                    channels: ['mobile_money', 'card', 'bank_transfer', 'pesalink'],
+                    metadata: {
+                        related_job_id: finalJobId,
+                        related_job_type: 'negotiation',
+                        client_id: clientId,
+                        transcriber_id: transcriberId,
+                        agreed_price_usd: agreedPriceUsd,
+                        currency_paid: 'KES',
+                        exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                        amount_paid_kes: amountKes
+                    }
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                    }
+                }
+            );
+
+            if (!paystackResponse.data.status) {
+                console.error('[initializeNegotiationPayment] Paystack initialization failed:', paystackResponse.data.message);
+                return res.status(500).json({ error: paystackResponse.data.message || 'Failed to initialize payment with Paystack.ᐟ' });
+            }
+
+            res.status(200).json({
+                message: 'Payment initialization successful',
+                data: paystackResponse.data.data
+            });
+        } else if (paymentMethod === 'korapay') {
+            if (!KORAPAY_PUBLIC_KEY) {
+                console.error('[initializeNegotiationPayment] KORAPAY_PUBLIC_KEY is not set for KoraPay frontend integration.');
+                return res.status(500).json({ error: 'KoraPay public key not configured.ᐟ' });
+            }
+
+            const reference = `JOB-${finalJobId.substring(0, 8)}-${Date.now().toString(36)}`;
+            const amountInCentsUsd = Math.round(parsedAmountUsd * 100);
+
+            const korapayData = {
+                key: KORAPAY_PUBLIC_KEY,
+                reference: reference,
+                amount: amountInCentsUsd,
+                currency: 'USD',
+                customer: {
+                    name: req.user.full_name || 'Customer',
+                    email: finalClientEmail,
+                },
+                notification_url: KORAPAY_WEBHOOK_URL, 
+                metadata: {
+                    related_job_id: finalJobId,
+                    related_job_type: 'negotiation', // jobType is 'negotiation'
+                    client_id: clientId,
+                    transcriber_id: transcriberId,
+                    agreed_price_usd: agreedPriceUsd,
+                    currency_paid: 'USD',
+                    exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                    amount_paid_usd: parsedAmountUsd
+                }
+            };
+            
+            res.status(200).json({
+                message: 'KoraPay payment initialization data successful',
+                korapayData: korapayData
+            });
+        }
+
+    } catch (error) {
+        console.error(`[initializeNegotiationPayment] Error initializing ${paymentMethod} payment:`, error.response ? error.response.data : error.message);
+        res.status(500).json({ error: `Server error during ${paymentMethod} payment initialization.ᐟ` });
+    }
+};
+
+// NEW: verifyNegotiationPayment function (extracted and adapted from paymentController.js)
+const verifyNegotiationPayment = async (req, res, io) => {
+    const { reference } = req.params;
+    const { relatedJobId, paymentMethod = 'paystack' } = req.query; // jobType is implicitly 'negotiation'
+
+    if (!reference || !relatedJobId) {
+        return res.status(400).json({ error: 'Payment reference and negotiation ID are required for verification.ᐟ' });
+    }
+    if (!['paystack', 'korapay'].includes(paymentMethod)) {
+        console.error(`Invalid payment method provided: ${paymentMethod}`);
+        return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
+    }
+    if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
+        console.error('PAYSTACK_SECRET_KEY is not set.');
+        return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
+    }
+    if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
+        console.error('KORAPAY_SECRET_KEY is not set.');
+        return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
+    }
+
+    try {
+        let transaction;
+        let metadataCurrencyPaid;
+        let metadataExchangeRate;
+        let actualAmountPaidUsd;
+
+        if (paymentMethod === 'paystack') {
+            const paystackResponse = await axios.get(
+                `https://paystack.co/transaction/verify/${reference}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                    }
+                }
+            );
+
+            if (!paystackResponse.data.status || paystackResponse.data.data.status !== 'success') {
+                console.error('Paystack verification failed:', paystackResponse.data.data.gateway_response);
+                return res.status(400).json({ error: paystackResponse.data.data.gateway_response || 'Payment verification failed.ᐟ' });
+            }
+            transaction = paystackResponse.data.data;
+            metadataCurrencyPaid = transaction.metadata.currency_paid;
+            metadataExchangeRate = transaction.metadata.exchange_rate_usd_to_kes;
+            actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2));
+        } else if (paymentMethod === 'korapay') {
+            const korapayResponse = await axios.get(
+                `${KORAPAY_BASE_URL}/charges/${reference}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                    },
+                    httpsAgent: httpsAgent,
+                    httpAgent: httpAgent
+                }
+            );
+
+            if (!korapayResponse.data.status || korapayResponse.data.data.status !== 'success') {
+                console.error('KoraPay verification failed:', korapayResponse.data.message || korapayResponse.data.errors);
+                return res.status(400).json({ error: korapayResponse.data.message || 'Payment verification failed with KoraPay.ᐟ' });
+            }
+            transaction = korapayResponse.data.data;
+            actualAmountPaidUsd = parseFloat((transaction.amount / 100).toFixed(2));
+            metadataCurrencyPaid = transaction.currency;
+            metadataExchangeRate = (metadataCurrencyPaid === 'USD') ? 1 : EXCHANGE_RATE_USD_TO_KES;
+            
+            transaction.metadata = {
+                related_job_id: relatedJobId,
+                related_job_type: 'negotiation',
+                client_id: req.user.userId,
+                transcriber_id: transaction.metadata?.transcriber_id || null,
+                agreed_price_usd: actualAmountPaidUsd,
+                currency_paid: metadataCurrencyPaid,
+                exchange_rate_usd_to_kes: metadataExchangeRate,
+                amount_paid_usd: actualAmountPaidUsd
+            };
+            transaction.paid_at = transaction.createdAt;
+        }
+
+
+        const {
+            related_job_id: metadataRelatedJobId,
+            related_job_type: metadataRelatedJobType, // This should be 'negotiation'
+            client_id: metadataClientId,
+            transcriber_id: metadataTranscriberIdRaw,
+            agreed_price_usd: metadataAgreedPrice,
+            currency_paid: metadataCurrencyPaidFromMeta,
+            exchange_rate_usd_to_kes: metadataExchangeRateFromMeta,
+            amount_paid_kes: metadataAmountPaidKes
+        } = transaction.metadata;
+
+        const finalTranscriberId = (metadataTranscriberIdRaw === '' || metadataTranscriberIdRaw === undefined) ? null : metadataTranscriberIdRaw;
+
+        if (metadataRelatedJobId !== relatedJobId || metadataRelatedJobType !== 'negotiation') {
+            console.error('Metadata job ID or type mismatch:', metadataRelatedJobId, relatedJobId, metadataRelatedJobType);
+            return res.status(400).json({ error: 'Invalid transaction metadata (job ID or type mismatch).ᐟ' });
+        }
+
+        if (Math.round(actualAmountPaidUsd * 100) !== Math.round(metadataAgreedPrice * 100)) {
+            console.error('Payment verification amount mismatch. Transaction amount (USD):', actualAmountPaidUsd, 'Expected USD:', metadataAgreedPrice);
+            return res.status(400).json({ error: 'Invalid transaction metadata (amount mismatch). Payment charged a different amount than expected.ᐟ' });
+        }
+        
+        let currentJob;
+        let updateTable = 'negotiations';
+        let updateStatusColumn = 'status';
+        let newJobStatus = 'hired';
+
+        const { data, error } = await supabase
+            .from('negotiations')
+            .select('id, client_id, transcriber_id, agreed_price_usd, status')
+            .eq('id', relatedJobId)
+            .single();
+        if (error || !data) {
+            console.error(`Error fetching negotiation ${relatedJobId} during payment verification: `, error);
+            return res.status(404).json({ error: 'Negotiation not found for verification.ᐟ' });
+        }
+        currentJob = data;
+        if (currentJob.status === 'hired') {
+            return res.status(200).json({ message: 'Payment already processed and job already hired.ᐟ' });
+        }
+        
+        const transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd);
+        
+        const paymentData = {
+            related_job_type: 'negotiation',
+            client_id: metadataClientId,
+            transcriber_id: finalTranscriberId,
+            amount: actualAmountPaidUsd,
+            transcriber_earning: transcriberPayAmount,
+            currency: 'USD',
+            paystack_reference: paymentMethod === 'paystack' ? transaction.reference : null,
+            korapay_reference: paymentMethod === 'korapay' ? transaction.reference : null,
+            paystack_status: paymentMethod === 'paystack' ? transaction.status : null,
+            korapay_status: paymentMethod === 'korapay' ? transaction.status : null,
+            transaction_date: new Date(transaction.paid_at).toISOString(),
+            payout_status: 'awaiting_completion',
+            currency_paid_by_client: metadataCurrencyPaidFromMeta,
+            exchange_rate_used: metadataExchangeRateFromMeta
+        };
+
+        paymentData.negotiation_id = relatedJobId;
+        paymentData.direct_upload_job_id = null;
+
+        const { data: paymentRecord, error: paymentError } = await supabase
+            .from('payments')
+            .insert([paymentData])
+            .select()
+            .single();
+
+        if (paymentError) {
+            console.error('Error recording payment in Supabase: ', paymentError);
+            throw paymentError;
+        }
+
+        const { error: jobUpdateError } = await supabase
+            .from(updateTable)
+            .update({ [updateStatusColumn]: newJobStatus, updated_at: new Date().toISOString() })
+            .eq('id', relatedJobId);
+
+        if (jobUpdateError) {
+            console.error(`Error updating job status to ${newJobStatus} for negotiation ${relatedJobId}: `, jobUpdateError);
+            throw jobUpdateError;
+        }
+
+        if (finalTranscriberId) {
+            await syncAvailabilityStatus(finalTranscriberId, null, relatedJobId); // Set current_job_id to the new job
+        }
+
+        const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', metadataClientId).single();
+        const transcriberUser = (finalTranscriberId)
+            ? (await supabase.from('users').select('full_name, email').eq('id', finalTranscriberId).single()).data
+            : null;
+
+        if (clientError) console.error('Error fetching client for payment email: ', clientError);
+        if (transcriberUser === null) console.error('Error fetching transcriber for payment email: ', clientError);
+
+        if (clientUser) {
+            await sendPaymentConfirmationEmail(clientUser, transcriberUser, currentJob, paymentRecord);
+        }
+
+        if (io) {
+            io.to(metadataClientId).emit('payment_successful', {
+                relatedJobId: relatedJobId,
+                jobType: 'negotiation',
+                message: 'Your payment was successful and the job is now active!ᐟ',
+                newStatus: newJobStatus
+            });
+            if (finalTranscriberId) {
+                io.to(finalTranscriberId).emit('job_hired', {
+                    relatedJobId: relatedJobId,
+                    jobType: 'negotiation',
+                    message: 'A client has paid for your accepted job. The job is now active!ᐟ',
+                    newStatus: newJobStatus
+                });
+                console.log(`Emitted 'payment_successful' to client ${metadataClientId} and 'job_hired' to transcriber ${finalTranscriberId}`);
+            }
+        }
+
+        res.status(200).json({
+            message: 'Payment verified successfully and job is now active.ᐟ',
+            transaction: transaction
+        });
+
+    } catch (error) {
+        console.error(`[verifyNegotiationPayment] Error verifying ${paymentMethod} payment:`, error.response ? error.response.data : error.message);
+        res.status(500).json({ error: `Server error during ${paymentMethod} payment verification.ᐟ` + (error.message || '') });
+    }
+};
+
 
 module.exports = {
     uploadNegotiationFiles,
@@ -1251,14 +1512,16 @@ module.exports = {
     getAvailableTranscribers,
     createNegotiation,
     getClientNegotiations,
-    getTranscriberNegotiations, // FIX: Export getTranscriberNegotiations
+    getTranscriberNegotiations,
     deleteNegotiation,
-    syncAvailabilityStatus, // This is now imported, but still exported for other modules that might use it
+    syncAvailabilityStatus,
     acceptNegotiation,
     counterNegotiation,
     rejectNegotiation,
     clientAcceptCounter,
     clientRejectCounter,
     clientCounterBack,
-    markJobCompleteByClient // NEW: Export the client-side job completion function
+    markJobCompleteByClient,
+    initializeNegotiationPayment, // NEW: Export negotiation-specific payment initiation
+    verifyNegotiationPayment // NEW: Export negotiation-specific payment verification
 };

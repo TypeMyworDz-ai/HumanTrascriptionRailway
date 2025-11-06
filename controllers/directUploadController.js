@@ -1,26 +1,36 @@
-const supabase = require('../database');
+const supabase = require('..//database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { syncAvailabilityStatus } = require('./transcriberController'); // Import syncAvailabilityStatus
-const emailService = require('../emailService'); // For sending notifications
+const emailService = require('..//emailService'); // For sending notifications
 const util = require('util');
 const { getAudioDurationInSeconds } = require('get-audio-duration'); // For calculating audio length
-const { calculatePricePerMinute } = require('../utils/pricingCalculator'); // Import the pricing calculator
+const { calculatePricePerMinute } = require('..//utils/pricingCalculator'); // Import the pricing calculator
 const { updateAverageRating } = require('./ratingController'); // CORRECTED: Import updateAverageRating
+
+// NEW: Import payment-related modules and constants
+const axios = require('axios');
+const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
+const http = require('http');
+const https = require('https');
+
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
+const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
+const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY;
+const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1';
+const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook';
+
+const httpAgent = new http.Agent({ family: 4 });
+const httpsAgent = new https.Agent({ family: 4 });
+
 
 // Promisify fs.unlink for async file deletion
 const unlinkAsync = util.promisify(fs.unlink);
 
-// --- Multer Configuration for Direct Upload Files (MOVED TO generalApiRoutes.js) ---
-// Note: The actual Multer setup for `uploadDirectFiles` is now in generalApiRoutes.js
-// We keep references to `uploadDirectFiles` for clarity if it were to be used directly here,
-// but for the quote and job creation routes, the middleware is applied in generalApiRoutes.js.
-
-
 // --- Quote Calculation Helper (UPDATED to use pricingCalculator) ---
 const getQuoteAndDeadline = async (audioLengthMinutes, audioQualityParam, deadlineTypeParam, specialRequirements) => {
-    // Construct job parameters for the pricing calculator
     const jobParams = {
         audio_quality: audioQualityParam,
         deadline_type: deadlineTypeParam,
@@ -36,7 +46,6 @@ const getQuoteAndDeadline = async (audioLengthMinutes, audioQualityParam, deadli
 
     const totalQuoteUsd = parseFloat((audioLengthMinutes * pricePerMinuteUsd).toFixed(2));
 
-    // Determine suggested deadline hours based on parameters
     let suggestedDeadlineHours;
     switch (deadlineTypeParam) {
         case 'urgent':
@@ -96,15 +105,10 @@ const handleQuoteCalculationRequest = async (req, res, io) => {
     };
 
     if (!audioVideoFile) {
-        // instructionFiles is not defined here, only audioVideoFile is relevant for quote calculation
-        // if (instructionFiles.length > 0) { // This line caused a reference error
-        //     await cleanupFiles();
-        // }
-        await cleanupFiles(); // Clean up any potential audioVideoFile if it exists but is deemed invalid
+        await cleanupFiles();
         return res.status(400).json({ error: 'Main audio/video file is required for quote calculation.ᐟ' });
     }
 
-    // Robustly parse specialRequirements
     const parsedSpecialRequirements = (specialRequirements && specialRequirements !== '[]') 
         ? JSON.parse(specialRequirements) 
         : [];
@@ -124,7 +128,7 @@ const handleQuoteCalculationRequest = async (req, res, io) => {
             audioLengthMinutes,
             audioQualityParam,
             deadlineTypeParam,
-            parsedSpecialRequirements // Pass the correctly parsed array
+            parsedSpecialRequirements
         );
 
         res.status(200).json({
@@ -456,7 +460,7 @@ const takeDirectUploadJob = async (req, res, io) => {
             .update({
                 transcriber_id: transcriberId,
                 status: 'taken',
-                taken_at: new Date().toISOString(), // ADDED: Ensure taken_at is set here
+                taken_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
             })
             .eq('id', jobId)
@@ -487,12 +491,12 @@ const takeDirectUploadJob = async (req, res, io) => {
         }
 
         res.status(200).json({
-            message: 'Job successfully taken. It is now in progress.',
+            message: 'Job successfully taken. It is now in progress.&#x27;',
             job: updatedJob
         });
 
     } catch (error) {
-        console.error('Error taking direct upload job:', error);
+        console.error('Error taking direct upload job:&#x27;', error);
         res.status(500).json({ error: 'Server error taking direct upload job.ᐟ' });
     }
 };
@@ -501,7 +505,7 @@ const takeDirectUploadJob = async (req, res, io) => {
 const completeDirectUploadJob = async (req, res, io) => {
     const { jobId } = req.params;
     const transcriberId = req.user.userId;
-    const { transcriberComment } = req.body; // NEW: Get transcriberComment from body
+    const { transcriberComment } = req.body;
 
     try {
         const { data: job, error: jobError } = await supabase
@@ -515,7 +519,7 @@ const completeDirectUploadJob = async (req, res, io) => {
             console.error(`[completeDirectUploadJob] Job fetch error or not found:`, jobError);
             return res.status(404).json({ error: 'Job not found or not assigned to you.ᐟ' });
         }
-        if (job.status !== 'taken' && job.status !== 'in_progress') { // Allow 'in_progress' as well
+        if (job.status !== 'taken' && job.status !== 'in_progress') {
             console.error(`[completeDirectUploadJob] Invalid job status for completion: ${job.status}`);
             return res.status(400).json({ error: 'Job is not currently active for completion.ᐟ' });
         }
@@ -524,7 +528,7 @@ const completeDirectUploadJob = async (req, res, io) => {
             .from('direct_upload_jobs')
             .update({
                 status: 'completed',
-                transcriber_comment: transcriberComment, // NEW: Save transcriber's comment
+                transcriber_comment: transcriberComment,
                 completed_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
             })
@@ -537,8 +541,6 @@ const completeDirectUploadJob = async (req, res, io) => {
             throw updateError;
         }
 
-        // --- NEW: Update payments record upon direct upload job completion ---
-        // CHANGED: Ensure the payment record exists before attempting to update
         const { data: existingPayment, error: paymentFetchError } = await supabase
             .from('payments')
             .select('id, payout_status')
@@ -546,16 +548,15 @@ const completeDirectUploadJob = async (req, res, io) => {
             .eq('transcriber_id', transcriberId)
             .single();
 
-        if (paymentFetchError && paymentFetchError.code !== 'PGRST116') { // PGRST116 means no rows found
+        if (paymentFetchError && paymentFetchError.code !== 'PGRST116') {
              console.error(`[completeDirectUploadJob] Error fetching payment record for direct upload job ${jobId}:`, paymentFetchError);
-             // Do not throw, but log the error
         }
 
         if (existingPayment) {
             const { error: paymentUpdateError } = await supabase
                 .from('payments')
                 .update({ payout_status: 'awaiting_completion', updated_at: new Date().toISOString() })
-                .eq('id', existingPayment.id); // Update the existing payment record
+                .eq('id', existingPayment.id);
 
             if (paymentUpdateError) {
                 console.error(`[completeDirectUploadJob] Error updating payment record for direct upload job ${jobId} to 'awaiting_completion':`, paymentUpdateError);
@@ -564,13 +565,9 @@ const completeDirectUploadJob = async (req, res, io) => {
             }
         } else {
             console.warn(`[completeDirectUploadJob] No existing payment record found for direct upload job ${jobId} and transcriber ${transcriberId}. A payment record should have been created upon client payment.`);
-            // Potentially create a new payment record here if it's truly missing,
-            // but ideally, payment is recorded upon client payment.
         }
-        // --- END NEW: Update payments record upon direct upload job completion ---
 
-        // Update the transcriber's availability status (clear current job ID)
-        await syncAvailabilityStatus(transcriberId, null); // Clear current_job_id
+        await syncAvailabilityStatus(transcriberId, null);
 
         if (io) {
             io.to(updatedJob.client_id).emit('direct_job_completed', {
@@ -608,7 +605,6 @@ const clientCompleteDirectUploadJob = async (req, res, io) => {
     }
 
     try {
-        // 1. Fetch the job to verify client ownership and status
         const { data: job, error: jobFetchError } = await supabase
             .from('direct_upload_jobs')
             .select('client_id, transcriber_id, status')
@@ -620,12 +616,10 @@ const clientCompleteDirectUploadJob = async (req, res, io) => {
             return res.status(404).json({ error: 'Direct upload job not found or not owned by you.ᐟ' });
         }
 
-        // Ensure the job has been completed by the transcriber
         if (job.status !== 'completed') {
             return res.status(400).json({ error: `Job must be in 'completed' status by transcriber before client can mark it complete. Current status: ${job.status}` });
         }
 
-        // 2. Update the job status to 'client_completed' and save feedback
         const { data: updatedJob, error: updateError } = await supabase
             .from('direct_upload_jobs')
             .update({
@@ -641,12 +635,10 @@ const clientCompleteDirectUploadJob = async (req, res, io) => {
 
         if (updateError) throw updateError;
 
-        // 3. Update the transcriber's average rating
         if (job.transcriber_id && clientFeedbackRating) {
             await updateAverageRating(job.transcriber_id, clientFeedbackRating, 'transcriber');
         }
 
-        // 4. Notify the transcriber in real-time about client completion and feedback
         if (io && updatedJob.transcriber_id) {
             io.to(updatedJob.transcriber_id).emit('direct_job_client_completed', {
                 jobId: updatedJob.id,
@@ -680,7 +672,6 @@ const clientCompleteDirectUploadJob = async (req, res, io) => {
  */
 const getAllDirectUploadJobsForAdmin = async (req, res) => {
     try {
-        // Fetch all direct upload jobs, joining with client and transcriber user details
         const { data: jobs, error } = await supabase
             .from('direct_upload_jobs')
             .select(`
@@ -718,15 +709,378 @@ const getAllDirectUploadJobsForAdmin = async (req, res) => {
     }
 };
 
+// NEW: initializeDirectUploadPayment function (moved from paymentController.js)
+const initializeDirectUploadPayment = async (req, res, io) => {
+    console.log('[initializeDirectUploadPayment] Received request body:', req.body);
+
+    const { jobId: directUploadJobId, amount, email, paymentMethod = 'paystack', mobileNumber } = req.body;
+    const clientId = req.user.userId;
+
+    const finalJobId = directUploadJobId; // For direct uploads, the jobId is the directUploadJobId
+    const finalClientEmail = email;
+
+    console.log(`[initializeDirectUploadPayment] Destructured parameters - directUploadJobId: ${finalJobId}, amount: ${amount}, clientEmail: ${finalClientEmail}, clientId: ${clientId}, paymentMethod: ${paymentMethod}, mobileNumber: ${mobileNumber}`);
+
+    if (!finalJobId || !amount || !finalClientEmail) {
+        console.error('[initializeDirectUploadPayment] Validation failed: Missing required parameters.ᐟ');
+        return res.status(400).json({ error: 'Direct Upload Job ID, amount, and client email are required.ᐟ' });
+    }
+    if (!['paystack', 'korapay'].includes(paymentMethod)) {
+        console.error(`[initializeDirectUploadPayment] Validation failed: Invalid payment method provided: ${paymentMethod}`);
+        return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
+    }
+
+    if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
+        console.error('[initializeDirectUploadPayment] PAYSTACK_SECRET_KEY is not set.');
+        return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
+    }
+    if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
+        console.error('[initializeDirectUploadPayment] KORAPAY_SECRET_KEY is not set.');
+        return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
+    }
+
+
+    const parsedAmountUsd = parseFloat(amount);
+    if (isNaN(parsedAmountUsd) || parsedAmountUsd <= 0) {
+        return res.status(400).json({ error: 'Invalid payment amount.ᐟ' });
+    }
+
+    try {
+        let jobDetails;
+        let transcriberId;
+        let agreedPriceUsd;
+        let jobStatus;
+
+        // Fetch direct upload job details for this job type
+        const { data, error } = await supabase
+            .from('direct_upload_jobs')
+            .select('id, client_id, transcriber_id, quote_amount, status')
+            .eq('id', finalJobId)
+            .eq('client_id', clientId)
+            .single();
+        if (error || !data) {
+            console.error(`[initializeDirectUploadPayment] Error fetching direct upload job ${finalJobId} for payment:`, error);
+            return res.status(404).json({ error: 'Direct upload job not found or not accessible.ᐟ' });
+        }
+        jobDetails = data;
+        transcriberId = data.transcriber_id;
+        agreedPriceUsd = data.quote_amount;
+        jobStatus = data.status;
+        if (jobStatus !== 'pending_review' && jobStatus !== 'transcriber_assigned') {
+            console.error(`[initializeDirectUploadPayment] Direct upload job ${finalJobId} status is ${jobStatus}, not 'pending_review' or 'transcriber_assigned'.`);
+            return res.status(400).json({ error: `Payment can only be initiated for direct upload jobs awaiting review or with assigned transcriber. Current status: ${jobStatus}` });
+        }
+
+        if (Math.round(parsedAmountUsd * 100) !== Math.round(agreedPriceUsd * 100)) {
+            console.error('[initializeDirectUploadPayment] Payment amount mismatch. Provided USD:', parsedAmountUsd, 'Agreed USD:', agreedPriceUsd);
+            return res.status(400).json({ error: 'Payment amount does not match the agreed job price.ᐟ' });
+        }
+
+        if (paymentMethod === 'paystack') {
+            const amountKes = convertUsdToKes(parsedAmountUsd);
+            const amountInCentsKes = Math.round(amountKes * 100);
+
+            const paystackResponse = await axios.post(
+                'https://paystack.co/transaction/initialize',
+                {
+                    email: finalClientEmail,
+                    amount: amountInCentsKes,
+                    reference: `${finalJobId}-${Date.now()}`,
+                    callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${finalJobId}&jobType=direct_upload`, // jobType is 'direct_upload'
+                    currency: 'KES',
+                    channels: ['mobile_money', 'card', 'bank_transfer', 'pesalink'],
+                    metadata: {
+                        related_job_id: finalJobId,
+                        related_job_type: 'direct_upload',
+                        client_id: clientId,
+                        transcriber_id: transcriberId,
+                        agreed_price_usd: agreedPriceUsd,
+                        currency_paid: 'KES',
+                        exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                        amount_paid_kes: amountKes
+                    }
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                    }
+                }
+            );
+
+            if (!paystackResponse.data.status) {
+                console.error('[initializeDirectUploadPayment] Paystack initialization failed:', paystackResponse.data.message);
+                return res.status(500).json({ error: paystackResponse.data.message || 'Failed to initialize payment with Paystack.ᐟ' });
+            }
+
+            res.status(200).json({
+                message: 'Payment initialization successful',
+                data: paystackResponse.data.data
+            });
+        } else if (paymentMethod === 'korapay') {
+            if (!KORAPAY_PUBLIC_KEY) {
+                console.error('[initializeDirectUploadPayment] KORAPAY_PUBLIC_KEY is not set for KoraPay frontend integration.');
+                return res.status(500).json({ error: 'KoraPay public key not configured.ᐟ' });
+            }
+
+            const reference = `JOB-${finalJobId.substring(0, 8)}-${Date.now().toString(36)}`;
+            
+            // MODIFIED: Convert USD to KES and send base KES amount for KoraPay Checkout Standard
+            const amountKes = convertUsdToKes(parsedAmountUsd);
+            const amountInKes = parseFloat(amountKes.toFixed(2)); 
+
+            const korapayData = {
+                key: KORAPAY_PUBLIC_KEY,
+                reference: reference,
+                amount: amountInKes, // Send amount in KES
+                currency: 'KES', // Explicitly set currency to KES
+                customer: {
+                    name: req.user.full_name || 'Customer',
+                    email: finalClientEmail,
+                },
+                notification_url: KORAPAY_WEBHOOK_URL, 
+                metadata: {
+                    related_job_id: finalJobId,
+                    related_job_type: 'direct_upload', // jobType is 'direct_upload'
+                    client_id: clientId,
+                    transcriber_id: transcriberId,
+                    agreed_price_usd: agreedPriceUsd,
+                    currency_paid: 'KES', // Updated to KES
+                    exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                    amount_paid_kes: amountKes // Add KES amount to metadata
+                }
+            };
+            
+            res.status(200).json({
+                message: 'KoraPay payment initialization data successful',
+                korapayData: korapayData
+            });
+        }
+
+    } catch (error) {
+        console.error(`[initializeDirectUploadPayment] Error initializing ${paymentMethod} payment:`, error.response ? error.response.data : error.message);
+        res.status(500).json({ error: `Server error during ${paymentMethod} payment initialization.ᐟ` });
+    }
+};
+
+// NEW: verifyDirectUploadPayment function (extracted and adapted from paymentController.js)
+const verifyDirectUploadPayment = async (req, res, io) => {
+    const { reference } = req.params;
+    const { relatedJobId, paymentMethod = 'paystack' } = req.query; // jobType is implicitly 'direct_upload'
+
+    if (!reference || !relatedJobId) {
+        return res.status(400).json({ error: 'Payment reference and direct upload job ID are required for verification.ᐟ' });
+    }
+    if (!['paystack', 'korapay'].includes(paymentMethod)) {
+        console.error(`Invalid payment method provided: ${paymentMethod}`);
+        return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
+    }
+    if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
+        console.error('PAYSTACK_SECRET_KEY is not set.');
+        return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
+    }
+    if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
+        console.error('KORAPAY_SECRET_KEY is not set.');
+        return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
+    }
+
+    try {
+        let transaction;
+        let metadataCurrencyPaid;
+        let metadataExchangeRate;
+        let actualAmountPaidUsd;
+
+        if (paymentMethod === 'paystack') {
+            const paystackResponse = await axios.get(
+                `https://paystack.co/transaction/verify/${reference}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                    }
+                }
+            );
+
+            if (!paystackResponse.data.status || paystackResponse.data.data.status !== 'success') {
+                console.error('Paystack verification failed:', paystackResponse.data.data.gateway_response);
+                return res.status(400).json({ error: paystackResponse.data.data.gateway_response || 'Payment verification failed.ᐟ' });
+            }
+            transaction = paystackResponse.data.data;
+            metadataCurrencyPaid = transaction.metadata.currency_paid;
+            metadataExchangeRate = transaction.metadata.exchange_rate_usd_to_kes;
+            actualAmountPaidUsd = parseFloat((transaction.amount / 100 / metadataExchangeRate).toFixed(2));
+        } else if (paymentMethod === 'korapay') {
+            const korapayResponse = await axios.get(
+                `${KORAPAY_BASE_URL}/charges/${reference}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                    },
+                    httpsAgent: httpsAgent,
+                    httpAgent: httpAgent
+                }
+            );
+
+            if (!korapayResponse.data.status || korapayResponse.data.data.status !== 'success') {
+                console.error('KoraPay verification failed:', korapayResponse.data.message || korapayResponse.data.errors);
+                return res.status(400).json({ error: korapayResponse.data.message || 'Payment verification failed with KoraPay.ᐟ' });
+            }
+            transaction = korapayResponse.data.data;
+            // MODIFIED: Interpret amount received from KoraPay as KES (base unit), then convert to USD
+            const amountPaidKes = parseFloat(transaction.amount); // KoraPay returns amount in base unit for KES
+            actualAmountPaidUsd = parseFloat((amountPaidKes / EXCHANGE_RATE_USD_TO_KES).toFixed(2));
+            metadataCurrencyPaid = 'KES'; // Explicitly set to KES
+            metadataExchangeRate = EXCHANGE_RATE_USD_TO_KES;
+            
+            transaction.metadata = {
+                related_job_id: relatedJobId,
+                related_job_type: 'direct_upload',
+                client_id: req.user.userId,
+                transcriber_id: transaction.metadata?.transcriber_id || null,
+                agreed_price_usd: actualAmountPaidUsd,
+                currency_paid: metadataCurrencyPaid,
+                exchange_rate_usd_to_kes: metadataExchangeRate,
+                amount_paid_kes: amountPaidKes // Store KES amount
+            };
+            transaction.paid_at = transaction.createdAt;
+        }
+
+
+        const {
+            related_job_id: metadataRelatedJobId,
+            related_job_type: metadataRelatedJobType, // This should be 'direct_upload'
+            client_id: metadataClientId,
+            transcriber_id: metadataTranscriberIdRaw,
+            agreed_price_usd: metadataAgreedPrice,
+            currency_paid: metadataCurrencyPaidFromMeta,
+            exchange_rate_usd_to_kes: metadataExchangeRateFromMeta,
+            amount_paid_kes: metadataAmountPaidKes
+        } = transaction.metadata;
+
+        const finalTranscriberId = (metadataTranscriberIdRaw === '' || metadataTranscriberIdRaw === undefined) ? null : metadataTranscriberIdRaw;
+
+        if (metadataRelatedJobId !== relatedJobId || metadataRelatedJobType !== 'direct_upload') {
+            console.error('Metadata job ID or type mismatch:', metadataRelatedJobId, relatedJobId, metadataRelatedJobType);
+            return res.status(400).json({ error: 'Invalid transaction metadata (job ID or type mismatch).ᐟ' });
+        }
+
+        if (Math.round(actualAmountPaidUsd * 100) !== Math.round(metadataAgreedPrice * 100)) {
+            console.error('Payment verification amount mismatch. Transaction amount (USD):', actualAmountPaidUsd, 'Expected USD:', metadataAgreedPrice);
+            return res.status(400).json({ error: 'Invalid transaction metadata (amount mismatch). Payment charged a different amount than expected.ᐟ' });
+        }
+        
+        let currentJob;
+        let updateTable = 'direct_upload_jobs';
+        let updateStatusColumn = 'status';
+        let newJobStatus = 'available_for_transcriber';
+
+        const { data, error } = await supabase
+            .from('direct_upload_jobs')
+            .select('id, client_id, transcriber_id, quote_amount, status')
+            .eq('id', relatedJobId)
+            .single();
+        if (error || !data) {
+            console.error(`Error fetching direct upload job ${relatedJobId} during payment verification: `, error);
+            return res.status(404).json({ error: 'Direct upload job not found for verification.ᐟ' });
+        }
+        currentJob = data;
+        if (currentJob.status === 'available_for_transcriber' || currentJob.status === 'taken' || currentJob.status === 'in_progress') {
+             return res.status(200).json({ message: 'Payment already processed and direct upload job already active.ᐟ' });
+        }
+        
+        const transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd);
+        
+        const paymentData = {
+            related_job_type: 'direct_upload',
+            client_id: metadataClientId,
+            transcriber_id: finalTranscriberId,
+            amount: actualAmountPaidUsd,
+            transcriber_earning: transcriberPayAmount,
+            currency: 'USD',
+            paystack_reference: paymentMethod === 'paystack' ? transaction.reference : null,
+            korapay_reference: paymentMethod === 'korapay' ? transaction.reference : null,
+            paystack_status: paymentMethod === 'paystack' ? transaction.status : null,
+            korapay_status: paymentMethod === 'korapay' ? transaction.status : null,
+            transaction_date: new Date(transaction.paid_at).toISOString(),
+            payout_status: 'awaiting_completion',
+            currency_paid_by_client: metadataCurrencyPaidFromMeta,
+            exchange_rate_used: metadataExchangeRateFromMeta
+        };
+
+        paymentData.direct_upload_job_id = relatedJobId;
+        paymentData.negotiation_id = null;
+
+        const { data: paymentRecord, error: paymentError } = await supabase
+            .from('payments')
+            .insert([paymentData])
+            .select()
+            .single();
+
+        if (paymentError) {
+            console.error('Error recording payment in Supabase: ', paymentError);
+            throw paymentError;
+        }
+
+        const { error: jobUpdateError } = await supabase
+            .from(updateTable)
+            .update({ [updateStatusColumn]: newJobStatus, updated_at: new Date().toISOString() })
+            .eq('id', relatedJobId);
+
+        if (jobUpdateError) {
+            console.error(`Error updating job status to ${newJobStatus} for direct upload job ${relatedJobId}: `, jobUpdateError);
+            throw jobUpdateError;
+        }
+
+        const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', metadataClientId).single();
+        const transcriberUser = (finalTranscriberId)
+            ? (await supabase.from('users').select('full_name, email').eq('id', finalTranscriberId).single()).data
+            : null;
+
+        if (clientError) console.error('Error fetching client for payment email: ', clientError);
+        if (transcriberUser === null && finalTranscriberId) console.error('Error fetching transcriber for payment email: ', clientError);
+
+        if (clientUser) {
+            await emailService.sendPaymentConfirmationEmail(clientUser, transcriberUser, currentJob, paymentRecord);
+        }
+
+        if (io) {
+            io.to(metadataClientId).emit('payment_successful', {
+                relatedJobId: relatedJobId,
+                jobType: 'direct_upload',
+                message: 'Your payment was successful and the job is now active!ᐟ',
+                newStatus: newJobStatus
+            });
+            io.emit('direct_job_paid', { // Emit to all for 'other jobs' pool update
+                jobId: relatedJobId,
+                message: `A direct upload job has been paid for and is now available!`,
+                newStatus: newJobStatus
+            });
+            console.log(`Emitted 'payment_successful' to client ${metadataClientId} and 'direct_job_paid' to all transcribers.`);
+        }
+
+        res.status(200).json({
+            message: 'Payment verified successfully and job is now active.ᐟ',
+            transaction: transaction
+        });
+
+    } catch (error) {
+        console.error(`[verifyDirectUploadPayment] Error verifying ${paymentMethod} payment:`, error.response ? error.response.data : error.message);
+        res.status(500).json({ error: `Server error during ${paymentMethod} payment verification.ᐟ` + (error.message || '') });
+    }
+};
+
 
 module.exports = {
-    // uploadDirectFiles, // Multer middleware is now defined and used in generalApiRoutes.js
-    handleQuoteCalculationRequest, // NEW: Export the quote calculation handler
+    handleQuoteCalculationRequest,
     createDirectUploadJob,
     getDirectUploadJobsForClient,
     getAvailableDirectUploadJobsForTranscriber,
     takeDirectUploadJob,
     completeDirectUploadJob,
-    clientCompleteDirectUploadJob, // NEW: Export clientCompleteDirectUploadJob
-    getAllDirectUploadJobsForAdmin
+    clientCompleteDirectUploadJob,
+    getAllDirectUploadJobsForAdmin,
+    initializeDirectUploadPayment, // NEW: Export direct upload-specific payment initiation
+    verifyDirectUploadPayment // NEW: Export direct upload-specific payment verification
 };

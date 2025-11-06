@@ -4,6 +4,25 @@ const path = require('path');
 const emailService = require('../emailService');
 const multer = require('multer'); // FIX: Import multer
 
+// NEW: Import payment-related modules and constants
+const axios = require('axios');
+const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
+const http = require('http');
+const https = require('https');
+
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
+const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
+const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY;
+const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1';
+const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook';
+
+const httpAgent = new http.Agent({ family: 4 });
+const httpsAgent = new https.Agent({ family: 4 });
+
+const TRAINING_FEE_USD = 2.00; // Define the fixed training fee here
+
+
 // Multer configuration for Training Room attachments (allowing audio/video)
 const trainingRoomFileStorage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -87,7 +106,6 @@ const getTraineeTrainingStatus = async (req, res) => {
             return res.status(404).json({ error: 'Trainee not found or access denied.' });
         }
 
-        // MODIFIED: Fetch ADMIN_USER_ID and include it as trainer_id
         const adminId = process.env.ADMIN_USER_ID;
         if (!adminId) {
             console.error('ADMIN_USER_ID is not configured in backend environment variables.');
@@ -97,7 +115,7 @@ const getTraineeTrainingStatus = async (req, res) => {
         res.json({
             status: trainee.transcriber_status,
             user_level: trainee.transcriber_user_level,
-            trainer_id: adminId // Include the adminId as the trainer_id
+            trainer_id: adminId
         });
     } catch (error) {
         console.error('Error in getTraineeTrainingStatus:', error);
@@ -108,8 +126,6 @@ const getTraineeTrainingStatus = async (req, res) => {
 // Get training materials (can be static or fetched from DB)
 const getTrainingMaterials = async (req, res) => {
     try {
-        // For now, this can return static data or fetch from a 'training_materials' table if you create one.
-        // Example: Fetch from a 'training_materials' table
         const { data: materials, error } = await supabase
             .from('training_materials')
             .select('*')
@@ -117,7 +133,6 @@ const getTrainingMaterials = async (req, res) => {
 
         if (error) {
             console.warn('Error fetching training materials from DB, returning static data:', error.message);
-            // Fallback to static data if DB table not set up yet or error occurs
             return res.json({
                 materials: [
                     { id: '1', title: 'Introduction to Transcription', description: 'Understand the basics of transcription and industry standards.', link: 'https://example.com/intro-to-transcription' },
@@ -410,16 +425,240 @@ const completeTraining = async (req, res) => {
     }
 };
 
+// NEW: initializeTrainingPayment function (moved from paymentController.js)
+const initializeTrainingPayment = async (req, res, io) => {
+    const { amount, email, paymentMethod = 'paystack', mobileNumber, fullName } = req.body;
+    const traineeId = req.user.userId;
+
+    if (!amount || !email) {
+        return res.status(400).json({ error: 'Amount and trainee email are required for training payment.ᐟ' });
+    }
+    if (!['paystack', 'korapay'].includes(paymentMethod)) {
+        console.error(`Invalid payment method provided: ${paymentMethod}`);
+        return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
+    }
+    if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
+        console.error('PAYSTACK_SECRET_KEY is not set for training payment.');
+        return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
+    }
+    if (paymentMethod === 'korapay' && (!KORAPAY_SECRET_KEY || !KORAPAY_PUBLIC_KEY)) {
+        console.error('KORAPAY_SECRET_KEY or KORAPAY_PUBLIC_KEY is not set for training payment.');
+        return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
+    }
+
+    const parsedAmountUsd = parseFloat(amount);
+    if (isNaN(parsedAmountUsd) || parsedAmountUsd <= 0) {
+        return res.status(400).json({ error: 'Invalid training payment amount.ᐟ' });
+    }
+
+    if (Math.round(parsedAmountUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
+        console.error('Training payment amount mismatch. Provided USD:', parsedAmountUsd, 'Expected USD:', TRAINING_FEE_USD);
+        return res.status(400).json({ error: `Training payment amount must be USD ${TRAINING_FEE_USD}.` });
+    }
+
+    try {
+        if (paymentMethod === 'paystack') {
+            const amountKes = convertUsdToKes(parsedAmountUsd);
+            const amountInCentsKes = Math.round(amountKes * 100);
+
+            const paystackResponse = await axios.post(
+                'https://paystack.co/transaction/initialize',
+                {
+                    email: email,
+                    amount: amountInCentsKes,
+                    reference: `TRAINING-${traineeId}-${Date.now()}`,
+                    callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${traineeId}&jobType=training`,
+                    currency: 'KES',
+                    channels: ['mobile_money', 'card', 'bank_transfer', 'pesalink'],
+                    metadata: {
+                        related_job_id: traineeId,
+                        related_job_type: 'training',
+                        client_id: traineeId,
+                        agreed_price_usd: TRAINING_FEE_USD,
+                        currency_paid: 'KES',
+                        exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                        amount_paid_kes: amountKes
+                    }
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                    }
+                }
+            );
+
+            if (!paystackResponse.data.status) {
+                console.error('Paystack training initialization failed:', paystackResponse.data.message);
+                return res.status(500).json({ error: paystackResponse.data.message || 'Failed to initialize training payment with Paystack.ᐟ' });
+            }
+
+            res.status(200).json({
+                message: 'Training payment initialization successful',
+                data: paystackResponse.data.data
+            });
+        } else if (paymentMethod === 'korapay') {
+            const reference = `TR-${traineeId.substring(0, 8)}-${Date.now().toString(36)}`;
+            
+            const amountKes = convertUsdToKes(parsedAmountUsd);
+            const amountInKes = parseFloat(amountKes.toFixed(2)); 
+
+            const korapayData = {
+                key: KORAPAY_PUBLIC_KEY,
+                reference: reference,
+                amount: amountInKes,
+                currency: 'KES',
+                customer: {
+                    name: fullName || req.user.full_name || 'Trainee',
+                    email: email,
+                },
+                notification_url: KORAPAY_WEBHOOK_URL, 
+                metadata: {
+                    related_job_id: traineeId,
+                    related_job_type: 'training',
+                    client_id: traineeId,
+                    agreed_price_usd: TRAINING_FEE_USD,
+                    currency_paid: 'KES',
+                    exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                    amount_paid_kes: amountKes
+                }
+            };
+            
+            res.status(200).json({
+                message: 'KoraPay training payment initialization data successful',
+                korapayData: korapayData
+            });
+        }
+
+    } catch (error) {
+        console.error(`[initializeTrainingPayment] Error initializing ${paymentMethod} payment:`, error.response ? error.response.data : error.message);
+        res.status(500).json({ error: `Server error during ${paymentMethod} payment initialization.ᐟ` });
+    }
+};
+
+// NEW: verifyKorapayTrainingPayment function (moved from paymentController.js)
+const verifyKorapayTrainingPayment = async (req, res, io) => {
+    const { reference } = req.body;
+    const traineeId = req.user.userId;
+
+    if (!reference) {
+        return res.status(400).json({ error: 'KoraPay transaction reference is required for verification.ᐟ' });
+    }
+    if (!KORAPAY_SECRET_KEY) {
+        console.error('KORAPAY_SECRET_KEY is not set for KoraPay verification.');
+        return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
+    }
+
+    try {
+        const korapayResponse = await axios.get(
+            `${KORAPAY_BASE_URL}/charges/${reference}`,
+            {
+                headers: {
+                    Authorization: `Bearer ${KORAPAY_SECRET_KEY}`,
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                },
+                httpsAgent: httpsAgent,
+                httpAgent: httpAgent
+            }
+        );
+
+        if (!korapayResponse.data.status || korapayResponse.data.data.status !== 'success') {
+            console.error('KoraPay training verification failed:', korapayResponse.data.message || korapayResponse.data.errors);
+            return res.status(400).json({ error: korapayResponse.data.message || 'KoraPay training payment verification failed.ᐟ' });
+        }
+
+        const transaction = korapayResponse.data.data;
+        // const TRAINING_FEE_USD is already defined globally in this file
+
+        let transactionDate = transaction.createdAt ? new Date(transaction.createdAt) : new Date();
+        if (isNaN(transactionDate.getTime())) {
+            console.error('[verifyKorapayTrainingPayment] KoraPay transaction.createdAt is an invalid date:', transaction.createdAt);
+            transactionDate = new Date();
+        }
+
+        const amountPaidKes = parseFloat(transaction.amount);
+        const amountPaidInUsd = parseFloat((amountPaidKes / EXCHANGE_RATE_USD_TO_KES).toFixed(2));
+
+        if (Math.round(amountPaidInUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
+            console.error('KoraPay training verification amount mismatch. Paid USD:', amountPaidInUsd, 'Expected USD:', TRAINING_FEE_USD);
+            return res.status(400).json({ error: 'KoraPay training payment amount mismatch.ᐟ' });
+        }
+
+        const { error: updateTraineeStatusError } = await supabase
+            .from('users')
+            .update({ transcriber_status: 'paid_training_fee', updated_at: new Date().toISOString() })
+            .eq('id', traineeId);
+
+        if (updateTraineeStatusError) {
+            console.error(`Error updating trainee ${traineeId} status after KoraPay payment:`, updateTraineeStatusError);
+            throw updateTraineeStatusError;
+        }
+        console.log(`Trainee ${traineeId} status updated to 'paid_training_fee' after successful KoraPay payment.`);
+
+        const { error: paymentRecordError } = await supabase
+            .from('payments')
+            .insert([
+                {
+                    negotiation_id: null,
+                    direct_upload_job_id: null,
+                    related_job_type: 'training',
+                    client_id: traineeId,
+                    transcriber_id: traineeId,
+                    amount: amountPaidInUsd,
+                    transcriber_earning: amountPaidInUsd,
+                    currency: 'USD',
+                    paystack_reference: null,
+                    paystack_status: null,
+                    korapay_reference: transaction.reference,
+                    korapay_status: transaction.status,
+                    transaction_date: transactionDate.toISOString(),
+                    payout_status: 'completed',
+                    currency_paid_by_client: 'KES',
+                    exchange_rate_used: EXCHANGE_RATE_USD_TO_KES
+                }
+            ])
+            .select()
+            .single();
+
+        if (paymentRecordError) {
+            console.error('Error recording KoraPay training payment in Supabase:', paymentRecordError);
+            throw paymentRecordError;
+        }
+
+        if (io) {
+            io.to(traineeId).emit('training_payment_successful', {
+                traineeId: traineeId,
+                message: 'Your training payment was successful! You now have access to the training dashboard.ᐟ',
+                newStatus: 'paid_training_fee'
+            });
+            console.log(`Emitted 'training_payment_successful' to trainee ${traineeId}`);
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'KoraPay training payment verified successfully and access granted.ᐟ',
+            transaction: transaction
+        });
+
+    } catch (error) {
+        console.error('[verifyKorapayTrainingPayment] Error verifying KoraPay training payment:', error.response ? error.response.data : error.message);
+        res.status(500).json({ error: 'Server error during KoraPay training payment verification.ᐟ' + (error.message || '') });
+    }
+};
+
 
 module.exports = {
     getTraineeTrainingStatus,
     getTrainingMaterials,
-    createTrainingMaterial, // NEW: Export createTrainingMaterial
-    updateTrainingMaterial, // NEW: Export updateTrainingMaterial
-    deleteTrainingMaterial, // NEW: Export deleteTrainingMaterial
+    createTrainingMaterial,
+    updateTrainingMaterial,
+    deleteTrainingMaterial,
     getTraineeTrainingRoomMessages,
     sendTraineeTrainingRoomMessage,
-    uploadTrainingRoomAttachment, // Export Multer middleware
-    handleTrainingRoomAttachmentUpload, // Export controller function
-    completeTraining // NEW: Export the completeTraining function
+    uploadTrainingRoomAttachment,
+    handleTrainingRoomAttachmentUpload,
+    completeTraining,
+    initializeTrainingPayment, // NEW: Export initializeTrainingPayment
+    verifyKorapayTrainingPayment // NEW: Export verifyKorapayTrainingPayment
 };
