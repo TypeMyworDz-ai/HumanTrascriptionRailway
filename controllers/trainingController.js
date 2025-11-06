@@ -475,12 +475,13 @@ const initializeTrainingPayment = async (req, res, io) => {
             const reference = `TR-${traineeId.substring(0, 8)}-${Date.now().toString(36)}`;
             
             const amountKes = convertUsdToKes(parsedAmountUsd);
-            const amountInKes = parseFloat(amountKes.toFixed(2)); 
+            // MODIFIED: Send amount in KES cents (integer) for KoraPay Checkout Standard
+            const amountInCentsKes = Math.round(amountKes * 100); 
 
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
                 reference: reference,
-                amount: amountInKes,
+                amount: amountInCentsKes, // Send amount in KES cents
                 currency: 'KES',
                 customer: {
                     name: fullName || req.user.full_name || 'Trainee',
@@ -541,7 +542,6 @@ const verifyKorapayTrainingPayment = async (req, res, io) => {
         }
 
         const transaction = korapayResponse.data.data;
-        // const TRAINING_FEE_USD is already defined globally in this file
 
         let transactionDate = transaction.createdAt ? new Date(transaction.createdAt) : new Date();
         if (isNaN(transactionDate.getTime())) {
@@ -549,7 +549,9 @@ const verifyKorapayTrainingPayment = async (req, res, io) => {
             transactionDate = new Date();
         }
 
-        const amountPaidKes = parseFloat(transaction.amount);
+        // MODIFIED: Interpret amount received from KoraPay as KES cents, then convert to base KES, then to USD
+        const amountPaidKesCents = parseFloat(transaction.amount); // KoraPay returns amount in cents
+        const amountPaidKes = parseFloat((amountPaidKesCents / 100).toFixed(2));
         const amountPaidInUsd = parseFloat((amountPaidKes / EXCHANGE_RATE_USD_TO_KES).toFixed(2));
 
         if (Math.round(amountPaidInUsd * 100) !== Math.round(TRAINING_FEE_USD * 100)) {
