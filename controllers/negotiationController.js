@@ -516,6 +516,7 @@ const getTranscriberNegotiations = async (req, res) => {
 
         return {
             ...rest,
+            jobType: 'negotiation', // Explicitly set jobType
             client_info: client ? {
                 id: client.id,
                 full_name: client.full_name,
@@ -1386,7 +1387,8 @@ const verifyNegotiationPayment = async (req, res, io) => {
                 exchange_rate_usd_to_kes: metadataExchangeRate,
                 amount_paid_usd: actualAmountPaidUsd
             };
-            transaction.paid_at = transaction.createdAt;
+            // UPDATED: Safely parse transaction.paid_at to handle potential 'Invalid time value'
+            transaction.paid_at = transaction.createdAt ? new Date(transaction.createdAt).toISOString() : new Date().toISOString();
         }
 
 
