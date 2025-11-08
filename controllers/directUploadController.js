@@ -10,7 +10,7 @@ const { calculatePricePerMinute } = require('../utils/pricingCalculator');
 const { updateAverageRating } = require('./ratingController');
 
 const axios = require('axios');
-const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
+const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES, calculateTranscriberEarning } = require('../utils/paymentUtils'); // UPDATED: Added calculateTranscriberEarning
 const http = require('http');
 const https = require('https');
 
