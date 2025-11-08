@@ -1,17 +1,17 @@
 const axios = require('axios');
-const supabase = require('../database');
-const { syncAvailabilityStatus } = require('../controllers/transcriberController'); 
-const emailService = require('../emailService');
-const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
+const supabase = require('..//database');
+const { syncAvailabilityStatus } = require('..//controllers/transcriberController'); 
+const emailService = require('..//emailService');
+const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
 const http = require('http');
 const https = require('https');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
+const CLIENT_URL = process.env.CLIENT_URL || 'http:--localhost:3000';
 const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
 const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY;
-const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1';
-const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook';
+const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https:--api-sandbox.korapay.com-v1';
+const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http:--localhost:5000-api-payment-korapay-webhook';
 
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
@@ -235,8 +235,9 @@ const getClientPaymentHistory = async (req, res) => {
                 payout_status,
                 currency_paid_by_client,
                 exchange_rate_used,
-                transcriber:users!transcriber_id(full_name, email),
-                negotiation:negotiation_id(id, status, requirements, deadline_hours, agreed_price_usd)
+                transcriber:users!transcriber_id(full_name, email), // Ensure transcriber details are fetched
+                negotiation:negotiation_id(id, status, requirements, deadline_hours, agreed_price_usd),
+                direct_upload_job:direct_upload_jobs!direct_upload_job_id(id, status, client_instructions, agreed_deadline_hours, quote_amount)
             `)
             .eq('client_id', clientId)
             .order('transaction_date', { ascending: false });
@@ -248,6 +249,9 @@ const getClientPaymentHistory = async (req, res) => {
 
         const paymentsWithJobDetails = await Promise.all((payments || []).map(async (payment) => {
             let jobDetails = {};
+            // UPDATED: Directly use payment.transcriber?.full_name
+            const transcriberName = payment.transcriber?.full_name || 'N/A'; 
+
             if (payment.related_job_type === 'negotiation') {
                 const { data: negotiation, error: negError } = await supabase
                     .from('negotiations')
@@ -265,7 +269,7 @@ const getClientPaymentHistory = async (req, res) => {
             } else if (payment.related_job_type === 'training') {
                 jobDetails = { training_info: { requirements: 'Training Fee Payment', agreed_price_usd: payment.amount } };
             }
-            return { ...payment, ...jobDetails };
+            return { ...payment, ...jobDetails, transcriberName: transcriberName }; // Add transcriberName to the payment object
         }));
 
         const totalPayments = (paymentsWithJobDetails || []).reduce((sum, p) => sum + p.amount, 0);
