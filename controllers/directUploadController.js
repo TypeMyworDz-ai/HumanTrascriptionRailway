@@ -1,16 +1,16 @@
-const supabase = require('..//database');
+const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { syncAvailabilityStatus } = require('./transcriberController');
-const emailService = require('..//emailService');
+const emailService = require('../emailService');
 const util = require('util');
 const { getAudioDurationInSeconds } = require('get-audio-duration');
-const { calculatePricePerMinute } = require('..//utils/pricingCalculator');
+const { calculatePricePerMinute } = require('../utils/pricingCalculator');
 const { updateAverageRating } = require('./ratingController');
 
 const axios = require('axios');
-const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
+const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
 const http = require('http');
 const https = require('https');
 
@@ -807,7 +807,10 @@ const initializeDirectUploadPayment = async (req, res, io) => {
                 name: fullName || req.user.full_name || 'Customer',
                 email: finalClientEmail,
             };
-            // REMOVED: Conditionally add mobileNumber to KoraPay customer object
+            // Re-introducing: Conditionally add mobileNumber to KoraPay customer object
+            if (mobileNumber) {
+                korapayCustomer.phone = mobileNumber;
+            }
 
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
