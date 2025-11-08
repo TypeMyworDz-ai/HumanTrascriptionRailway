@@ -923,7 +923,8 @@ const verifyDirectUploadPayment = async (req, res, io) => {
                 exchange_rate_usd_to_kes: metadataExchangeRate,
                 amount_paid_kes: amountPaidKes
             };
-            transaction.paid_at = transaction.createdAt;
+            // UPDATED: Safely parse transaction.paid_at to handle potential 'Invalid time value'
+            transaction.paid_at = transaction.createdAt ? new Date(transaction.createdAt).toISOString() : new Date().toISOString(); 
         }
 
 
