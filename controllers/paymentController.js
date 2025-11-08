@@ -59,11 +59,33 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 currency_paid_by_client,
                 exchange_rate_used,
                 client:users!client_id(full_name, email),
-                negotiation:negotiation_id(id, status, requirements, deadline_hours, agreed_price_usd),
-                direct_upload_job:direct_upload_jobs!direct_upload_job_id(id, status, client_instructions, agreed_deadline_hours, quote_amount)
+                negotiation:negotiation_id(
+                    id, 
+                    status, 
+                    requirements, 
+                    deadline_hours, 
+                    agreed_price_usd,
+                    completed_at, // UPDATED: Include completed_at
+                    transcriber_response, // UPDATED: Include transcriber_response (your comment)
+                    client_feedback_comment, // UPDATED: Include client_feedback_comment
+                    client_feedback_rating // UPDATED: Include client_feedback_rating
+                ),
+                direct_upload_job:direct_upload_jobs!direct_upload_job_id(
+                    id, 
+                    status, 
+                    client_instructions, 
+                    agreed_deadline_hours, 
+                    quote_amount,
+                    completed_at, // UPDATED: Include completed_at
+                    client_completed_at, // UPDATED: Include client_completed_at
+                    transcriber_comment, // UPDATED: Include transcriber_comment (your comment)
+                    client_feedback_comment, // UPDATED: Include client_feedback_comment
+                    client_feedback_rating // UPDATED: Include client_feedback_rating
+                )
             `)
             .eq('transcriber_id', transcriberId)
-            .or('payout_status.eq.awaiting_completion,payout_status.eq.paid_out')
+            // UPDATED: Filter for 'pending', 'awaiting_completion', and 'paid_out' to cover all relevant statuses
+            .or('payout_status.eq.pending,payout_status.eq.awaiting_completion,payout_status.eq.paid_out') 
             .order('transaction_date', { ascending: false });
 
         if (error) {
@@ -76,22 +98,36 @@ const getTranscriberPaymentHistory = async (req, res) => {
             let jobStatus = 'N/A';
             let jobAmount = 0;
             let jobDeadline = 'N/A';
+            let completedOn = 'N/A';
+            let transcriberComment = 'N/A';
+            let clientFeedbackComment = 'N/A';
+            let clientFeedbackRating = 0;
+
 
             if (payment.related_job_type === 'negotiation' && payment.negotiation) {
                 jobRequirements = payment.negotiation.requirements;
                 jobStatus = payment.negotiation.status;
                 jobAmount = payment.negotiation.agreed_price_usd;
                 jobDeadline = payment.negotiation.deadline_hours;
+                completedOn = payment.negotiation.completed_at;
+                transcriberComment = payment.negotiation.transcriber_response;
+                clientFeedbackComment = payment.negotiation.client_feedback_comment;
+                clientFeedbackRating = payment.negotiation.client_feedback_rating;
             } else if (payment.related_job_type === 'direct_upload' && payment.direct_upload_job) {
                 jobRequirements = payment.direct_upload_job.client_instructions;
                 jobStatus = payment.direct_upload_job.status;
                 jobAmount = payment.direct_upload_job.quote_amount;
                 jobDeadline = payment.direct_upload_job.agreed_deadline_hours;
+                completedOn = payment.direct_upload_job.completed_at || payment.direct_upload_job.client_completed_at;
+                transcriberComment = payment.direct_upload_job.transcriber_comment;
+                clientFeedbackComment = payment.direct_upload_job.client_feedback_comment;
+                clientFeedbackRating = payment.direct_upload_job.client_feedback_rating;
             } else if (payment.related_job_type === 'training') {
                 jobRequirements = 'Training Fee';
                 jobStatus = 'paid_training_fee';
                 jobAmount = payment.amount;
                 jobDeadline = 'N/A';
+                completedOn = payment.transaction_date; // Use transaction date for training completion
             }
 
             return {
@@ -99,7 +135,11 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 jobRequirements: jobRequirements,
                 job_status: jobStatus,
                 job_amount: jobAmount,
-                job_deadline: jobDeadline
+                job_deadline: jobDeadline,
+                completed_on: completedOn,
+                transcriber_comment: transcriberComment,
+                client_feedback_comment: clientFeedbackComment,
+                client_feedback_rating: clientFeedbackRating
             };
         });
 
@@ -112,8 +152,9 @@ const getTranscriberPaymentHistory = async (req, res) => {
         paymentsWithJobDetails.forEach(payout => {
             console.log(`[getTranscriberPaymentHistory] Processing payout ${payout.id}. Related job type: ${payout.related_job_type}, Payout status: ${payout.payout_status}, Derived Job status: ${payout.job_status}`);
 
+            // UPDATED: Include 'pending' status for upcoming payouts as well
             const isEligibleForUpcomingPayout =
-                payout.payout_status === 'awaiting_completion' &&
+                (payout.payout_status === 'pending' || payout.payout_status === 'awaiting_completion') &&
                 (payout.job_status === 'completed' || payout.job_status === 'client_completed');
 
             console.log(`[getTranscriberPaymentHistory] Payout ${payout.id} is eligible for upcoming payout: ${isEligibleForUpcomingPayout}`);
@@ -164,7 +205,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
 
         res.status(200).json({
             message: `Upcoming payouts for transcriber ${transcriberId} retrieved successfully.`,
-            payments: [],
+            payments: [], // This will be the detailed history if needed later
             upcomingPayouts: upcomingPayoutsArray,
             totalUpcomingPayouts: totalUpcomingPayouts,
             summary: {
@@ -472,8 +513,8 @@ const markPaymentAsPaidOut = async (req, res, io) => {
             return res.status(404).json({ error: 'Payment record not found.ᐟ' });
         }
 
-        if (payment.payout_status !== 'awaiting_completion') {
-            return res.status(400).json({ error: `Payment status is '${payment.payout_status}'. Only payments 'awaiting_completion' can be marked as paid out.` });
+        if (payment.payout_status !== 'pending') { // UPDATED: Changed from 'awaiting_completion' to 'pending'
+            return res.status(400).json({ error: `Payment status is '${payment.payout_status}'. Only payments 'pending' can be marked as paid out.` });
         }
 
         const { data: updatedPayment, error: updateError } = await supabase

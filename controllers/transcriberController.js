@@ -6,8 +6,7 @@ const { updateAverageRating } = require('./ratingController');
 const { calculateTranscriberEarning } = require('../utils/paymentUtils');
 const { getNextFriday } = require('../utils/paymentUtils');
 
-// Utility function to sync availability status (updates 'users' table only)
-const syncAvailabilityStatus = async (userId, currentJobId = null) => { // Removed isAvailable parameter
+const syncAvailabilityStatus = async (userId, currentJobId = null) => {
     if (!userId) {
         console.warn('syncAvailabilityStatus: userId is null or undefined. Skipping availability sync.');
         return;
@@ -28,21 +27,19 @@ const syncAvailabilityStatus = async (userId, currentJobId = null) => { // Remov
             console.error(`Supabase error updating user availability in 'users' table for ${userId}:`, userError);
             throw userError;
         }
-        console.log(`User ${userId} availability synced: current_job_id=${currentJobId}`); // Adjusted logging
+        console.log(`User ${userId} availability synced: current_job_id=${currentJobId}`);
     } catch (error) {
         console.error(`syncAvailabilityStatus: Uncaught error for user ${userId}:`, error);
         throw error;
     }
 };
 
-// Function to set a user's online status (updates 'users' table only)
 const setOnlineStatus = async (userId, isOnline) => {
     console.log(`[setOnlineStatus] Attempting to set user ${userId} is_online to ${isOnline}`);
     try {
-        // Fetch current user data before updating to ensure consistency
         const { data: currentUser, error: fetchError } = await supabase
             .from('users')
-            .select('current_job_id') // Removed is_available
+            .select('current_job_id')
             .eq('id', userId)
             .eq('user_type', 'transcriber')
             .single();
@@ -56,13 +53,10 @@ const setOnlineStatus = async (userId, isOnline) => {
             updated_at: new Date().toISOString()
         };
 
-        // NEW LOGIC: If transcriber is going online and is NOT currently assigned a job,
-        // ensure their 'current_job_id' is null.
         if (isOnline && (!currentUser || !currentUser.current_job_id)) {
-            updateData.current_job_id = null; // Ensure no stale job ID if making available
-            console.log(`[setOnlineStatus] User ${userId} is coming online and has no active job. Setting current_job_id to null.`); // Adjusted logging
+            updateData.current_job_id = null;
+            console.log(`[setOnlineStatus] User ${userId} is coming online and has no active job. Setting current_job_id to null.`);
         }
-        // When going offline, we don't change current_job_id here, as it's handled by job completion.
 
         const { data, error } = await supabase
             .from('users')
@@ -76,7 +70,6 @@ const setOnlineStatus = async (userId, isOnline) => {
         }
         console.log(`[setOnlineStatus] User ${userId} is_online status successfully set to ${isOnline}. Supabase response data:`, data);
 
-        // --- NEW: Verify current_job_id immediately after update ---
         const { data: verifiedUser, error: verifyError } = await supabase
             .from('users')
             .select('current_job_id')
@@ -88,7 +81,6 @@ const setOnlineStatus = async (userId, isOnline) => {
         } else {
             console.log(`[setOnlineStatus] VERIFICATION: User ${userId} current_job_id after update: ${verifiedUser ? verifiedUser.current_job_id : 'Not found'}`);
         }
-        // --- END NEW VERIFICATION ---
 
     } catch (error) {
         console.error('[setOnlineStatus] Uncaught error:', error);
@@ -96,7 +88,6 @@ const setOnlineStatus = async (userId, isOnline) => {
     }
 };
 
-// Submit transcriber test
 const submitTest = async (req, res) => {
   try {
     const { grammar_score, transcription_text } = req.body;
@@ -151,7 +142,6 @@ const submitTest = async (req, res) => {
   }
 };
 
-// Check test status and transcriber profile details
 const checkTestStatus = async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -209,7 +199,6 @@ const checkTestStatus = async (req, res) => {
   }
 };
 
-// Get transcriber's negotiations
 const getTranscriberNegotiations = async (req, res) => {
   try {
     const transcriberId = req.user.userId;
@@ -229,6 +218,9 @@ const getTranscriberNegotiations = async (req, res) => {
         transcriber_response,
         negotiation_files,
         created_at,
+        completed_at, // UPDATED: Include completed_at for 'Completed On'
+        client_feedback_comment, // UPDATED: Include client feedback comment
+        client_feedback_rating, // UPDATED: Include client feedback rating
         client_id,
         client:users!client_id (
             id,
@@ -313,7 +305,6 @@ const getTranscriberNegotiations = async (req, res) => {
   }
 };
 
-// UPDATED: Accept Negotiation - Syncs availability status and emits events
 const acceptNegotiation = async (req, res, next, io) => {
     const { negotiationId } = req.params;
     const transcriberId = req.user.userId;
@@ -323,10 +314,9 @@ const acceptNegotiation = async (req, res, next, io) => {
     }
 
     try {
-        // Fetch transcriber's current availability status from the 'users' table
         const { data: userProfile, error: fetchUserError } = await supabase
             .from('users')
-            .select('is_online, current_job_id, transcriber_status') // Removed is_available
+            .select('is_online, current_job_id, transcriber_status')
             .eq('id', transcriberId)
             .eq('user_type', 'transcriber')
             .single();
@@ -336,11 +326,9 @@ const acceptNegotiation = async (req, res, next, io) => {
             return res.status(404).json({ error: 'User profile not found.' });
         }
 
-        // Check eligibility criteria for *taking* a negotiation job
         if (userProfile.transcriber_status !== 'active_transcriber') {
             return res.status(403).json({ error: 'You are not an active transcriber. Please complete your assessment.' });
         }
-        // NEW: Check if online and no current job
         if (!userProfile.is_online || userProfile.current_job_id) {
             let errorMessage = 'You cannot accept this negotiation. ';
             if (!userProfile.is_online) {
@@ -352,7 +340,6 @@ const acceptNegotiation = async (req, res, next, io) => {
             return res.status(409).json({ error: errorMessage.trim() });
         }
 
-        // Fetch negotiation details to verify assignment and current status
         const { data: negotiationToAccept, error: fetchNegError } = await supabase
             .from('negotiations')
             .select('client_id, status')
@@ -386,7 +373,6 @@ const acceptNegotiation = async (req, res, next, io) => {
             return res.status(409).json({ error: 'Negotiation was not found, or its status is no longer pending. This could be a race, or the negotiation was already accepted/deleted.' });
         }
 
-        // Send a real-time notification to the client about the acceptance
         if (io) {
             io.to(negotiationToAccept.client_id).emit('negotiation_accepted', {
                 negotiationId: negotiationId,
@@ -408,7 +394,6 @@ const acceptNegotiation = async (req, res, next, io) => {
     }
 };
 
-// Reject Negotiation
 const rejectNegotiation = async (req, res, next, io) => {
     const { negotiationId } = req.params;
     const transcriberId = req.user.userId;
@@ -474,7 +459,6 @@ const rejectNegotiation = async (req, res, next, io) => {
     }
 };
 
-// Counter Negotiation
 const counterNegotiation = async (req, res, next, io) => {
     const { negotiationId } = req.params;
     const { proposed_price_usd, deadline_hours, transcriber_response } = req.body;
@@ -551,7 +535,6 @@ const counterNegotiation = async (req, res, next, io) => {
     }
 };
 
-// Function to complete a job and make the transcriber available again
 const completeJob = async (req, res, next, io) => {
     const { negotiationId } = req.params;
     const transcriberId = req.user.userId;
@@ -590,7 +573,6 @@ const completeJob = async (req, res, next, io) => {
             throw updateError;
         }
 
-        // --- UPDATED: Update payments record upon job completion ---
         const { error: paymentUpdateError } = await supabase
             .from('payments')
             .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
@@ -603,11 +585,8 @@ const completeJob = async (req, res, next, io) => {
         } else {
             console.log(`[completeJob] Payment record for negotiation ${negotiationId} updated to 'pending' payout status.`);
         }
-        // --- END UPDATED: Update payments record upon job completion ---
 
-
-        // UPDATED: Sync availability status - clear current job ID
-        await syncAvailabilityStatus(transcriberId, null); // Removed isAvailable parameter
+        await syncAvailabilityStatus(transcriberId, null);
 
         if (io) {
             io.to(negotiation.client_id).emit('job_completed', {
@@ -629,7 +608,6 @@ const completeJob = async (req, res, next, io) => {
     }
 };
 
-// Function to get a transcriber's upcoming payouts
 const getTranscriberUpcomingPayouts = async (req, res) => {
     const transcriberId = req.user.userId;
 
@@ -708,7 +686,6 @@ const getTranscriberUpcomingPayouts = async (req, res) => {
 };
 
 
-// Function for transcribers to update their profile (including payment details)
 const updateTranscriberProfile = async (req, res) => {
     const { userId } = req.params;
     const { transcriber_mpesa_number, transcriber_paypal_email, transcriber_status, transcriber_user_level } = req.body;
