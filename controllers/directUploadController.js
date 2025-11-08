@@ -2,7 +2,7 @@ const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { syncAvailabilityStatus } = require('./transcriberController');
+const { syncAvailabilityStatus } = require('./transcriberController'); // Keep for syncAvailabilityStatus
 const emailService = require('../emailService');
 const util = require('util');
 const { getAudioDurationInSeconds } = require('get-audio-duration');
@@ -411,7 +411,6 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
     }
 };
 
-// NEW: Endpoint to get all direct upload jobs for a transcriber (active, completed, etc.)
 const getAllDirectUploadJobsForTranscriber = async (req, res) => {
     const transcriberId = req.user.userId;
 
@@ -435,14 +434,14 @@ const getAllDirectUploadJobsForTranscriber = async (req, res) => {
                 deadline_type_param,
                 special_requirements,
                 created_at,
-                completed_at, // UPDATED: Include completed_at
-                client_completed_at, // UPDATED: Include client_completed_at
-                transcriber_comment, // UPDATED: Include transcriber_comment
-                client_feedback_comment, // UPDATED: Include client_feedback_comment
-                client_feedback_rating, // UPDATED: Include client_feedback_rating
+                completed_at, 
+                client_completed_at, 
+                transcriber_comment, 
+                client_feedback_comment, 
+                client_feedback_rating, 
                 client:users!client_id(full_name, email)
             `)
-            .eq('transcriber_id', transcriberId) // Filter by the current transcriber
+            .eq('transcriber_id', transcriberId) 
             .order('created_at', { ascending: false });
 
         if (error) {
@@ -479,7 +478,7 @@ const takeDirectUploadJob = async (req, res, io) => {
         }
         if (!transcriberUser.is_online || transcriberUser.current_job_id) {
             let errorMessage = 'You cannot take this job. ';
-            if (!transcriberUser.is_online) {
+            if (!transcriberUser.is_online) { 
                 errorMessage += 'Reason: You are currently offline. Please go online. ';
             }
             if (transcriberUser.current_job_id) {
@@ -590,17 +589,16 @@ const completeDirectUploadJob = async (req, res, io) => {
         }
 
         if (existingPayment) {
-            // The payout_status is set to 'awaiting_completion' here.
-            // It will be updated to 'pending' when the client marks the job as client_completed.
+            // UPDATED: Set payout_status to 'pending' when transcriber completes the job
             const { error: paymentUpdateError } = await supabase
                 .from('payments')
-                .update({ payout_status: 'awaiting_completion', updated_at: new Date().toISOString() })
+                .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
                 .eq('id', existingPayment.id);
 
             if (paymentUpdateError) {
-                console.error(`[completeDirectUploadJob] Error updating payment record for direct upload job ${jobId} to 'awaiting_completion':`, paymentUpdateError);
+                console.error(`[completeDirectUploadJob] Error updating payment record for direct upload job ${jobId} to 'pending':`, paymentUpdateError);
             } else {
-                console.log(`[completeDirectUploadJob] Payment record for direct upload job ${jobId} updated to 'awaiting_completion' payout status.`);
+                console.log(`[completeDirectUploadJob] Payment record for direct upload job ${jobId} updated to 'pending' payout status.`);
             }
         } else {
             console.warn(`[completeDirectUploadJob] No existing payment record found for direct upload job ${jobId} and transcriber ${transcriberId}. A payment record should have been created upon client payment.`);
@@ -615,7 +613,12 @@ const completeDirectUploadJob = async (req, res, io) => {
                 message: `Your direct upload job '${updatedJob.id.substring(0, 8)}...' has been submitted for client review!`,
                 newStatus: 'completed'
             });
-            console.log(`Emitted 'direct_job_completed' to client ${updatedJob.client_id}`);
+            io.emit('direct_job_completed_transcriber_side', { 
+                jobId: updatedJob.id,
+                message: `Direct upload job '${updatedJob.id.substring(0, 8)}...' submitted. Awaiting client review.`,
+                newStatus: 'completed'
+            });
+            console.log(`Emitted 'direct_job_completed' to client ${updatedJob.client_id} and 'direct_job_completed_transcriber_side' to all transcribers.`);
         }
 
         res.status(200).json({
@@ -673,19 +676,22 @@ const clientCompleteDirectUploadJob = async (req, res, io) => {
             await updateAverageRating(job.transcriber_id, clientFeedbackRating, 'transcriber');
         }
 
-        // UPDATED: Update payment payout_status to 'pending' when client completes direct upload job
+        // REMOVED: This payment update is no longer needed here, as payout_status is set to 'pending' when transcriber submits.
+        // The payment should already be in 'pending' status if the transcriber completed it.
+        /*
         const { error: paymentUpdateError } = await supabase
             .from('payments')
             .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
             .eq('direct_upload_job_id', jobId)
-            .eq('transcriber_id', job.transcriber_id) // Ensure we target the correct transcriber's payment
-            .eq('payout_status', 'awaiting_completion'); // Only update if it's awaiting completion
+            .eq('transcriber_id', job.transcriber_id) 
+            .eq('payout_status', 'awaiting_completion'); 
 
         if (paymentUpdateError) {
             console.error(`[clientCompleteDirectUploadJob] Error updating payment record for direct upload job ${jobId} to 'pending':`, paymentUpdateError);
         } else {
             console.log(`[clientCompleteDirectUploadJob] Payment record for direct upload job ${jobId} updated to 'pending' payout status.`);
         }
+        */
 
         if (io && updatedJob.transcriber_id) {
             io.to(updatedJob.transcriber_id).emit('direct_job_client_completed', {
@@ -733,11 +739,11 @@ const getAllDirectUploadJobsForAdmin = async (req, res) => {
                 deadline_type_param,
                 special_requirements,
                 created_at,
-                completed_at, // UPDATED: Include completed_at
-                client_completed_at, // UPDATED: Include client_completed_at
-                transcriber_comment, // UPDATED: Include transcriber_comment
-                client_feedback_comment, // UPDATED: Include client_feedback_comment
-                client_feedback_rating, // UPDATED: Include client_feedback_rating
+                completed_at, 
+                client_completed_at, 
+                transcriber_comment, 
+                client_feedback_comment, 
+                client_feedback_rating, 
                 client:users!client_id(full_name, email),
                 transcriber:users!transcriber_id(full_name, email)
             `)
@@ -928,11 +934,9 @@ const verifyDirectUploadPayment = async (req, res, io) => {
         return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
     }
     if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
-        console.error('[PAYSTACK_SECRET_KEY] is not set.ᐟ');
         return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
     }
     if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
-        console.error('[KORAPAY_SECRET_KEY] is not set.ᐟ');
         return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
     }
 
@@ -1131,7 +1135,7 @@ module.exports = {
     takeDirectUploadJob,
     completeDirectUploadJob,
     clientCompleteDirectUploadJob,
-    getAllDirectUploadJobsForTranscriber, // NEW: Export the new function
+    getAllDirectUploadJobsForTranscriber, 
     getAllDirectUploadJobsForAdmin,
     initializeDirectUploadPayment,
     verifyDirectUploadPayment

@@ -1,10 +1,12 @@
-const supabase = require('../database');
+const supabase = require('..//database');
 const path = require('path');
 const fs = require('fs');
-const emailService = require('../emailService');
+const emailService = require('..//emailService');
 const { updateAverageRating } = require('./ratingController');
-const { calculateTranscriberEarning } = require('../utils/paymentUtils');
-const { getNextFriday } = require('../utils/paymentUtils');
+const { calculateTranscriberEarning } = require('..//utils/paymentUtils');
+const { getNextFriday } = require('..//utils/paymentUtils');
+
+// REMOVED: const { syncAvailabilityStatus } = require('./transcriberController'); // This controller already exports it.
 
 const syncAvailabilityStatus = async (userId, currentJobId = null) => {
     if (!userId) {
@@ -218,9 +220,9 @@ const getTranscriberNegotiations = async (req, res) => {
         transcriber_response,
         negotiation_files,
         created_at,
-        completed_at, // UPDATED: Include completed_at for 'Completed On'
-        client_feedback_comment, // UPDATED: Include client feedback comment
-        client_feedback_rating, // UPDATED: Include client feedback rating
+        completed_at, 
+        client_feedback_comment, 
+        client_feedback_rating, 
         client_id,
         client:users!client_id (
             id,
@@ -263,6 +265,7 @@ const getTranscriberNegotiations = async (req, res) => {
         const { client, transcriber, ...rest } = negotiation;
         return {
             ...rest,
+            jobType: 'negotiation', // Explicitly set jobType
             client_info: client ? {
                 id: client.id,
                 full_name: client.full_name,
@@ -573,12 +576,13 @@ const completeJob = async (req, res, next, io) => {
             throw updateError;
         }
 
+        // UPDATED: Set payout_status to 'pending' when transcriber completes negotiation job
         const { error: paymentUpdateError } = await supabase
             .from('payments')
             .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
             .eq('negotiation_id', negotiationId)
             .eq('transcriber_id', transcriberId)
-            .eq('payout_status', 'awaiting_completion');
+            .eq('payout_status', 'awaiting_completion'); // Only update if it's awaiting completion
 
         if (paymentUpdateError) {
             console.error(`[completeJob] Error updating payment record for negotiation ${negotiationId} to 'pending':`, paymentUpdateError);
@@ -595,7 +599,12 @@ const completeJob = async (req, res, next, io) => {
                 message: `Your transcription job (ID: ${negotiationId}) has been completed!`,
                 newStatus: 'completed'
             });
-            console.log(`Emitted 'job_completed' to client ${negotiation.client_id}`);
+            io.emit('negotiation_job_completed_transcriber_side', { 
+                negotiationId: negotiationId,
+                message: `Negotiation job '${negotiationId?.substring(0, 8)}...' submitted. Awaiting client review.`,
+                newStatus: 'completed'
+            });
+            console.log(`Emitted 'job_completed' to client ${negotiation.client_id} and 'negotiation_job_completed_transcriber_side' to all transcribers.`);
         }
 
         res.status(200).json({
@@ -608,83 +617,7 @@ const completeJob = async (req, res, next, io) => {
     }
 };
 
-const getTranscriberUpcomingPayouts = async (req, res) => {
-    const transcriberId = req.user.userId;
-
-    try {
-        const { data: payments, error } = await supabase
-            .from('payments')
-            .select(`
-                id,
-                negotiation_id,
-                direct_upload_job_id,
-                amount,
-                transcriber_earning,
-                currency,
-                payout_status,
-                transaction_date,
-                negotiation:negotiation_id(requirements, client_id, client:users!client_id(full_name)),
-                direct_upload_job:direct_upload_job_id(client_instructions, client_id, client:users!client_id(full_name))
-            `)
-            .eq('transcriber_id', transcriberId)
-            .eq('payout_status', 'pending')
-            .order('transaction_date', { ascending: true });
-
-        if (error) {
-            console.error(`[getTranscriberUpcomingPayouts] Supabase error fetching payments for transcriber ${transcriberId}:`, error);
-            throw error;
-        }
-
-        const groupedPayouts = {};
-        let totalUpcomingPayouts = 0;
-
-        (payments || []).forEach(payment => {
-            const transactionDate = new Date(payment.transaction_date);
-            const dayOfWeek = transactionDate.getDay(); 
-            const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
-            
-            const weekEndingDate = new Date(transactionDate);
-            weekEndingDate.setDate(transactionDate.getDate() + daysUntilFriday);
-            weekEndingDate.setHours(23, 59, 59, 999); 
-            const weekEndingString = weekEndingDate.toISOString().split('T')[0]; 
-
-            if (!groupedPayouts[weekEndingString]) {
-                groupedPayouts[weekEndingString] = {
-                    date: weekEndingString,
-                    totalAmount: 0,
-                    payouts: []
-                };
-            }
-            groupedPayouts[weekEndingString].totalAmount += payment.transcriber_earning;
-            groupedPayouts[weekEndingString].payouts.push({
-                id: payment.id,
-                negotiation_id: payment.negotiation_id,
-                direct_upload_job_id: payment.direct_upload_job_id,
-                amount: payment.transcriber_earning,
-                currency: payment.currency,
-                status: payment.payout_status, 
-                clientName: payment.negotiation?.client?.full_name || payment.direct_upload_job?.client?.full_name || 'N/A',
-                jobRequirements: payment.negotiation?.requirements || payment.direct_upload_job?.client_instructions || 'N/A',
-                created_at: new Date(payment.transaction_date).toLocaleDateString()
-            });
-            totalUpcomingPayouts += payment.transcriber_earning;
-        });
-
-        const upcomingPayoutsArray = Object.values(groupedPayouts).sort((a, b) => new Date(a.date) - new Date(b.date));
-
-
-        res.status(200).json({
-            message: 'Upcoming payouts retrieved successfully.',
-            upcomingPayouts: upcomingPayoutsArray,
-            totalUpcomingPayouts: totalUpcomingPayouts,
-        });
-
-    } catch (error) {
-        console.error('[getTranscriberUpcomingPayouts] Error fetching upcoming payouts:', error);
-        res.status(500).json({ error: error.message || 'Server error fetching upcoming payouts.! ' });
-    }
-};
-
+// REMOVED: getTranscriberUpcomingPayouts is now in paymentController.js
 
 const updateTranscriberProfile = async (req, res) => {
     const { userId } = req.params;
@@ -738,5 +671,5 @@ module.exports = {
   syncAvailabilityStatus,
   setOnlineStatus,
   updateTranscriberProfile,
-  getTranscriberUpcomingPayouts,
+  // REMOVED: getTranscriberUpcomingPayouts is now in paymentController.js
 };
