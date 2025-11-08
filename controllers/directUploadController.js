@@ -801,14 +801,15 @@ const initializeDirectUploadPayment = async (req, res, io) => {
             const reference = `JOB-${finalJobId.substring(0, 8)}-${Date.now().toString(36)}`;
             
             const amountKes = convertUsdToKes(parsedAmountUsd);
-            const amountInKes = parseFloat(amountKes.toFixed(2)); 
+            // Harmonized with trainingController.js: Round to integer for base KES unit
+            const amountInKes = Math.round(amountKes); 
 
             // Build customer object conditionally for KoraPay
             const korapayCustomer = {
                 name: req.user.full_name || 'Customer',
                 email: finalClientEmail,
             };
-            // Only add phone if mobileNumber is provided and not empty
+            // RE-INTRODUCED: Conditionally add mobileNumber to KoraPay customer object if provided
             if (mobileNumber) {
                 korapayCustomer.phone = mobileNumber;
             }
@@ -816,11 +817,11 @@ const initializeDirectUploadPayment = async (req, res, io) => {
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
                 reference: reference,
-                amount: amountInKes,
+                amount: amountInKes, // Send amount in KES (base unit)
                 currency: 'KES',
                 customer: korapayCustomer, // Use the conditionally built customer object
                 notification_url: KORAPAY_WEBHOOK_URL,
-                channels: ['card', 'mobile_money'], // Explicitly request both card and mobile money for KES
+                // REMOVED: explicit channels array to match trainingController.js
                 metadata: {
                     related_job_id: finalJobId,
                     related_job_type: 'direct_upload',
