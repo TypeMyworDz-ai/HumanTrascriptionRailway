@@ -2,14 +2,13 @@ const supabase = require('..//database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { syncAvailabilityStatus } = require('./transcriberController'); // Import syncAvailabilityStatus
-const emailService = require('..//emailService'); // For sending notifications
+const { syncAvailabilityStatus } = require('./transcriberController');
+const emailService = require('..//emailService');
 const util = require('util');
-const { getAudioDurationInSeconds } = require('get-audio-duration'); // For calculating audio length
-const { calculatePricePerMinute } = require('..//utils/pricingCalculator'); // Import the pricing calculator
-const { updateAverageRating } = require('./ratingController'); // CORRECTED: Import updateAverageRating
+const { getAudioDurationInSeconds } = require('get-audio-duration');
+const { calculatePricePerMinute } = require('..//utils/pricingCalculator');
+const { updateAverageRating } = require('./ratingController');
 
-// NEW: Import payment-related modules and constants
 const axios = require('axios');
 const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
 const http = require('http');
@@ -26,10 +25,8 @@ const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
 
 
-// Promisify fs.unlink for async file deletion
 const unlinkAsync = util.promisify(fs.unlink);
 
-// --- Quote Calculation Helper (UPDATED to use pricingCalculator) ---
 const getQuoteAndDeadline = async (audioLengthMinutes, audioQualityParam, deadlineTypeParam, specialRequirements) => {
     const jobParams = {
         audio_quality: audioQualityParam,
@@ -75,9 +72,6 @@ const getQuoteAndDeadline = async (audioLengthMinutes, audioQualityParam, deadli
 };
 
 
-// --- Controller Functions ---
-
-// Handles the quote calculation request from the client
 const handleQuoteCalculationRequest = async (req, res, io) => {
     const clientId = req.user.userId;
     const {
@@ -148,7 +142,6 @@ const handleQuoteCalculationRequest = async (req, res, io) => {
 };
 
 
-// Client uploads files and creates a direct job request
 const createDirectUploadJob = async (req, res, io) => {
     const clientId = req.user.userId;
     const {
@@ -230,7 +223,6 @@ const createDirectUploadJob = async (req, res, io) => {
 
         const instructionFileNames = instructionFiles.map(file => file.filename).join(',');
 
-        // 3. Create the direct upload job record in the 'direct_upload_jobs' table
         const { data: job, error: jobError } = await supabase
             .from('direct_upload_jobs')
             .insert([
@@ -263,7 +255,6 @@ const createDirectUploadJob = async (req, res, io) => {
 
         const newJob = job;
 
-        // 4. Notify qualified transcribers (4-star and 5-star) via Socket.IO
         const transcriberEstimatedPay = (newJob.quote_amount * 0.70).toFixed(2);
 
         const { data: transcribers, error: transcriberFetchError } = await supabase
@@ -301,7 +292,6 @@ const createDirectUploadJob = async (req, res, io) => {
     }
 };
 
-// Get all direct upload jobs for a specific client
 const getDirectUploadJobsForClient = async (req, res) => {
     const clientId = req.user.userId;
 
@@ -348,7 +338,6 @@ const getDirectUploadJobsForClient = async (req, res) => {
     }
 };
 
-// Get available direct upload jobs for qualified transcribers (4-star and 5-star)
 const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
     const transcriberId = req.user.userId;
 
@@ -422,7 +411,6 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
     }
 };
 
-// Transcriber takes ownership of a direct upload job
 const takeDirectUploadJob = async (req, res, io) => {
     const { jobId } = req.params;
     const transcriberId = req.user.userId;
@@ -491,17 +479,16 @@ const takeDirectUploadJob = async (req, res, io) => {
         }
 
         res.status(200).json({
-            message: 'Job successfully taken. It is now in progress.&#x27;',
+            message: 'Job successfully taken. It is now in progress.&amp;#x27;',
             job: updatedJob
         });
 
     } catch (error) {
-        console.error('Error taking direct upload job:&#x27;', error);
+        console.error('Error taking direct upload job:&amp;#x27;', error);
         res.status(500).json({ error: 'Server error taking direct upload job.ᐟ' });
     }
 };
 
-// Transcriber completes a direct upload job
 const completeDirectUploadJob = async (req, res, io) => {
     const { jobId } = req.params;
     const transcriberId = req.user.userId;
@@ -590,11 +577,6 @@ const completeDirectUploadJob = async (req, res, io) => {
     }
 };
 
-/**
- * @route PUT /api/client/direct-jobs/:jobId/complete
- * @desc Client marks a direct upload job as complete and provides feedback
- * @access Private (Client only)
- */
 const clientCompleteDirectUploadJob = async (req, res, io) => {
     const { jobId } = req.params;
     const clientId = req.user.userId;
@@ -664,12 +646,6 @@ const clientCompleteDirectUploadJob = async (req, res, io) => {
     }
 };
 
-/**
- * @route GET /api/admin/direct-upload-jobs
- * @desc Admin can view all direct upload jobs
- * @access Private (Admin only)
- *
- */
 const getAllDirectUploadJobsForAdmin = async (req, res) => {
     try {
         const { data: jobs, error } = await supabase
@@ -709,14 +685,13 @@ const getAllDirectUploadJobsForAdmin = async (req, res) => {
     }
 };
 
-// NEW: initializeDirectUploadPayment function (moved from paymentController.js)
 const initializeDirectUploadPayment = async (req, res, io) => {
     console.log('[initializeDirectUploadPayment] Received request body:', req.body);
 
     const { jobId: directUploadJobId, amount, email, paymentMethod = 'paystack', mobileNumber } = req.body;
     const clientId = req.user.userId;
 
-    const finalJobId = directUploadJobId; // For direct uploads, the jobId is the directUploadJobId
+    const finalJobId = directUploadJobId;
     const finalClientEmail = email;
 
     console.log(`[initializeDirectUploadPayment] Destructured parameters - directUploadJobId: ${finalJobId}, amount: ${amount}, clientEmail: ${finalClientEmail}, clientId: ${clientId}, paymentMethod: ${paymentMethod}, mobileNumber: ${mobileNumber}`);
@@ -731,11 +706,11 @@ const initializeDirectUploadPayment = async (req, res, io) => {
     }
 
     if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
-        console.error('[initializeDirectUploadPayment] PAYSTACK_SECRET_KEY is not set.');
+        console.error('[initializeDirectUploadPayment] PAYSTACK_SECRET_KEY is not set.ᐟ');
         return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
     }
     if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
-        console.error('[initializeDirectUploadPayment] KORAPAY_SECRET_KEY is not set.');
+        console.error('[initializeDirectUploadPayment] KORAPAY_SECRET_KEY is not set.ᐟ');
         return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
     }
 
@@ -751,7 +726,6 @@ const initializeDirectUploadPayment = async (req, res, io) => {
         let agreedPriceUsd;
         let jobStatus;
 
-        // Fetch direct upload job details for this job type
         const { data, error } = await supabase
             .from('direct_upload_jobs')
             .select('id, client_id, transcriber_id, quote_amount, status')
@@ -781,12 +755,12 @@ const initializeDirectUploadPayment = async (req, res, io) => {
             const amountInCentsKes = Math.round(amountKes * 100);
 
             const paystackResponse = await axios.post(
-                'https://paystack.co/transaction/initialize',
+                'https://api.paystack.co/transaction/initialize', // Corrected Paystack API endpoint
                 {
                     email: finalClientEmail,
                     amount: amountInCentsKes,
                     reference: `${finalJobId}-${Date.now()}`,
-                    callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${finalJobId}&jobType=direct_upload`, // jobType is 'direct_upload'
+                    callback_url: `${CLIENT_URL}/payment-callback?relatedJobId=${finalJobId}&jobType=direct_upload`,
                     currency: 'KES',
                     channels: ['mobile_money', 'card', 'bank_transfer', 'pesalink'],
                     metadata: {
@@ -820,35 +794,35 @@ const initializeDirectUploadPayment = async (req, res, io) => {
             });
         } else if (paymentMethod === 'korapay') {
             if (!KORAPAY_PUBLIC_KEY) {
-                console.error('[initializeDirectUploadPayment] KORAPAY_PUBLIC_KEY is not set for KoraPay frontend integration.');
+                console.error('[initializeDirectUploadPayment] KORAPAY_PUBLIC_KEY is not set for KoraPay frontend integration.ᐟ');
                 return res.status(500).json({ error: 'KoraPay public key not configured.ᐟ' });
             }
 
             const reference = `JOB-${finalJobId.substring(0, 8)}-${Date.now().toString(36)}`;
             
-            // MODIFIED: Convert USD to KES and send base KES amount for KoraPay Checkout Standard
             const amountKes = convertUsdToKes(parsedAmountUsd);
             const amountInKes = parseFloat(amountKes.toFixed(2)); 
 
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
                 reference: reference,
-                amount: amountInKes, // Send amount in KES
-                currency: 'KES', // Explicitly set currency to KES
+                amount: amountInKes,
+                currency: 'KES',
                 customer: {
                     name: req.user.full_name || 'Customer',
                     email: finalClientEmail,
                 },
-                notification_url: KORAPAY_WEBHOOK_URL, 
+                notification_url: KORAPAY_WEBHOOK_URL,
+                // Removed explicit channels array to let KoraPay determine defaults for KES.
                 metadata: {
                     related_job_id: finalJobId,
-                    related_job_type: 'direct_upload', // jobType is 'direct_upload'
+                    related_job_type: 'direct_upload',
                     client_id: clientId,
                     transcriber_id: transcriberId,
                     agreed_price_usd: agreedPriceUsd,
-                    currency_paid: 'KES', // Updated to KES
+                    currency_paid: 'KES',
                     exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
-                    amount_paid_kes: amountKes // Add KES amount to metadata
+                    amount_paid_kes: amountKes
                 }
             };
             
@@ -864,10 +838,9 @@ const initializeDirectUploadPayment = async (req, res, io) => {
     }
 };
 
-// NEW: verifyDirectUploadPayment function (extracted and adapted from paymentController.js)
 const verifyDirectUploadPayment = async (req, res, io) => {
     const { reference } = req.params;
-    const { relatedJobId, paymentMethod = 'paystack' } = req.query; // jobType is implicitly 'direct_upload'
+    const { relatedJobId, paymentMethod = 'paystack' } = req.query;
 
     if (!reference || !relatedJobId) {
         return res.status(400).json({ error: 'Payment reference and direct upload job ID are required for verification.ᐟ' });
@@ -877,11 +850,11 @@ const verifyDirectUploadPayment = async (req, res, io) => {
         return res.status(400).json({ error: 'Invalid payment method provided.ᐟ' });
     }
     if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
-        console.error('PAYSTACK_SECRET_KEY is not set.');
+        console.error('PAYSTACK_SECRET_KEY is not set.ᐟ');
         return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
     }
     if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
-        console.error('KORAPAY_SECRET_KEY is not set.');
+        console.error('KORAPAY_SECRET_KEY is not set.ᐟ');
         return res.status(500).json({ error: 'KoraPay service not configured.ᐟ' });
     }
 
@@ -893,7 +866,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
 
         if (paymentMethod === 'paystack') {
             const paystackResponse = await axios.get(
-                `https://paystack.co/transaction/verify/${reference}`,
+                `https://api.paystack.co/transaction/verify/${reference}`, // Corrected Paystack API endpoint
                 {
                     headers: {
                         Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
@@ -903,7 +876,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
             );
 
             if (!paystackResponse.data.status || paystackResponse.data.data.status !== 'success') {
-                console.error('Paystack verification failed:', paystackResponse.data.data.gateway_response);
+                console.error('Paystack verification failed:ᐟ', paystackResponse.data.data.gateway_response);
                 return res.status(400).json({ error: paystackResponse.data.data.gateway_response || 'Payment verification failed.ᐟ' });
             }
             transaction = paystackResponse.data.data;
@@ -924,14 +897,13 @@ const verifyDirectUploadPayment = async (req, res, io) => {
             );
 
             if (!korapayResponse.data.status || korapayResponse.data.data.status !== 'success') {
-                console.error('KoraPay verification failed:', korapayResponse.data.message || korapayResponse.data.errors);
+                console.error('KoraPay verification failed:ᐟ', korapayResponse.data.message || korapayResponse.data.errors);
                 return res.status(400).json({ error: korapayResponse.data.message || 'Payment verification failed with KoraPay.ᐟ' });
             }
             transaction = korapayResponse.data.data;
-            // MODIFIED: Interpret amount received from KoraPay as KES (base unit), then convert to USD
-            const amountPaidKes = parseFloat(transaction.amount); // KoraPay returns amount in base unit for KES
+            const amountPaidKes = parseFloat(transaction.amount);
             actualAmountPaidUsd = parseFloat((amountPaidKes / EXCHANGE_RATE_USD_TO_KES).toFixed(2));
-            metadataCurrencyPaid = 'KES'; // Explicitly set to KES
+            metadataCurrencyPaid = 'KES';
             metadataExchangeRate = EXCHANGE_RATE_USD_TO_KES;
             
             transaction.metadata = {
@@ -942,7 +914,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
                 agreed_price_usd: actualAmountPaidUsd,
                 currency_paid: metadataCurrencyPaid,
                 exchange_rate_usd_to_kes: metadataExchangeRate,
-                amount_paid_kes: amountPaidKes // Store KES amount
+                amount_paid_kes: amountPaidKes
             };
             transaction.paid_at = transaction.createdAt;
         }
@@ -950,7 +922,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
 
         const {
             related_job_id: metadataRelatedJobId,
-            related_job_type: metadataRelatedJobType, // This should be 'direct_upload'
+            related_job_type: metadataRelatedJobType,
             client_id: metadataClientId,
             transcriber_id: metadataTranscriberIdRaw,
             agreed_price_usd: metadataAgreedPrice,
@@ -962,12 +934,12 @@ const verifyDirectUploadPayment = async (req, res, io) => {
         const finalTranscriberId = (metadataTranscriberIdRaw === '' || metadataTranscriberIdRaw === undefined) ? null : metadataTranscriberIdRaw;
 
         if (metadataRelatedJobId !== relatedJobId || metadataRelatedJobType !== 'direct_upload') {
-            console.error('Metadata job ID or type mismatch:', metadataRelatedJobId, relatedJobId, metadataRelatedJobType);
+            console.error('Metadata job ID or type mismatch:ᐟ', metadataRelatedJobId, relatedJobId, metadataRelatedJobType);
             return res.status(400).json({ error: 'Invalid transaction metadata (job ID or type mismatch).ᐟ' });
         }
 
         if (Math.round(actualAmountPaidUsd * 100) !== Math.round(metadataAgreedPrice * 100)) {
-            console.error('Payment verification amount mismatch. Transaction amount (USD):', actualAmountPaidUsd, 'Expected USD:', metadataAgreedPrice);
+            console.error('Payment verification amount mismatch. Transaction amount (USD):ᐟ', actualAmountPaidUsd, 'Expected USD:', metadataAgreedPrice);
             return res.status(400).json({ error: 'Invalid transaction metadata (amount mismatch). Payment charged a different amount than expected.ᐟ' });
         }
         
@@ -1052,7 +1024,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
                 message: 'Your payment was successful and the job is now active!ᐟ',
                 newStatus: newJobStatus
             });
-            io.emit('direct_job_paid', { // Emit to all for 'other jobs' pool update
+            io.emit('direct_job_paid', {
                 jobId: relatedJobId,
                 message: `A direct upload job has been paid for and is now available!`,
                 newStatus: newJobStatus
@@ -1081,6 +1053,6 @@ module.exports = {
     completeDirectUploadJob,
     clientCompleteDirectUploadJob,
     getAllDirectUploadJobsForAdmin,
-    initializeDirectUploadPayment, // NEW: Export direct upload-specific payment initiation
-    verifyDirectUploadPayment // NEW: Export direct upload-specific payment verification
+    initializeDirectUploadPayment,
+    verifyDirectUploadPayment
 };
