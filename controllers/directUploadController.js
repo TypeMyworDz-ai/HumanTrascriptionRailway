@@ -755,7 +755,7 @@ const initializeDirectUploadPayment = async (req, res, io) => {
             const amountInCentsKes = Math.round(amountKes * 100);
 
             const paystackResponse = await axios.post(
-                'https://api.paystack.co/transaction/initialize', // Corrected Paystack API endpoint
+                'https://api.paystack.co/transaction/initialize',
                 {
                     email: finalClientEmail,
                     amount: amountInCentsKes,
@@ -811,6 +811,8 @@ const initializeDirectUploadPayment = async (req, res, io) => {
                 customer: {
                     name: req.user.full_name || 'Customer',
                     email: finalClientEmail,
+                    // NEW: Conditionally add mobileNumber to KoraPay customer object
+                    ...(mobileNumber && { phone: mobileNumber }) 
                 },
                 notification_url: KORAPAY_WEBHOOK_URL,
                 // Removed explicit channels array to let KoraPay determine defaults for KES.
@@ -866,7 +868,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
 
         if (paymentMethod === 'paystack') {
             const paystackResponse = await axios.get(
-                `https://api.paystack.co/transaction/verify/${reference}`, // Corrected Paystack API endpoint
+                `https://api.paystack.co/transaction/verify/${reference}`,
                 {
                     headers: {
                         Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
