@@ -235,7 +235,7 @@ const getClientPaymentHistory = async (req, res) => {
                 payout_status,
                 currency_paid_by_client,
                 exchange_rate_used,
-                transcriber:users!transcriber_id(full_name, email), // Ensure transcriber details are fetched
+                transcriber:users!transcriber_id(full_name, email), 
                 negotiation:negotiation_id(id, status, requirements, deadline_hours, agreed_price_usd),
                 direct_upload_job:direct_upload_jobs!direct_upload_job_id(id, status, client_instructions, agreed_deadline_hours, quote_amount)
             `)
@@ -269,7 +269,7 @@ const getClientPaymentHistory = async (req, res) => {
             } else if (payment.related_job_type === 'training') {
                 jobDetails = { training_info: { requirements: 'Training Fee Payment', agreed_price_usd: payment.amount } };
             }
-            return { ...payment, ...jobDetails, transcriberName: transcriberName }; // Add transcriberName to the payment object
+            return { ...payment, ...jobDetails, transcriberName: transcriberName }; 
         }));
 
         const totalPayments = (paymentsWithJobDetails || []).reduce((sum, p) => sum + p.amount, 0);
