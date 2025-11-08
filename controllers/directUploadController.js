@@ -688,7 +688,7 @@ const getAllDirectUploadJobsForAdmin = async (req, res) => {
 const initializeDirectUploadPayment = async (req, res, io) => {
     console.log('[initializeDirectUploadPayment] Received request body:', req.body);
 
-    const { jobId: directUploadJobId, amount, email, paymentMethod = 'paystack', mobileNumber } = req.body;
+    const { jobId: directUploadJobId, amount, email, paymentMethod = 'paystack', mobileNumber, fullName } = req.body;
     const clientId = req.user.userId;
 
     const finalJobId = directUploadJobId;
@@ -801,27 +801,22 @@ const initializeDirectUploadPayment = async (req, res, io) => {
             const reference = `JOB-${finalJobId.substring(0, 8)}-${Date.now().toString(36)}`;
             
             const amountKes = convertUsdToKes(parsedAmountUsd);
-            // Harmonized with trainingController.js: Round to integer for base KES unit
             const amountInKes = Math.round(amountKes); 
 
-            // Build customer object conditionally for KoraPay
             const korapayCustomer = {
-                name: req.user.full_name || 'Customer',
+                name: fullName || req.user.full_name || 'Customer',
                 email: finalClientEmail,
             };
-            // RE-INTRODUCED: Conditionally add mobileNumber to KoraPay customer object if provided
-            if (mobileNumber) {
-                korapayCustomer.phone = mobileNumber;
-            }
+            // REMOVED: Conditionally add mobileNumber to KoraPay customer object
 
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
                 reference: reference,
-                amount: amountInKes, // Send amount in KES (base unit)
+                amount: amountInKes,
                 currency: 'KES',
-                customer: korapayCustomer, // Use the conditionally built customer object
+                customer: korapayCustomer,
                 notification_url: KORAPAY_WEBHOOK_URL,
-                // REMOVED: explicit channels array to match trainingController.js
+                // REMOVED: channels: ['card', 'mobile_money'], to match trainingController.js
                 metadata: {
                     related_job_id: finalJobId,
                     related_job_type: 'direct_upload',
