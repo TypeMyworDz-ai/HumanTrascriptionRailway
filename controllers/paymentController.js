@@ -1,13 +1,11 @@
 const axios = require('axios');
 const supabase = require('../database');
-const { syncAvailabilityStatus } = require('../controllers/transcriberController'); // Keep for potential use in general payment history context if needed
+const { syncAvailabilityStatus } = require('../controllers/transcriberController'); 
 const emailService = require('../emailService');
 const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
 const http = require('http');
 const https = require('https');
 
-// Keep these constants as they might be used by other controllers after refactoring,
-// or for general payment history related processing if needed.
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
@@ -27,11 +25,6 @@ const getNextFriday = () => {
     nextFriday.setHours(23, 59, 59, 999);
     return nextFriday.toISOString();
 };
-
-// REMOVED: initializePayment function is moved to specific controllers (negotiationController, directUploadController, trainingController)
-// REMOVED: initializeTrainingPayment function is moved to trainingController.js
-// REMOVED: verifyPayment function is moved to specific controllers (negotiationController, directUploadController)
-// REMOVED: verifyKorapayTrainingPayment function is moved to trainingController.js
 
 
 const getTranscriberPaymentHistory = async (req, res) => {
@@ -65,10 +58,10 @@ const getTranscriberPaymentHistory = async (req, res) => {
                     requirements, 
                     deadline_hours, 
                     agreed_price_usd,
-                    completed_at, // UPDATED: Include completed_at
-                    transcriber_response, // UPDATED: Include transcriber_response (your comment)
-                    client_feedback_comment, // UPDATED: Include client_feedback_comment
-                    client_feedback_rating // UPDATED: Include client_feedback_rating
+                    completed_at, 
+                    transcriber_response, 
+                    client_feedback_comment, 
+                    client_feedback_rating 
                 ),
                 direct_upload_job:direct_upload_jobs!direct_upload_job_id(
                     id, 
@@ -76,15 +69,14 @@ const getTranscriberPaymentHistory = async (req, res) => {
                     client_instructions, 
                     agreed_deadline_hours, 
                     quote_amount,
-                    completed_at, // UPDATED: Include completed_at
-                    client_completed_at, // UPDATED: Include client_completed_at
-                    transcriber_comment, // UPDATED: Include transcriber_comment (your comment)
-                    client_feedback_comment, // UPDATED: Include client_feedback_comment
-                    client_feedback_rating // UPDATED: Include client_feedback_rating
+                    completed_at, 
+                    client_completed_at, 
+                    transcriber_comment, 
+                    client_feedback_comment, 
+                    client_feedback_rating 
                 )
             `)
             .eq('transcriber_id', transcriberId)
-            // UPDATED: Filter for 'pending', 'awaiting_completion', and 'paid_out' to cover all relevant statuses
             .or('payout_status.eq.pending,payout_status.eq.awaiting_completion,payout_status.eq.paid_out') 
             .order('transaction_date', { ascending: false });
 
@@ -127,7 +119,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 jobStatus = 'paid_training_fee';
                 jobAmount = payment.amount;
                 jobDeadline = 'N/A';
-                completedOn = payment.transaction_date; // Use transaction date for training completion
+                completedOn = payment.transaction_date; 
             }
 
             return {
@@ -152,7 +144,6 @@ const getTranscriberPaymentHistory = async (req, res) => {
         paymentsWithJobDetails.forEach(payout => {
             console.log(`[getTranscriberPaymentHistory] Processing payout ${payout.id}. Related job type: ${payout.related_job_type}, Payout status: ${payout.payout_status}, Derived Job status: ${payout.job_status}`);
 
-            // UPDATED: Include 'pending' status for upcoming payouts as well
             const isEligibleForUpcomingPayout =
                 (payout.payout_status === 'pending' || payout.payout_status === 'awaiting_completion') &&
                 (payout.job_status === 'completed' || payout.job_status === 'client_completed');
@@ -205,7 +196,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
 
         res.status(200).json({
             message: `Upcoming payouts for transcriber ${transcriberId} retrieved successfully.`,
-            payments: [], // This will be the detailed history if needed later
+            payments: [], 
             upcomingPayouts: upcomingPayoutsArray,
             totalUpcomingPayouts: totalUpcomingPayouts,
             summary: {
@@ -272,7 +263,6 @@ const getClientPaymentHistory = async (req, res) => {
                     .single();
                 jobDetails = { direct_upload_job: directJob || null };
             } else if (payment.related_job_type === 'training') {
-                // For training, provide generic details
                 jobDetails = { training_info: { requirements: 'Training Fee Payment', agreed_price_usd: payment.amount } };
             }
             return { ...payment, ...jobDetails };
@@ -513,7 +503,7 @@ const markPaymentAsPaidOut = async (req, res, io) => {
             return res.status(404).json({ error: 'Payment record not found.ᐟ' });
         }
 
-        if (payment.payout_status !== 'pending') { // UPDATED: Changed from 'awaiting_completion' to 'pending'
+        if (payment.payout_status !== 'pending') { 
             return res.status(400).json({ error: `Payment status is '${payment.payout_status}'. Only payments 'pending' can be marked as paid out.` });
         }
 
@@ -563,8 +553,6 @@ const markPaymentAsPaidOut = async (req, res, io) => {
 
 
 module.exports = {
-    // initializePayment is moved to specific controllers (negotiationController, directUploadController, trainingController)
-    // verifyPayment is moved to specific controllers (negotiationController, directUploadController)
     getTranscriberPaymentHistory,
     getClientPaymentHistory,
     getAllPaymentHistoryForAdmin,
