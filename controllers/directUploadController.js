@@ -845,8 +845,9 @@ const initializeDirectUploadPayment = async (req, res, io) => {
 };
 
 const verifyDirectUploadPayment = async (req, res, io) => {
-    const { reference } = req.params;
-    const { relatedJobId, paymentMethod = 'paystack' } = req.query;
+    // UPDATED: Extract relatedJobId from req.params as per frontend URL structure
+    const { reference, jobId: relatedJobId } = req.params; 
+    const { paymentMethod = 'paystack' } = req.query;
 
     if (!reference || !relatedJobId) {
         return res.status(400).json({ error: 'Payment reference and direct upload job ID are required for verification.ᐟ' });
