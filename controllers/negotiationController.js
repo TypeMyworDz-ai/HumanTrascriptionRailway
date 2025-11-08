@@ -1265,17 +1265,20 @@ const initializeNegotiationPayment = async (req, res, io) => {
             const amountKes = convertUsdToKes(parsedAmountUsd);
             const amountForKorapay = Math.round(amountKes);
 
+            const korapayCustomer = {
+                name: req.user.full_name || 'Customer',
+                email: finalClientEmail,
+            };
+            // Removed explicit channels array to let KoraPay determine defaults for KES.
+            // No mobileNumber field for negotiation payments from client side currently.
+            
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
                 reference: reference,
                 amount: amountForKorapay, 
                 currency: 'KES',
-                customer: {
-                    name: req.user.full_name || 'Customer',
-                    email: finalClientEmail,
-                },
+                customer: korapayCustomer,
                 notification_url: KORAPAY_WEBHOOK_URL,
-                // Removed explicit channels array to let KoraPay determine defaults for KES.
                 metadata: {
                     related_job_id: finalJobId,
                     related_job_type: 'negotiation',
@@ -1304,10 +1307,10 @@ const verifyNegotiationPayment = async (req, res, io) => {
     console.log('[verifyNegotiationPayment] Received req.params:', req.params);
     console.log('[verifyNegotiationPayment] Received req.query:', req.query);
 
-    const { negotiationId, reference } = req.params; // Correctly extract from req.params
+    const { negotiationId, reference } = req.params; 
     const { paymentMethod = 'paystack' } = req.query;
 
-    const relatedJobId = negotiationId; // Assign negotiationId from params to relatedJobId
+    const relatedJobId = negotiationId; 
 
     if (!reference || !relatedJobId) {
         console.error('[verifyNegotiationPayment] Validation failed: Missing reference or relatedJobId. Reference:', reference, 'relatedJobId:', relatedJobId);
@@ -1388,7 +1391,8 @@ const verifyNegotiationPayment = async (req, res, io) => {
                 amount_paid_usd: actualAmountPaidUsd
             };
             // UPDATED: Safely parse transaction.paid_at to handle potential 'Invalid time value'
-            transaction.paid_at = transaction.createdAt ? new Date(transaction.createdAt).toISOString() : new Date().toISOString();
+            const parsedCreatedAt = new Date(transaction.createdAt);
+            transaction.paid_at = !isNaN(parsedCreatedAt.getTime()) ? parsedCreatedAt.toISOString() : new Date().toISOString();
         }
 
 
@@ -1478,7 +1482,7 @@ const verifyNegotiationPayment = async (req, res, io) => {
         }
 
         if (finalTranscriberId) {
-            await syncAvailabilityStatus(finalTranscriberId, relatedJobId); // Pass relatedJobId to set current_job_id
+            await syncAvailabilityStatus(finalTranscriberId, relatedJobId); 
         }
 
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', metadataClientId).single();
