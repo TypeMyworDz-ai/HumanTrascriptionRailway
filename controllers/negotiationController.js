@@ -19,11 +19,11 @@ const http = require('http');
 const https = require('https');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
+const CLIENT_URL = process.env.CLIENT_URL || 'http:--localhost:3000';
 const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
 const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY;
-const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1';
-const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook';
+const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https:--api-sandbox.korapay.com-v1';
+const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http:--localhost:5000-api-payment-korapay-webhook';
 
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
@@ -146,7 +146,7 @@ const getAvailableTranscribers = async (req, res) => {
         is_online: user.is_online,
         average_rating: user.transcriber_average_rating || 0.0,
         completed_jobs: user.transcriber_completed_jobs || 0,
-        mpesa_number: user.transcriber_mpesa_number,
+        mpesa_number: user.mpesa_number,
         paypal_email: user.paypal_email,
         users: {
           id: user.id,
@@ -404,7 +404,7 @@ const getClientNegotiations = async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (negotiationsError) {
-      console.error('Negotiations query error:', negotiationsError);
+      console.error('Negotiations query error:ᐟ', negotiationsError);
       throw negotiationsError;
     }
 
@@ -432,13 +432,14 @@ const getClientNegotiations = async (req, res) => {
             } : {
                 id: rest.transcriber_id,
                 full_name: 'Unknown Transcriber',
+                email: 'unknown@example.com',
                 transcriber_average_rating: 0.0,
                 transcriber_completed_jobs: 0
             }
         };
     });
 
-    console.log('[getClientNegotiations] Formatted negotiations sent to frontend:', negotiationsWithTranscribers.map(n => ({ id: n.id, transcriberRating: n.transcriber_info.transcriber_average_rating, transcriberJobs: n.transcriber_info.transcriber_completed_jobs, dueDate: n.due_date, status: n.status })));
+    console.log('[getClientNegotiations] Formatted negotiations sent to frontend:ᐟ', negotiationsWithTranscribers.map(n => ({ id: n.id, transcriberRating: n.transcriber_info.transcriber_average_rating, transcriberJobs: n.transcriber_info.transcriber_completed_jobs, dueDate: n.due_date, status: n.status })));
     res.json({
       message: 'Negotiations retrieved successfully',
       negotiations: negotiationsWithTranscribers
@@ -806,7 +807,7 @@ const rejectNegotiation = async (req, res, io) => {
         if (clientError) console.error('Error fetching client for negotiation rejected email:ᐟ', clientError);
 
         if (clientUser) {
-            await sendNegotiationRejectedEmail(clientUser, req.user, updatedNegotiation);
+            await sendNegotiationRejectedEmail(clientUser, updatedNegotiation, reason);
         }
 
         res.json({ message: 'Negotiation rejected successfully.ᐟ', negotiation: updatedNegotiation });
@@ -1047,6 +1048,21 @@ const markJobCompleteByClient = async (req, res, io) => {
             .single();
 
         if (updateError) throw updateError;
+
+        // UPDATED: Update payment payout_status to 'pending' when client completes negotiation job
+        const { error: paymentUpdateError } = await supabase
+            .from('payments')
+            .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
+            .eq('negotiation_id', negotiationId)
+            .eq('transcriber_id', negotiation.transcriber_id) // Ensure we target the correct transcriber's payment
+            .eq('payout_status', 'awaiting_completion'); // Only update if it's awaiting completion
+
+        if (paymentUpdateError) {
+            console.error(`[markJobCompleteByClient] Error updating payment record for negotiation ${negotiationId} to 'pending':`, paymentUpdateError);
+        } else {
+            console.log(`[markJobCompleteByClient] Payment record for negotiation ${negotiationId} updated to 'pending' payout status.`);
+        }
+
 
         if (negotiation.transcriber_id) {
             await syncAvailabilityStatus(negotiation.transcriber_id, null);
@@ -1460,7 +1476,7 @@ const verifyNegotiationPayment = async (req, res, io) => {
         }
 
         if (finalTranscriberId) {
-            await syncAvailabilityStatus(finalTranscriberId, null, relatedJobId);
+            await syncAvailabilityStatus(finalTranscriberId, relatedJobId); // Pass relatedJobId to set current_job_id
         }
 
         const { data: clientUser, error: clientError } = await supabase.from('users').select('full_name, email').eq('id', metadataClientId).single();
