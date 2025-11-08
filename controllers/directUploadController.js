@@ -803,19 +803,24 @@ const initializeDirectUploadPayment = async (req, res, io) => {
             const amountKes = convertUsdToKes(parsedAmountUsd);
             const amountInKes = parseFloat(amountKes.toFixed(2)); 
 
+            // Build customer object conditionally for KoraPay
+            const korapayCustomer = {
+                name: req.user.full_name || 'Customer',
+                email: finalClientEmail,
+            };
+            // Only add phone if mobileNumber is provided and not empty
+            if (mobileNumber) {
+                korapayCustomer.phone = mobileNumber;
+            }
+
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
                 reference: reference,
                 amount: amountInKes,
                 currency: 'KES',
-                customer: {
-                    name: req.user.full_name || 'Customer',
-                    email: finalClientEmail,
-                    // NEW: Conditionally add mobileNumber to KoraPay customer object
-                    ...(mobileNumber && { phone: mobileNumber }) 
-                },
+                customer: korapayCustomer, // Use the conditionally built customer object
                 notification_url: KORAPAY_WEBHOOK_URL,
-                // Removed explicit channels array to let KoraPay determine defaults for KES.
+                channels: ['card', 'mobile_money'], // Explicitly request both card and mobile money for KES
                 metadata: {
                     related_job_id: finalJobId,
                     related_job_type: 'direct_upload',
