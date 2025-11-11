@@ -19,7 +19,7 @@ const CLIENT_URL = process.env.CLIENT_URL || 'http:--localhost:3000';
 const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
 const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY;
 const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https:--api-sandbox.korapay.com-v1';
-const KORAPAY_WEBHOOK_URL = process.env.REACT_APP_KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook';
+const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook'; // UPDATED: Removed REACT_APP_ prefix
 
 
 const httpAgent = new http.Agent({ family: 4 });
