@@ -136,72 +136,26 @@ const getTranscriberPaymentHistory = async (req, res) => {
         });
 
 
-        const groupedUpcomingPayouts = {};
         let totalUpcomingPayouts = 0;
-        let totalEarnings = 0;
-        let monthlyEarnings = 0;
+        let totalEarned = 0;
 
         paymentsWithJobDetails.forEach(payout => {
-            console.log(`[getTranscriberPaymentHistory] Processing payout ${payout.id}. Related job type: ${payout.related_job_type}, Payout status: ${payout.payout_status}, Derived Job status: ${payout.job_status}`);
-
             const isEligibleForUpcomingPayout =
                 (payout.payout_status === 'pending' || payout.payout_status === 'awaiting_completion') &&
                 (payout.job_status === 'completed' || payout.job_status === 'client_completed');
 
-            console.log(`[getTranscriberPaymentHistory] Payout ${payout.id} is eligible for upcoming payout: ${isEligibleForUpcomingPayout}`);
-
             if (isEligibleForUpcomingPayout) {
-                const transactionDate = new Date(payout.transaction_date);
-                const dayOfWeek = transactionDate.getDay();
-                const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
-
-                const weekEndingDate = new Date(transactionDate);
-                weekEndingDate.setDate(transactionDate.getDate() + daysUntilFriday);
-                weekEndingDate.setHours(23, 59, 59, 999);
-                const weekEndingString = weekEndingDate.toISOString().split('T')[0];
-
-                if (!groupedUpcomingPayouts[weekEndingString]) {
-                    groupedUpcomingPayouts[weekEndingString] = {
-                        date: weekEndingString,
-                        totalAmount: 0,
-                        payouts: []
-                    };
-                }
-                groupedUpcomingPayouts[weekEndingString].totalAmount += payout.transcriber_earning;
-                groupedUpcomingPayouts[weekEndingString].payouts.push({
-                    id: payout.id,
-                    negotiation_id: payout.negotiation_id,
-                    direct_upload_job_id: payout.direct_upload_job_id,
-                    related_job_type: payout.related_job_type,
-                    clientName: payout.client?.full_name || 'N/A',
-                    jobRequirements: payout.jobRequirements ? payout.jobRequirements.substring(0, 50) + '...' : 'N/A',
-                    amount: payout.transcriber_earning,
-                    status: payout.payout_status,
-                    job_status: payout.job_status,
-                    created_at: new Date(payout.transaction_date).toLocaleDateString()
-                });
                 totalUpcomingPayouts += payout.transcriber_earning;
             } else if (payout.payout_status === 'paid_out') {
-                totalEarnings += payout.transcriber_earning;
-                const date = new Date(payout.transaction_date);
-                const currentMonth = new Date().getMonth();
-                const currentYear = new Date().getFullYear();
-                if (date.getMonth() === currentMonth && date.getFullYear() === currentYear) {
-                    monthlyEarnings += payout.transcriber_earning;
-                }
+                totalEarned += payout.transcriber_earning;
             }
         });
 
-        const upcomingPayoutsArray = Object.values(groupedUpcomingPayouts).sort((a, b) => new Date(a.date) - new Date(b.date));
-
         res.status(200).json({
-            message: `Upcoming payouts for transcriber ${transcriberId} retrieved successfully.`,
-            payments: [], 
-            upcomingPayouts: upcomingPayoutsArray,
-            totalUpcomingPayouts: totalUpcomingPayouts,
+            message: `Payment history summary for transcriber ${transcriberId} retrieved successfully.`,
             summary: {
-                totalEarnings: totalEarnings,
-                monthlyEarnings: monthlyEarnings,
+                totalEarned: totalEarned,
+                upcomingPayout: totalUpcomingPayouts, 
             }
         });
 
@@ -247,9 +201,9 @@ const getClientPaymentHistory = async (req, res) => {
             return res.status(500).json({ error: error.message });
         }
 
+        // UPDATED: Made the map callback async and used Promise.all
         const paymentsWithJobDetails = await Promise.all((payments || []).map(async (payment) => {
             let jobDetails = {};
-            // UPDATED: Directly use payment.transcriber?.full_name
             const transcriberName = payment.transcriber?.full_name || 'N/A'; 
 
             if (payment.related_job_type === 'negotiation') {
@@ -283,10 +237,9 @@ const getClientPaymentHistory = async (req, res) => {
 
         res.status(200).json({
             message: 'Client payment history retrieved successfully.',
-            payments: paymentsWithJobDetails,
             summary: {
                 totalPayments: totalPayments,
-                monthlyPayments: monthlyPayments,
+                thisMonthsPayments: monthlyPayments, 
             }
         });
 
