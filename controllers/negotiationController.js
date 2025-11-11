@@ -423,6 +423,7 @@ const getClientNegotiations = async (req, res) => {
 
         return {
             ...rest,
+            jobType: 'negotiation', // ADDED: Explicitly set jobType for frontend
             transcriber_info: transcriber ? {
                 id: transcriber.id,
                 full_name: transcriber.full_name,
