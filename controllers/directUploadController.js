@@ -357,7 +357,7 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
 
         console.log(`[getAvailableDirectUploadJobsForTranscriber] Fetched transcriberUser for ${transcriberId}:`, {
             is_online: transcriberUser.is_online,
-            current_job_id: transcriscriberUser.current_job_id,
+            current_job_id: transcriberUser.current_job_id, // Corrected typo here
             transcriber_average_rating: transcriberUser.transcriber_average_rating,
             transcriber_status: transcriberUser.transcriber_status
         });
@@ -1174,7 +1174,7 @@ const downloadDirectUploadFile = async (req, res) => {
             console.log(`[downloadDirectUploadFile] Transcriber ${userId} downloading file ${fileName} for available job ${jobId}.`);
         } else if ((job.status === 'taken' || job.status === 'in_progress' || job.status === 'completed') && (isAssignedTranscriber || userType === 'admin')) {
             // Allow assigned transcriber or admin to download for active/completed jobs
-            console.log(`[downloadDirectUploadFile] ${userType === 'admin' ? 'Admin' : 'Assigned Transcriber'} ${userId} downloading file ${fileName} for job ${jobId} (status: ${job.status}).`);
+            console.log(`[downloadDirectUploadFile] ${userType === 'admin' ? 'Admin' : 'Assigned Transcriber'} ${userId} downloading file ${fileName} for job ${job.status} (status: ${job.status}).`);
         } else {
             return res.status(403).json({ error: `Access denied. You are not authorized to download this file for job status '${job.status}'.` });
         }
