@@ -357,7 +357,7 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
 
         console.log(`[getAvailableDirectUploadJobsForTranscriber] Fetched transcriberUser for ${transcriberId}:`, {
             is_online: transcriberUser.is_online,
-            current_job_id: transcriberUser.current_job_id, // Corrected typo here
+            current_job_id: transcriberUser.current_job_id,
             transcriber_average_rating: transcriberUser.transcriber_average_rating,
             transcriber_status: transcriberUser.transcriber_status
         });
@@ -1127,7 +1127,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
     }
 };
 
-// NEW: Function to handle direct upload file downloads for transcribers
+// NEW: Function to handle direct upload file downloads for transcribers AND clients
 const downloadDirectUploadFile = async (req, res) => {
     const { jobId, fileName } = req.params;
     const userId = req.user.userId;
@@ -1138,15 +1138,10 @@ const downloadDirectUploadFile = async (req, res) => {
     }
 
     try {
-        // First, check if the user is a transcriber or admin
-        if (userType !== 'transcriber' && userType !== 'admin') {
-            return res.status(403).json({ error: 'Access denied. Only transcribers and admins can download these files.' });
-        }
-
         // Fetch job details to verify status and ownership (if applicable)
         const { data: job, error: jobError } = await supabase
             .from('direct_upload_jobs')
-            .select('id, status, file_name, instruction_files, transcriber_id')
+            .select('id, status, file_name, instruction_files, transcriber_id, client_id') // Added client_id
             .eq('id', jobId)
             .single();
 
@@ -1163,18 +1158,20 @@ const downloadDirectUploadFile = async (req, res) => {
             return res.status(404).json({ error: 'File not found for this job.' });
         }
 
-        // Allow download if:
-        // 1. The job is 'available_for_transcriber' (for any transcriber to preview)
-        // 2. The job is 'taken', 'in_progress', or 'completed' AND the current user is the assigned transcriber or an admin
         const isAssignedTranscriber = job.transcriber_id === userId;
+        const isClient = job.client_id === userId; // NEW: Check if the user is the client
 
-        if (job.status === 'available_for_transcriber' && userType === 'transcriber') {
+        // Authorization logic:
+        if (userType === 'admin') {
+            console.log(`[downloadDirectUploadFile] Admin ${userId} downloading file ${fileName} for job ${jobId}.`);
+        } else if (userType === 'client' && isClient) { // NEW: Allow client to download their own files
+            console.log(`[downloadDirectUploadFile] Client ${userId} downloading file ${fileName} for their job ${jobId}.`);
+        } else if (userType === 'transcriber' && job.status === 'available_for_transcriber') {
             // Allow any active transcriber to download for preview
-            // (Further checks on transcriber status/level could be added here if needed)
             console.log(`[downloadDirectUploadFile] Transcriber ${userId} downloading file ${fileName} for available job ${jobId}.`);
-        } else if ((job.status === 'taken' || job.status === 'in_progress' || job.status === 'completed') && (isAssignedTranscriber || userType === 'admin')) {
-            // Allow assigned transcriber or admin to download for active/completed jobs
-            console.log(`[downloadDirectUploadFile] ${userType === 'admin' ? 'Admin' : 'Assigned Transcriber'} ${userId} downloading file ${fileName} for job ${job.status} (status: ${job.status}).`);
+        } else if (userType === 'transcriber' && (job.status === 'taken' || job.status === 'in_progress' || job.status === 'completed') && isAssignedTranscriber) {
+            // Allow assigned transcriber to download for active/completed jobs
+            console.log(`[downloadDirectUploadFile] Assigned Transcriber ${userId} downloading file ${fileName} for job ${jobId} (status: ${job.status}).`);
         } else {
             return res.status(403).json({ error: `Access denied. You are not authorized to download this file for job status '${job.status}'.` });
         }
