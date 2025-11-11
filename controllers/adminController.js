@@ -68,11 +68,11 @@ const getPendingTranscriberTestsCount = async (req, res) => {
     }
 };
 
-// Get count of all jobs (negotiations) for admin dashboard display
+// Get count of all jobs (negotiations and direct uploads) for admin dashboard display
 const getActiveJobsCount = async (req, res) => {
     try {
-        // FIX: Include all relevant statuses for an admin's "all jobs" count
-        const { count, error } = await supabase
+        // Fetch count for negotiation jobs
+        const { count: negotiationCount, error: negotiationError } = await supabase
             .from('negotiations')
             .select('*', { count: 'exact', head: true })
             .in('status', [
@@ -81,11 +81,27 @@ const getActiveJobsCount = async (req, res) => {
                 'client_counter',
                 'accepted_awaiting_payment',
                 'hired',
-                'completed' // Include completed jobs for overall count
+                'completed'
             ]);
+        if (negotiationError) throw negotiationError;
 
-        if (error) throw error;
-        res.json({ count });
+        // Fetch count for direct upload jobs
+        const { count: directUploadCount, error: directUploadError } = await supabase
+            .from('direct_upload_jobs')
+            .select('*', { count: 'exact', head: true })
+            .in('status', [
+                'pending_review',
+                'available_for_transcriber',
+                'taken',
+                'in_progress',
+                'completed',
+                'client_completed'
+            ]);
+        if (directUploadError) throw directUploadError;
+
+        const totalCount = (negotiationCount || 0) + (directUploadCount || 0);
+
+        res.json({ count: totalCount });
     } catch (error) {
         console.error('Error fetching active jobs count:', error);
         res.status(500).json({ error: error.message });
@@ -184,7 +200,7 @@ const getTranscriberTestSubmissionById = async (req, res) => {
         if (error) throw error;
         // Handle case where submission is not found
         if (!submission) {
-            return res.status(404).json({ error: 'Test submission not found.' });
+            return res.status(404).json({ error: 'Test submission not found.ᐟ' });
         }
         res.json({ submission });
     } catch (error) {
@@ -356,14 +372,14 @@ const getUserByIdForAdmin = async (req, res) => {
             console.error(`[getUserByIdForAdmin] Supabase error fetching user ${userId}:`, error);
             if (error.code === 'PGRST116') {
                  console.warn(`[getUserByIdForAdmin] User ${userId} not found.`);
-                 return res.status(404).json({ error: 'User not found.' });
+                 return res.status(404).json({ error: 'User not found.ᐟ' });
             }
             console.error(`[getUserByIdForAdmin] Detailed Supabase error for user ${userId}:`, error);
             throw error;
         }
         if (!user) {
             console.warn(`[getUserByIdForAdmin] User ${userId} not found (after initial check).`);
-            return res.status(404).json({ error: 'User not found.' });
+            return res.status(404).json({ error: 'User not found.ᐟ' });
         }
 
         // The user object already contains all profile data directly from 'users' table
@@ -373,7 +389,7 @@ const getUserByIdForAdmin = async (req, res) => {
         res.json({ user: userWithoutPasswordHash });
     } catch (error) {
         console.error('[getUserByIdForAdmin] Error fetching user by ID for admin: ', error.message);
-        res.status(500).json({ error: error.message || 'Server error fetching user details.' });
+        res.status(500).json({ error: error.message || 'Server error fetching user details.ᐟ' });
     }
 };
 
@@ -392,21 +408,21 @@ const getAnyUserById = async (req, res) => {
             console.error(`[getAnyUserById] Supabase error fetching user ${userId}:`, error);
             if (error.code === 'PGRST116') {
                  console.warn(`[getAnyUserById] User ${userId} not found.`);
-                 return res.status(404).json({ error: 'User not found.' });
+                 return res.status(404).json({ error: 'User not found.ᐟ' });
             }
             console.error(`[getAnyUserById] Detailed Supabase error for user ${userId}:`, error);
             throw error;
         }
         if (!user) {
             console.warn(`[getAnyUserById] User ${userId} not found (after initial check).`);
-            return res.status(404).json({ error: 'User not found.' });
+            return res.status(404).json({ error: 'User not found.ᐟ' });
         }
         // Remove password_hash if it was accidentally selected (though it shouldn't be with the explicit select)
         const { password_hash, ...userWithoutPasswordHash } = user;
         res.json({ user: userWithoutPasswordHash });
     } catch (error) {
         console.error('[getAnyUserById] Error fetching any user by ID: ', error.message);
-        res.status(500).json({ error: error.message || 'Server error fetching user details.' });
+        res.status(500).json({ error: error.message || 'Server error fetching user details.ᐟ' });
     }
 };
 
@@ -424,7 +440,7 @@ const deleteUser = async (req, res) => {
 
         if (fetchError || !existingUser) {
             console.error(`Error finding user ${userId} for deletion:`, fetchError);
-            return res.status(404).json({ error: 'User not found.' });
+            return res.status(404).json({ error: 'User not found.ᐟ' });
         }
 
         // Delete the user from the 'users' table
@@ -441,10 +457,10 @@ const deleteUser = async (req, res) => {
             throw deleteError;
         }
 
-        res.status(200).json({ message: `User '${existingUser.full_name}' (ID: ${userId}) deleted successfully.` });
+        res.status(200).json({ message: `User '${existingUser.full_name}' (ID: ${userId}) deleted successfully.ᐟ` });
     } catch (error) {
         console.error('Error in deleteUser:', error);
-        res.status(500).json({ error: error.message || 'Server error deleting user.' });
+        res.status(500).json({ error: error.message || 'Server error deleting user.ᐟ' });
     }
 };
 
@@ -524,10 +540,11 @@ const updateAdminSettings = async (req, res) => {
     }
 };
 
-// NEW: Function to get all jobs (negotiations) for admin view
+// NEW: Function to get all jobs (negotiations and direct uploads) for admin view
 const getAllJobsForAdmin = async (req, res) => {
     try {
-        const { data: negotiations, error } = await supabase
+        // Fetch negotiation jobs
+        const { data: negotiations, error: negotiationsError } = await supabase
             .from('negotiations')
             .select(`
                 id,
@@ -551,70 +568,167 @@ const getAllJobsForAdmin = async (req, res) => {
             .order('completed_at', { ascending: false, nullsFirst: false }) // Order by completed_at (most recent first), nulls last
             .order('created_at', { ascending: false }); // Fallback order by created_at
 
-        if (error) throw error;
+        if (negotiationsError) throw negotiationsError;
 
-        // Format results to handle potential null client/transcriber IDs gracefully
-        const jobs = negotiations.map(n => ({
-            ...n,
-            client: n.client || { full_name: 'Unknown Client', email: 'N/A' }, // Provide default if client is null
-            transcriber: n.transcriber || { full_name: 'Unassigned', email: 'N/A' } // Provide default if transcriber is null
+        // Fetch direct upload jobs
+        const { data: directUploadJobs, error: directUploadError } = await supabase
+            .from('direct_upload_jobs')
+            .select(`
+                id,
+                status,
+                quote_amount,     
+                client_instructions,
+                agreed_deadline_hours,
+                audio_length_minutes,
+                file_name,
+                instruction_files,
+                audio_quality_param,
+                deadline_type_param,
+                special_requirements,
+                created_at,
+                completed_at,           
+                client_completed_at,
+                transcriber_comment, 
+                client_feedback_comment, 
+                client_feedback_rating,  
+                client_id,
+                transcriber_id,
+                client:users!client_id (
+                    full_name, email
+                ),
+                transcriber:users!transcriber_id (
+                    full_name, email
+                )
+            `)
+            .order('completed_at', { ascending: false, nullsFirst: false }) // Order by completed_at (most recent first), nulls last
+            .order('created_at', { ascending: false }); // Fallback order by created_at
+
+        if (directUploadError) throw directUploadError;
+
+        // Add jobType to each job and combine
+        const formattedNegotiations = (negotiations || []).map(job => ({
+            ...job,
+            jobType: 'negotiation',
+            client: job.client || { full_name: 'Unknown Client', email: 'N/A' },
+            transcriber: job.transcriber || { full_name: 'Unassigned', email: 'N/A' }
         }));
 
-        res.json(jobs); // Return the array of jobs directly
+        const formattedDirectUploadJobs = (directUploadJobs || []).map(job => ({
+            ...job,
+            jobType: 'direct_upload',
+            client: job.client || { full_name: 'Unknown Client', email: 'N/A' },
+            transcriber: job.transcriber || { full_name: 'Unassigned', email: 'N/A' }
+        }));
+
+        const combinedJobs = [...formattedNegotiations, ...formattedDirectUploadJobs].sort((a, b) => {
+            // Sort by created_at (most recent first)
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        });
+
+        res.json(combinedJobs); // Return the array of combined jobs directly
     } catch (error) {
-        console.error('Error fetching all jobs for admin:', error);
-        res.status(500).json({ error: error.message });
+        console.error('Error fetching all jobs for admin: ', error);
+        res.status(500).json({ error: error.message || 'Server error fetching all jobs.' });
     }
 };
 
-// NEW: Function to get a single job (negotiation) by ID for admin view
+// NEW: Function to get a single Direct Upload job by ID for admin view
+const getDirectUploadJobByIdForAdmin = async (jobId) => {
+    console.log(`[getDirectUploadJobByIdForAdmin] Attempting to fetch direct upload job ID: ${jobId}`);
+    const { data: job, error } = await supabase
+        .from('direct_upload_jobs')
+        .select(`
+            *,
+            client:users!client_id (
+                id, full_name, email
+            ),
+            transcriber:users!transcriber_id (
+                id, full_name, email
+            )
+        `)
+        .eq('id', jobId)
+        .single();
+
+    if (error) {
+        console.error(`[getDirectUploadJobByIdForAdmin] Supabase error fetching direct upload job ${jobId}:`, error);
+        if (error.code === 'PGRST116') {
+             console.warn(`[getDirectUploadJobByIdForAdmin] Direct upload job ${jobId} not found.`);
+             return null; // Return null if not found
+        }
+        throw error;
+    }
+    if (!job) {
+        console.warn(`[getDirectUploadJobByIdForAdmin] Direct upload job ${jobId} not found (after initial check).`);
+        return null; // Return null if not found
+    }
+
+    const formattedJob = {
+        ...job,
+        jobType: 'direct_upload',
+        client: job.client || { id: null, full_name: 'Unknown Client', email: 'N/A' },
+        transcriber: job.transcriber || { id: null, full_name: 'Unassigned', email: 'N/A' }
+    };
+    return formattedJob;
+};
+
+
+// NEW: Function to get a single job (negotiation or direct upload) by ID for admin view
 const getJobByIdForAdmin = async (req, res) => {
     try {
         const { jobId } = req.params;
-        console.log(`[getJobByIdForAdmin] Attempting to fetch job ID: ${jobId}`);
+        const { type: jobType } = req.query; // Get jobType from query parameter
+        console.log(`[getJobByIdForAdmin] Attempting to fetch job ID: ${jobId}, Type: ${jobType}`);
 
-        const { data: negotiation, error } = await supabase
-            .from('negotiations')
-            .select(`
-                *,
-                completed_at,           
-                client_feedback_comment, 
-                client_feedback_rating,  
-                client:users!client_id (
-                    id, full_name, email
-                ),
-                transcriber:users!transcriber_id (
-                    id, full_name, email
-                )
-            `)
-            .eq('id', jobId)
-            .single();
+        let job;
+        if (jobType === 'negotiation') {
+            const { data: negotiation, error } = await supabase
+                .from('negotiations')
+                .select(`
+                    *,
+                    completed_at,           
+                    client_feedback_comment, 
+                    client_feedback_rating,  
+                    client:users!client_id (
+                        id, full_name, email
+                    ),
+                    transcriber:users!transcriber_id (
+                        id, full_name, email
+                    )
+                `)
+                .eq('id', jobId)
+                .single();
 
-        if (error) {
-            console.error(`[getJobByIdForAdmin] Supabase error fetching job ${jobId}:`, error);
-            if (error.code === 'PGRST116') {
-                 console.warn(`[getJobByIdForAdmin] Job ${jobId} not found.`);
-                 return res.status(404).json({ error: 'Job not found.' });
+            if (error) {
+                console.error(`[getJobByIdForAdmin] Supabase error fetching negotiation job ${jobId}:`, error);
+                if (error.code === 'PGRST116') {
+                    console.warn(`[getJobByIdForAdmin] Negotiation job ${jobId} not found.`);
+                    return res.status(404).json({ error: 'Negotiation job not found.ᐟ' });
+                }
+                throw error;
             }
-            console.error(`[getJobByIdForAdmin] Detailed Supabase error for job ${jobId}:`, error);
-            throw error;
+            if (!negotiation) {
+                console.warn(`[getJobByIdForAdmin] Negotiation job ${jobId} not found (after initial check).`);
+                return res.status(404).json({ error: 'Negotiation job not found.ᐟ' });
+            }
+            job = {
+                ...negotiation,
+                jobType: 'negotiation',
+                client: negotiation.client || { id: null, full_name: 'Unknown Client', email: 'N/A' },
+                transcriber: negotiation.transcriber || { id: null, full_name: 'Unassigned', email: 'N/A' }
+            };
+        } else if (jobType === 'direct_upload') {
+            job = await getDirectUploadJobByIdForAdmin(jobId); // Use the new helper function
+            if (!job) {
+                return res.status(404).json({ error: 'Direct upload job not found.ᐟ' });
+            }
+        } else {
+            return res.status(400).json({ error: 'Invalid or missing job type for fetching details.ᐟ' });
         }
-        if (!negotiation) {
-            console.warn(`[getJobByIdForAdmin] Job ${jobId} not found (after initial check).`);
-            return res.status(404).json({ error: 'Job not found.' });
-        }
-
-        // Format the job object to handle potential null client/transcriber IDs gracefully
-        const formattedJob = {
-            ...negotiation,
-            client: negotiation.client || { id: null, full_name: 'Unknown Client', email: 'N/A' },
-            transcriber: negotiation.transcriber || { id: null, full_name: 'Unassigned', email: 'N/A' }
-        };
-
-        res.json(formattedJob); // Return the formatted job object directly
+        
+        res.json(job); // Return the formatted job object directly
     } catch (error) {
         console.error('Error fetching job by ID for admin: ', error.message);
-        res.status(500).json({ error: error.message || 'Server error fetching job details.' });
+        res.status(500).json({ error: error.message || 'Server error fetching job details.ᐟ' });
     }
 };
 
@@ -663,7 +777,7 @@ const getAdminUserId = async (req, res) => {
     const adminId = process.env.ADMIN_USER_ID;
     if (!adminId) {
         console.error('ADMIN_USER_ID is not set in backend environment variables.');
-        return res.status(500).json({ error: 'Admin ID not configured.' });
+        return res.status(500).json({ error: 'Admin ID not configured.ᐟ' });
     }
     res.status(200).json({ adminId: adminId });
 };

@@ -95,7 +95,8 @@ const {
     handleQuoteCalculationRequest,
     initializeDirectUploadPayment, // NEW: Import direct upload-specific payment initiation
     verifyDirectUploadPayment, // NEW: Import direct upload-specific payment verification
-    downloadDirectUploadFile // NEW: Import the download function
+    downloadDirectUploadFile, // NEW: Import the download function
+    deleteDirectUploadJob // NEW: Import the delete direct upload job function
 } = require('..//controllers/directUploadController');
 
 // NEW: Import training controller functions
@@ -609,6 +610,15 @@ module.exports = (io) => {
       getJobByIdForAdmin(req, res, next);
   });
 
+  // NEW: Admin route to delete a direct upload job
+  router.delete('/admin/direct-jobs/:jobId', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'admin') {
+      return res.status(403).json({ error: 'Access denied. Only admins can delete direct upload jobs.' });
+    }
+    deleteDirectUploadJob(req, res, io); // Call the new delete function for direct upload jobs
+  });
+
+
   router.get('/admin/disputes/all', authMiddleware, (req, res, next) => {
       if (req.user.userType !== 'admin') {
           return res.status(403).json({ error: 'Access denied. Only admins can view all disputes.' });
@@ -873,16 +883,16 @@ module.exports = (io) => {
             .eq('transcriber_id', transcriberId)
             .order('created_at', { ascending: false });
 
-        if (error) {
-            console.error(`[GET /transcriber/direct-jobs/all] Supabase error:`, error);
-            throw error;
-        }
-        console.log(`[GET /transcriber/direct-jobs/all] Found ${jobs.length} jobs for transcriberId ${transcriberId}.`);
+      if (error) {
+        console.error(`[GET /transcriber/direct-jobs/all] Supabase error:`, error);
+        throw error;
+      }
+      console.log(`[GET /transcriber/direct-jobs/all] Found ${jobs.length} jobs for transcriberId ${transcriberId}.`);
 
-        res.status(200).json({
-            message: 'All assigned direct upload jobs retrieved successfully.',
-            jobs: jobs
-        });
+      res.status(200).json({
+        message: 'All assigned direct upload jobs retrieved successfully.',
+        jobs: jobs
+      });
 
     } catch (fetchError) {
         console.error('[GET /transcriber/direct-jobs/all] Error fetching all assigned direct upload jobs for transcriber:', fetchError);

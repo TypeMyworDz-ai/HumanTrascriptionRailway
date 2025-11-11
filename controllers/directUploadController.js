@@ -1134,7 +1134,7 @@ const downloadDirectUploadFile = async (req, res) => {
     const userType = req.user.userType;
 
     if (!fileName) {
-        return res.status(400).json({ error: 'File name is required.' });
+        return res.status(400).json({ error: 'File name is required.ᐟ' });
     }
 
     try {
@@ -1147,7 +1147,7 @@ const downloadDirectUploadFile = async (req, res) => {
 
         if (jobError || !job) {
             console.error(`[downloadDirectUploadFile] Job ${jobId} not found or Supabase error:`, jobError);
-            return res.status(404).json({ error: 'Job not found.' });
+            return res.status(404).json({ error: 'Job not found.ᐟ' });
         }
 
         const isMainFile = job.file_name === fileName;
@@ -1155,7 +1155,7 @@ const downloadDirectUploadFile = async (req, res) => {
 
         if (!isMainFile && !isInstructionFile) {
             console.warn(`[downloadDirectUploadFile] File '${fileName}' not associated with job ${jobId}.`);
-            return res.status(404).json({ error: 'File not found for this job.' });
+            return res.status(404).json({ error: 'File not found for this job.ᐟ' });
         }
 
         const isAssignedTranscriber = job.transcriber_id === userId;
@@ -1173,7 +1173,7 @@ const downloadDirectUploadFile = async (req, res) => {
             // Allow assigned transcriber to download for active/completed jobs
             console.log(`[downloadDirectUploadFile] Assigned Transcriber ${userId} downloading file ${fileName} for job ${jobId} (status: ${job.status}).`);
         } else {
-            return res.status(403).json({ error: `Access denied. You are not authorized to download this file for job status '${job.status}'.` });
+            return res.status(403).json({ error: `Access denied. You are not authorized to download this file for job status '${job.status}'.ᐟ` });
         }
 
         const filePath = path.join('uploads/direct_upload_files', fileName);
@@ -1182,17 +1182,103 @@ const downloadDirectUploadFile = async (req, res) => {
             res.download(filePath, fileName, (err) => {
                 if (err) {
                     console.error(`[downloadDirectUploadFile] Error sending file ${fileName} for job ${jobId}:`, err);
-                    return res.status(500).json({ error: 'Failed to download file.' });
+                    return res.status(500).json({ error: 'Failed to download file.ᐟ' });
                 }
             });
         } else {
             console.error(`[downloadDirectUploadFile] File not found on disk: ${filePath}`);
-            return res.status(404).json({ error: 'File not found on server.' });
+            return res.status(404).json({ error: 'File not found on server.ᐟ' });
         }
 
     } catch (error) {
         console.error(`[downloadDirectUploadFile] UNCAUGHT EXCEPTION for job ${jobId}, file ${fileName}:`, error);
-        res.status(500).json({ error: 'Server error during file download.' });
+        res.status(500).json({ error: 'Server error during file download.ᐟ' });
+    }
+};
+
+// NEW: Function to delete a direct upload job by Admin
+const deleteDirectUploadJob = async (req, res, io) => { // Added io parameter for consistency, though not used here
+    const { jobId } = req.params;
+    const userId = req.user.userId; // Admin ID
+    const userType = req.user.userType;
+
+    try {
+        if (userType !== 'admin') {
+            return res.status(403).json({ error: 'Access denied. Only admins can delete direct upload jobs.ᐟ' });
+        }
+
+        // First, fetch the job to get file names and transcriber_id
+        const { data: job, error: fetchError } = await supabase
+            .from('direct_upload_jobs')
+            .select('id, file_name, instruction_files, transcriber_id, status')
+            .eq('id', jobId)
+            .single();
+
+        if (fetchError || !job) {
+            console.error(`Error finding direct upload job ${jobId} for deletion:`, fetchError);
+            return res.status(404).json({ error: 'Direct upload job not found.ᐟ' });
+        }
+
+        // If a transcriber was assigned, free them up
+        if (job.transcriber_id && (job.status === 'taken' || job.status === 'in_progress')) {
+            await syncAvailabilityStatus(job.transcriber_id, null);
+            console.log(`Transcriber ${job.transcriber_id} freed up after admin deleted direct upload job ${jobId}.`);
+        }
+
+        // Delete associated messages (if any)
+        const { error: deleteMessagesError } = await supabase
+            .from('messages')
+            .delete()
+            .eq('direct_upload_job_id', jobId);
+
+        if (deleteMessagesError) {
+            console.error(`Error deleting messages for direct upload job ${jobId}:`, deleteMessagesError);
+            // Don't throw, just log, as job deletion should proceed
+        }
+        console.log(`Deleted messages for direct upload job ${jobId}.`);
+
+
+        // Delete main file
+        if (job.file_name) {
+            const mainFilePath = path.join('uploads/direct_upload_files', job.file_name);
+            if (fs.existsSync(mainFilePath)) {
+                await unlinkAsync(mainFilePath).catch(err => console.error(`Error deleting main direct upload file ${mainFilePath}:`, err));
+                console.log(`Deleted main direct upload file: ${mainFilePath}`);
+            } else {
+                console.warn(`Main direct upload file not found on disk for deletion: ${mainFilePath}`);
+            }
+        }
+
+        // Delete instruction files
+        if (job.instruction_files) {
+            const instructionFiles = job.instruction_files.split(',');
+            await Promise.all(instructionFiles.map(async (file) => {
+                const filePath = path.join('uploads/direct_upload_files', file);
+                if (fs.existsSync(filePath)) {
+                    await unlinkAsync(filePath).catch(err => console.error(`Error deleting instruction file ${filePath}:`, err));
+                    console.log(`Deleted instruction file: ${filePath}`);
+                } else {
+                    console.warn(`Instruction file not found on disk for deletion: ${filePath}`);
+                }
+            }));
+        }
+
+        // Delete the job record from the database
+        const { error: deleteError } = await supabase
+            .from('direct_upload_jobs')
+            .delete()
+            .eq('id', jobId);
+
+        if (deleteError) {
+            console.error(`Error deleting direct upload job ${jobId} from database:`, deleteError);
+            throw deleteError;
+        }
+
+        res.status(200).json({ message: `Direct upload job ${jobId?.substring(0, 8)}... deleted successfully.ᐟ` });
+
+    } catch (error) {
+        console.error(`[deleteDirectUploadJob] UNCAUGHT EXCEPTION for job ${jobId}:`, error);
+        res.status(500).json({ error: error.message || 'Server error deleting direct upload job.ᐟ' });
     }
 };
 
@@ -1209,5 +1295,6 @@ module.exports = {
     getAllDirectUploadJobsForAdmin,
     initializeDirectUploadPayment,
     verifyDirectUploadPayment,
-    downloadDirectUploadFile // NEW: Export the download function
+    downloadDirectUploadFile,
+    deleteDirectUploadJob // NEW: Export the deleteDirectUploadJob function
 };
