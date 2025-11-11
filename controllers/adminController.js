@@ -540,11 +540,10 @@ const updateAdminSettings = async (req, res) => {
     }
 };
 
-// NEW: Function to get all jobs (negotiations and direct uploads) for admin view
-const getAllJobsForAdmin = async (req, res) => {
+// Function to get all negotiation jobs for admin view
+const getAllJobsForAdmin = async (req, res) => { // UPDATED: Function name implies negotiation jobs
     try {
-        // Fetch negotiation jobs
-        const { data: negotiations, error: negotiationsError } = await supabase
+        const { data: negotiations, error } = await supabase
             .from('negotiations')
             .select(`
                 id,
@@ -568,111 +567,82 @@ const getAllJobsForAdmin = async (req, res) => {
             .order('completed_at', { ascending: false, nullsFirst: false }) // Order by completed_at (most recent first), nulls last
             .order('created_at', { ascending: false }); // Fallback order by created_at
 
-        if (negotiationsError) throw negotiationsError;
+        if (error) throw error;
 
-        // Fetch direct upload jobs
-        const { data: directUploadJobs, error: directUploadError } = await supabase
+        // Add jobType to each job and format results
+        const formattedNegotiations = (negotiations || []).map(job => ({
+            ...job,
+            jobType: 'negotiation', // Explicitly set jobType
+            client: job.client || { full_name: 'Unknown Client', email: 'N/A' },
+            transcriber: job.transcriber || { full_name: 'Unassigned', email: 'N/A' }
+        }));
+
+        res.json(formattedNegotiations); // Return the array of negotiation jobs directly
+    } catch (error) {
+        console.error('Error fetching all negotiation jobs for admin: ', error);
+        res.status(500).json({ error: error.message || 'Server error fetching all negotiation jobs.ᐟ' });
+    }
+};
+
+// Function to get all direct upload jobs for admin view
+const getAllDirectUploadJobsForAdmin = async (req, res) => { // This function is already correct for direct uploads
+    try {
+        const { data: jobs, error } = await supabase
             .from('direct_upload_jobs')
             .select(`
                 id,
-                status,
-                quote_amount,     
-                client_instructions,
-                agreed_deadline_hours,
-                audio_length_minutes,
                 file_name,
+                file_url,
+                file_size_mb,
+                audio_length_minutes,
+                client_instructions,
                 instruction_files,
+                quote_amount,
+                price_per_minute_usd,
+                currency,
+                agreed_deadline_hours,
+                status,
                 audio_quality_param,
                 deadline_type_param,
                 special_requirements,
                 created_at,
-                completed_at,           
-                client_completed_at,
+                completed_at, 
+                client_completed_at, 
                 transcriber_comment, 
                 client_feedback_comment, 
-                client_feedback_rating,  
-                client_id,
-                transcriber_id,
-                client:users!client_id (
-                    full_name, email
-                ),
-                transcriber:users!transcriber_id (
-                    full_name, email
-                )
+                client_feedback_rating, 
+                client:users!client_id(full_name, email),
+                transcriber:users!transcriber_id(full_name, email)
             `)
-            .order('completed_at', { ascending: false, nullsFirst: false }) // Order by completed_at (most recent first), nulls last
-            .order('created_at', { ascending: false }); // Fallback order by created_at
+            .order('created_at', { ascending: false });
 
-        if (directUploadError) throw directUploadError;
+        if (error) throw error;
 
-        // Add jobType to each job and combine
-        const formattedNegotiations = (negotiations || []).map(job => ({
+        // Add jobType to each job and format results
+        const formattedJobs = (jobs || []).map(job => ({
             ...job,
-            jobType: 'negotiation',
+            jobType: 'direct_upload', // Explicitly set jobType
             client: job.client || { full_name: 'Unknown Client', email: 'N/A' },
             transcriber: job.transcriber || { full_name: 'Unassigned', email: 'N/A' }
         }));
 
-        const formattedDirectUploadJobs = (directUploadJobs || []).map(job => ({
-            ...job,
-            jobType: 'direct_upload',
-            client: job.client || { full_name: 'Unknown Client', email: 'N/A' },
-            transcriber: job.transcriber || { full_name: 'Unassigned', email: 'N/A' }
-        }));
-
-        const combinedJobs = [...formattedNegotiations, ...formattedDirectUploadJobs].sort((a, b) => {
-            // Sort by created_at (most recent first)
-            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        res.status(200).json({
+            message: 'Admin direct upload jobs retrieved successfully.',
+            jobs: formattedJobs // Return formatted jobs
         });
 
-        res.json(combinedJobs); // Return the array of combined jobs directly
     } catch (error) {
-        console.error('Error fetching all jobs for admin: ', error);
-        res.status(500).json({ error: error.message || 'Server error fetching all jobs.' });
+        console.error('Error fetching admin direct upload jobs:', error);
+        res.status(500).json({ error: 'Server error fetching admin direct upload jobs.ᐟ' });
     }
 };
 
-// NEW: Function to get a single Direct Upload job by ID for admin view
-const getDirectUploadJobByIdForAdmin = async (jobId) => {
-    console.log(`[getDirectUploadJobByIdForAdmin] Attempting to fetch direct upload job ID: ${jobId}`);
-    const { data: job, error } = await supabase
-        .from('direct_upload_jobs')
-        .select(`
-            *,
-            client:users!client_id (
-                id, full_name, email
-            ),
-            transcriber:users!transcriber_id (
-                id, full_name, email
-            )
-        `)
-        .eq('id', jobId)
-        .single();
 
-    if (error) {
-        console.error(`[getDirectUploadJobByIdForAdmin] Supabase error fetching direct upload job ${jobId}:`, error);
-        if (error.code === 'PGRST116') {
-             console.warn(`[getDirectUploadJobByIdForAdmin] Direct upload job ${jobId} not found.`);
-             return null; // Return null if not found
-        }
-        throw error;
-    }
-    if (!job) {
-        console.warn(`[getDirectUploadJobByIdForAdmin] Direct upload job ${jobId} not found (after initial check).`);
-        return null; // Return null if not found
-    }
-
-    const formattedJob = {
-        ...job,
-        jobType: 'direct_upload',
-        client: job.client || { id: null, full_name: 'Unknown Client', email: 'N/A' },
-        transcriber: job.transcriber || { id: null, full_name: 'Unassigned', email: 'N/A' }
-    };
-    return formattedJob;
-};
+// NEW: Function to get a single Direct Upload job by ID for admin view (from directUploadController)
+// This function is defined in directUploadController.js and imported, so no changes here.
 
 
-// NEW: Function to get a single job (negotiation or direct upload) by ID for admin view
+// Function to get a single job (negotiation or direct upload) by ID for admin view
 const getJobByIdForAdmin = async (req, res) => {
     try {
         const { jobId } = req.params;
@@ -717,7 +687,9 @@ const getJobByIdForAdmin = async (req, res) => {
                 transcriber: negotiation.transcriber || { id: null, full_name: 'Unassigned', email: 'N/A' }
             };
         } else if (jobType === 'direct_upload') {
-            job = await getDirectUploadJobByIdForAdmin(jobId); // Use the new helper function
+            // Call getDirectUploadJobByIdForAdmin from directUploadController
+            const { getDirectUploadJobByIdForAdmin } = require('./directUploadController'); // Import locally to avoid circular dependency
+            job = await getDirectUploadJobByIdForAdmin(jobId); 
             if (!job) {
                 return res.status(404).json({ error: 'Direct upload job not found.ᐟ' });
             }
@@ -798,8 +770,8 @@ module.exports = {
     deleteUser, // NEW: Export the deleteUser function
     getAdminSettings,
     updateAdminSettings,
-    getAllJobsForAdmin,
-    getJobByIdForAdmin,
+    getAllJobsForAdmin, // Now only fetches negotiation jobs
+    getJobByIdForAdmin, // Handles both negotiation and direct upload
     getAllDisputesForAdmin,
     getAdminUserId, // NEW: Export the new function
 };
