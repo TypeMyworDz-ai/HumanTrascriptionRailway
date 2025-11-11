@@ -1,25 +1,26 @@
-const supabase = require('../database');
+const supabase = require('..//database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { syncAvailabilityStatus } = require('./transcriberController'); // Keep for syncAvailabilityStatus
-const emailService = require('../emailService');
+const emailService = require('..//emailService');
 const util = require('util');
 const { getAudioDurationInSeconds } = require('get-audio-duration');
-const { calculatePricePerMinute } = require('../utils/pricingCalculator');
+const { calculatePricePerMinute } = require('..//utils/pricingCalculator');
 const { updateAverageRating } = require('./ratingController');
 
 const axios = require('axios');
-const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES, calculateTranscriberEarning } = require('../utils/paymentUtils');
+const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES, calculateTranscriberEarning } = require('..//utils/paymentUtils');
 const http = require('http');
 const https = require('https');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
+const CLIENT_URL = process.env.CLIENT_URL || 'http:--localhost:3000';
 const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
 const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY;
-const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1';
-const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook';
+const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https:--api-sandbox.korapay.com-v1';
+const KORAPAY_WEBHOOK_URL = process.env.REACT_APP_KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook';
+
 
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
@@ -356,7 +357,7 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
 
         console.log(`[getAvailableDirectUploadJobsForTranscriber] Fetched transcriberUser for ${transcriberId}:`, {
             is_online: transcriberUser.is_online,
-            current_job_id: transcriberUser.current_job_id,
+            current_job_id: transcriscriberUser.current_job_id,
             transcriber_average_rating: transcriberUser.transcriber_average_rating,
             transcriber_status: transcriberUser.transcriber_status
         });
@@ -1126,6 +1127,78 @@ const verifyDirectUploadPayment = async (req, res, io) => {
     }
 };
 
+// NEW: Function to handle direct upload file downloads for transcribers
+const downloadDirectUploadFile = async (req, res) => {
+    const { jobId, fileName } = req.params;
+    const userId = req.user.userId;
+    const userType = req.user.userType;
+
+    if (!fileName) {
+        return res.status(400).json({ error: 'File name is required.' });
+    }
+
+    try {
+        // First, check if the user is a transcriber or admin
+        if (userType !== 'transcriber' && userType !== 'admin') {
+            return res.status(403).json({ error: 'Access denied. Only transcribers and admins can download these files.' });
+        }
+
+        // Fetch job details to verify status and ownership (if applicable)
+        const { data: job, error: jobError } = await supabase
+            .from('direct_upload_jobs')
+            .select('id, status, file_name, instruction_files, transcriber_id')
+            .eq('id', jobId)
+            .single();
+
+        if (jobError || !job) {
+            console.error(`[downloadDirectUploadFile] Job ${jobId} not found or Supabase error:`, jobError);
+            return res.status(404).json({ error: 'Job not found.' });
+        }
+
+        const isMainFile = job.file_name === fileName;
+        const isInstructionFile = job.instruction_files && job.instruction_files.split(',').includes(fileName);
+
+        if (!isMainFile && !isInstructionFile) {
+            console.warn(`[downloadDirectUploadFile] File '${fileName}' not associated with job ${jobId}.`);
+            return res.status(404).json({ error: 'File not found for this job.' });
+        }
+
+        // Allow download if:
+        // 1. The job is 'available_for_transcriber' (for any transcriber to preview)
+        // 2. The job is 'taken', 'in_progress', or 'completed' AND the current user is the assigned transcriber or an admin
+        const isAssignedTranscriber = job.transcriber_id === userId;
+
+        if (job.status === 'available_for_transcriber' && userType === 'transcriber') {
+            // Allow any active transcriber to download for preview
+            // (Further checks on transcriber status/level could be added here if needed)
+            console.log(`[downloadDirectUploadFile] Transcriber ${userId} downloading file ${fileName} for available job ${jobId}.`);
+        } else if ((job.status === 'taken' || job.status === 'in_progress' || job.status === 'completed') && (isAssignedTranscriber || userType === 'admin')) {
+            // Allow assigned transcriber or admin to download for active/completed jobs
+            console.log(`[downloadDirectUploadFile] ${userType === 'admin' ? 'Admin' : 'Assigned Transcriber'} ${userId} downloading file ${fileName} for job ${jobId} (status: ${job.status}).`);
+        } else {
+            return res.status(403).json({ error: `Access denied. You are not authorized to download this file for job status '${job.status}'.` });
+        }
+
+        const filePath = path.join('uploads/direct_upload_files', fileName);
+
+        if (fs.existsSync(filePath)) {
+            res.download(filePath, fileName, (err) => {
+                if (err) {
+                    console.error(`[downloadDirectUploadFile] Error sending file ${fileName} for job ${jobId}:`, err);
+                    return res.status(500).json({ error: 'Failed to download file.' });
+                }
+            });
+        } else {
+            console.error(`[downloadDirectUploadFile] File not found on disk: ${filePath}`);
+            return res.status(404).json({ error: 'File not found on server.' });
+        }
+
+    } catch (error) {
+        console.error(`[downloadDirectUploadFile] UNCAUGHT EXCEPTION for job ${jobId}, file ${fileName}:`, error);
+        res.status(500).json({ error: 'Server error during file download.' });
+    }
+};
+
 
 module.exports = {
     handleQuoteCalculationRequest,
@@ -1138,5 +1211,6 @@ module.exports = {
     getAllDirectUploadJobsForTranscriber, 
     getAllDirectUploadJobsForAdmin,
     initializeDirectUploadPayment,
-    verifyDirectUploadPayment
+    verifyDirectUploadPayment,
+    downloadDirectUploadFile // NEW: Export the download function
 };

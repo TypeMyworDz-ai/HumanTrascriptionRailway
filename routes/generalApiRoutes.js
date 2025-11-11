@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('../database');
-const authMiddleware = require('../middleware/authMiddleware');
+const supabase = require('..//database');
+const authMiddleware = require('..//middleware/authMiddleware');
 const fs = require('fs');
 const path = require('path');
 
@@ -24,7 +24,7 @@ const {
   markNegotiationJobCompleteByTranscriber,
   initializeNegotiationPayment, // NEW: Import negotiation-specific payment initiation
   verifyNegotiationPayment // NEW: Import negotiation-specific payment verification
-} = require('../controllers/negotiationController');
+} = require('..//controllers/negotiationController');
 
 // Import admin controller functions
 const {
@@ -46,7 +46,7 @@ const {
     getJobByIdForAdmin,
     getAllDisputesForAdmin,
     getAdminUserId
-} = require('../controllers/adminController');
+} = require('..//controllers/adminController');
 
 // Import chat controller functions
 const {
@@ -60,7 +60,7 @@ const {
     sendJobMessage,
     uploadChatAttachment,
     handleChatAttachmentUpload
-} = require('../controllers/chatController');
+} = require('..//controllers/chatController');
 
 // MODIFIED: Import ONLY general payment history functions from paymentController.js
 const {
@@ -69,19 +69,19 @@ const {
     getAllPaymentHistoryForAdmin,
     getTranscriberUpcomingPayoutsForAdmin,
     markPaymentAsPaidOut
-} = require('../controllers/paymentController');
+} = require('..//controllers/paymentController');
 
 // NEW: Import rating controller functions
 const {
     rateUserByAdmin,
     getTranscriberRatings,
     getClientRating
-} = require('../controllers/ratingController');
+} = require('..//controllers/ratingController');
 
 // NEW: Import updateTranscriberProfile and syncAvailabilityStatus from transcriberController
-const { updateTranscriberProfile, syncAvailabilityStatus } = require('../controllers/transcriberController');
+const { updateTranscriberProfile, syncAvailabilityStatus } = require('..//controllers/transcriberController');
 // NEW: Import updateClientProfile from authController
-const { updateClientProfile } = require('../controllers/authController');
+const { updateClientProfile } = require('..//controllers/authController');
 
 // NEW: Import functions from directUploadController.js
 const {
@@ -94,8 +94,9 @@ const {
     getAllDirectUploadJobsForAdmin,
     handleQuoteCalculationRequest,
     initializeDirectUploadPayment, // NEW: Import direct upload-specific payment initiation
-    verifyDirectUploadPayment // NEW: Import direct upload-specific payment verification
-} = require('../controllers/directUploadController');
+    verifyDirectUploadPayment, // NEW: Import direct upload-specific payment verification
+    downloadDirectUploadFile // NEW: Import the download function
+} = require('..//controllers/directUploadController');
 
 // NEW: Import training controller functions
 const {
@@ -111,7 +112,7 @@ const {
     completeTraining,
     initializeTrainingPayment, // NEW: Import training-specific payment initiation
     verifyKorapayTrainingPayment // NEW: Import training-specific KoraPay verification
-} = require('../controllers/trainingController');
+} = require('..//controllers/trainingController');
 
 // Import multer for direct use in this file for error handling
 const multer = require('multer');
@@ -561,7 +562,7 @@ module.exports = (io) => {
 
   router.post('/user/chat/send-message', authMiddleware, (req, res, next) => {
       if (req.user.userType === 'admin') {
-          return res.status(403).json({ error: 'Admins should use their dedicated message sending route.&#x27;' });
+          return res.status(403).json({ error: 'Admins should use their dedicated message sending route.&amp;#x27;' });
       }
       sendUserDirectMessage(req, res, io);
   });
@@ -904,65 +905,9 @@ module.exports = (io) => {
     getAvailableDirectUploadJobsForTranscriber(req, res, io);
   });
 
-  // NEW: Route to download direct upload files
-  router.get('/direct-jobs/:jobId/download/:fileName', authMiddleware, async (req, res) => {
-    const { jobId, fileName } = req.params;
-    const userId = req.user.userId;
-    const userType = req.user.userType;
-
-    try {
-      // 1. Verify user authorization for this file
-      const { data: job, error } = await supabase
-        .from('direct_upload_jobs')
-        .select('client_id, transcriber_id, file_name, instruction_files')
-        .eq('id', jobId)
-        .single();
-
-      if (error || !job) {
-        console.error(`Download error: Direct upload job ${jobId} not found or database error.`, error);
-        return res.status(404).json({ error: 'Direct upload job not found or file not associated.' });
-      }
-
-      // Check if the user is the client, the transcriber, or an admin
-      const isAuthorized = (
-        job.client_id === userId ||
-        job.transcriber_id === userId ||
-        userType === 'admin'
-      );
-
-      if (!isAuthorized) {
-        return res.status(403).json({ error: 'Access denied. You are not authorized to download this file.' });
-      }
-
-      // 2. Determine if the file is the main audio/video file or an instruction file
-      let filePath;
-      if (job.file_name === fileName) {
-        filePath = path.join(__dirname, '..', 'uploads', 'direct_upload_files', fileName);
-      } else if (job.instruction_files && job.instruction_files.includes(fileName)) {
-        filePath = path.join(__dirname, '..', 'uploads', 'direct_upload_files', fileName);
-      } else {
-        console.error(`Download error: File ${fileName} not found for job ${jobId}.`);
-        return res.status(404).json({ error: 'File not found for this job.' });
-      }
-
-      // 3. Verify file exists on disk
-      if (!fs.existsSync(filePath)) {
-        console.error(`Download error: File not found on disk: ${filePath}`);
-        return res.status(404).json({ error: 'File not found on server.' });
-      }
-
-      // 4. Send the file for download
-      res.download(filePath, fileName, (err) => {
-        if (err) {
-          console.error(`Error sending file ${fileName} for download:`, err);
-          res.status(500).json({ error: 'Failed to download file.' });
-        }
-      });
-
-    } catch (downloadError) {
-      console.error('Unexpected error during direct upload file download:', downloadError);
-      res.status(500).json({ error: 'Server error during direct upload file download.' });
-    }
+  // NEW: Route to download direct upload files (now uses the controller function)
+  router.get('/direct-jobs/:jobId/download/:fileName', authMiddleware, (req, res, next) => {
+    downloadDirectUploadFile(req, res, next);
   });
 
 
