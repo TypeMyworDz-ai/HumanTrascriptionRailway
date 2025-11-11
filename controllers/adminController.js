@@ -68,8 +68,8 @@ const getPendingTranscriberTestsCount = async (req, res) => {
     }
 };
 
-// Get count of all jobs (negotiations and direct uploads) for admin dashboard display
-const getActiveJobsCount = async (req, res) => {
+// Get separate counts for negotiation and direct upload jobs for admin dashboard display
+const getActiveJobsCount = async (req, res) => { // UPDATED: Will return separate counts
     try {
         // Fetch count for negotiation jobs
         const { count: negotiationCount, error: negotiationError } = await supabase
@@ -99,9 +99,11 @@ const getActiveJobsCount = async (req, res) => {
             ]);
         if (directUploadError) throw directUploadError;
 
-        const totalCount = (negotiationCount || 0) + (directUploadCount || 0);
-
-        res.json({ count: totalCount });
+        res.json({
+            negotiationJobsCount: negotiationCount || 0,
+            directUploadJobsCount: directUploadCount || 0,
+            totalActiveJobs: (negotiationCount || 0) + (directUploadCount || 0) // Keep total for overall dashboard stat
+        });
     } catch (error) {
         console.error('Error fetching active jobs count:', error);
         res.status(500).json({ error: error.message });
@@ -611,8 +613,12 @@ const getAllDirectUploadJobsForAdmin = async (req, res) => { // This function is
                 transcriber_comment, 
                 client_feedback_comment, 
                 client_feedback_rating, 
-                client:users!client_id(full_name, email),
-                transcriber:users!transcriber_id(full_name, email)
+                client:users!client_id (
+                    full_name, email
+                ),
+                transcriber:users!transcriber_id (
+                    full_name, email
+                )
             `)
             .order('created_at', { ascending: false });
 
