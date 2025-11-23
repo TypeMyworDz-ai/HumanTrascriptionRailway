@@ -78,7 +78,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 )
             `)
             .eq('transcriber_id', transcriberId)
-            // UPDATED: Filter only for 'pending' (upcoming) or 'paid_out' (earned)
+            // This filter is correct as it only considers 'pending' and 'paid_out' for history
             .or('payout_status.eq.pending,payout_status.eq.paid_out') 
             .order('transaction_date', { ascending: false });
 
@@ -150,7 +150,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
         let totalEarned = 0;
 
         paymentsWithJobDetails.forEach(payout => {
-            // UPDATED: Simplify summation based on payout_status alone
+            // This summation logic is correct based on 'pending' and 'paid_out'
             if (payout.payout_status === 'pending') {
                 totalUpcomingPayouts += payout.transcriber_earning;
             } else if (payout.payout_status === 'paid_out') {
@@ -211,7 +211,9 @@ const getClientPaymentHistory = async (req, res) => {
             return res.status(500).json({ error: error.message });
         }
 
-        // UPDATED: Made the map callback async and used Promise.all
+        // This function aggregates client payments, which are the 'amount' paid by the client.
+        // The payout_status here refers to the transcriber's payout status, which is not directly relevant
+        // to the client's total payments. So, no changes needed here regarding payout_status.
         const paymentsWithJobDetails = await Promise.all((payments || []).map(async (payment) => {
             let jobDetails = {};
             const transcriberName = payment.transcriber?.full_name || 'N/A'; 
@@ -363,7 +365,7 @@ const getTranscriberUpcomingPayoutsForAdmin = async (req, res) => {
                 client:users!client_id(full_name, email)
             `)
             .eq('transcriber_id', transcriberId)
-            .eq('payout_status', 'awaiting_completion')
+            .eq('payout_status', 'pending') // This filter is now correct
             .order('transaction_date', { ascending: true });
 
         if (error) {

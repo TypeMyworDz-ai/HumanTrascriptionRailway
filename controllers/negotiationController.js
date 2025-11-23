@@ -28,19 +28,14 @@ const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
 
-const { syncAvailabilityStatus } = require('./transcriberController');
+const { syncAvailabilityStatus } = require('.//transcriberController');
+
+// Import getNextFriday from paymentController
+const { getNextFriday } = require('..//controllers/paymentController'); 
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024;
 
-const getNextFriday = () => {
-    const today = new Date();
-    const dayOfWeek = today.getDay();
-    const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
-    const nextFriday = new Date(today);
-    nextFriday.setDate(today.getDate() + daysUntilFriday);
-    nextFriday.setHours(23, 59, 59, 999);
-    return nextFriday.toISOString();
-};
+// Removed the duplicate getNextFriday function as it's now imported.
 
 const negotiationFileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -1023,6 +1018,7 @@ const clientCounterBack = async (req, res, io) => {
     }
 };
 
+
 const markJobCompleteByClient = async (req, res, io) => {
     try {
         const { negotiationId } = req.params;
@@ -1068,17 +1064,34 @@ const markJobCompleteByClient = async (req, res, io) => {
         if (updateError) throw updateError;
 
         // UPDATED: Update payment payout_status to 'pending' when client completes negotiation job
-        const { error: paymentUpdateError } = await supabase
-            .from('payments')
-            .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
-            .eq('negotiation_id', negotiationId)
-            .eq('transcriber_id', negotiation.transcriber_id) // Ensure we target the correct transcriber's payment
-            .eq('payout_status', 'awaiting_completion'); // Only update if it's awaiting completion
+        // This should now correctly target payments that were marked 'pending' upon client payment.
+        if (negotiation.transcriber_id) {
+            const { data: payment, error: paymentFetchError } = await supabase
+                .from('payments')
+                .select('id, payout_status')
+                .eq('negotiation_id', negotiationId)
+                .eq('transcriber_id', negotiation.transcriber_id)
+                .single();
 
-        if (paymentUpdateError) {
-            console.error(`[markJobCompleteByClient] Error updating payment record for negotiation ${negotiationId} to 'pending':`, paymentUpdateError);
-        } else {
-            console.log(`[markJobCompleteByClient] Payment record for negotiation ${negotiationId} updated to 'pending' payout status.`);
+            if (paymentFetchError && paymentFetchError.code !== 'PGRST116') {
+                console.error(`[markJobCompleteByClient] Error fetching payment record for negotiation ${negotiationId}:`, paymentFetchError);
+            }
+
+            // Only update if payment exists and is not already 'paid_out'
+            if (payment && payment.payout_status !== 'paid_out') { 
+                const { error: paymentUpdateError } = await supabase
+                    .from('payments')
+                    .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
+                    .eq('id', payment.id);
+
+                if (paymentUpdateError) {
+                    console.error(`[markJobCompleteByClient] Error updating payment record for negotiation ${negotiationId} to 'pending':`, paymentUpdateError);
+                } else {
+                    console.log(`[markJobCompleteByClient] Payment record for negotiation ${negotiationId} updated to 'pending' payout status.`);
+                }
+            } else if (!payment) {
+                console.warn(`[markJobCompleteByClient] No payment record found for negotiation ${negotiationId} and transcriber ${negotiation.transcriber_id}.`);
+            }
         }
 
 
@@ -1161,6 +1174,102 @@ const markJobCompleteByClient = async (req, res, io) => {
     } catch (error) {
         console.error('Error marking job as complete by client:ᐟ', error);
         res.status(500).json({ error: error.message || 'Failed to mark job as complete due to server error.ᐟ' });
+    }
+};
+
+const markNegotiationJobCompleteByTranscriber = async (req, res, io) => {
+    try {
+        const { negotiationId } = req.params;
+        const transcriberId = req.user.userId;
+        const { transcriberComment } = req.body;
+
+        const { data: negotiation, error: jobError } = await supabase
+            .from('negotiations')
+            .select('client_id, transcriber_id, status')
+            .eq('id', negotiationId)
+            .eq('transcriber_id', transcriberId)
+            .single();
+
+        if (jobError || !negotiation) {
+            console.error(`[markNegotiationJobCompleteByTranscriber] Job fetch error or not found:`, jobError);
+            return res.status(404).json({ error: 'Job not found or not assigned to you.ᐟ' });
+        }
+        if (negotiation.status !== 'hired') {
+            return res.status(400).json({ error: `Job is not currently 'hired'. Current status: ${negotiation.status}.ᐟ` });
+        }
+
+        const { data: updatedNegotiation, error: updateError } = await supabase
+            .from('negotiations')
+            .update({
+                status: 'completed_by_transcriber', // NEW status: Transcriber completed, awaiting client review
+                transcriber_response: transcriberComment, // Using transcriber_response for their final comment
+                completed_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', negotiationId)
+            .select()
+            .single();
+
+        if (updateError) {
+            console.error(`[markNegotiationJobCompleteByTranscriber] Supabase update error for negotiation ${negotiationId}:`, updateError);
+            throw updateError;
+        }
+
+        // UPDATED: The payment payout_status should already be 'pending' from client payment.
+        // This block is now redundant for setting to 'pending', but confirms status.
+        const { data: existingPayment, error: paymentFetchError } = await supabase
+            .from('payments')
+            .select('id, payout_status')
+            .eq('negotiation_id', negotiationId)
+            .eq('transcriber_id', transcriberId)
+            .single();
+
+        if (paymentFetchError && paymentFetchError.code !== 'PGRST116') {
+             console.error(`[markNegotiationJobCompleteByTranscriber] Error fetching payment record for negotiation ${negotiationId}:`, paymentFetchError);
+        }
+
+        if (existingPayment && existingPayment.payout_status !== 'paid_out') {
+            // Ensure status is 'pending' if it's not already 'paid_out'
+            const { error: paymentUpdateError } = await supabase
+                .from('payments')
+                .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
+                .eq('id', existingPayment.id);
+
+            if (paymentUpdateError) {
+                console.error(`[markNegotiationJobCompleteByTranscriber] Error updating payment record for negotiation ${negotiationId} to 'pending':`, paymentUpdateError);
+            } else {
+                console.log(`[markNegotiationJobCompleteByTranscriber] Payment record for negotiation ${negotiationId} updated to 'pending' payout status.`);
+            }
+        } else if (!existingPayment) {
+            console.warn(`[markNegotiationJobCompleteByTranscriber] No existing payment record found for negotiation ${negotiationId} and transcriber ${transcriberId}. A payment record should have been created upon client payment.`);
+        }
+
+
+        await syncAvailabilityStatus(transcriberId, null); // Free up transcriber
+
+        // Emit socket event to the client
+        if (io && updatedNegotiation.client_id) {
+            io.to(updatedNegotiation.client_id).emit('negotiation_completed_by_transcriber', {
+                negotiationId: updatedNegotiation.id,
+                transcriberName: req.user.full_name,
+                message: `Transcriber ${req.user.full_name} has submitted your negotiation job for review!`,
+                newStatus: 'completed_by_transcriber'
+            });
+            io.emit('negotiation_completed_transcriber_side', { // For other transcribers to update their view if needed
+                negotiationId: updatedNegotiation.id,
+                message: `Negotiation job '${updatedNegotiation.id.substring(0, 8)}...' submitted by transcriber.`,
+                newStatus: 'completed_by_transcriber'
+            });
+        }
+
+        res.status(200).json({
+            message: 'Negotiation job submitted successfully for client review.ᐟ',
+            negotiation: updatedNegotiation
+        });
+
+    } catch (error) {
+        console.error(`[markNegotiationJobCompleteByTranscriber] UNCAUGHT EXCEPTION for negotiation ${negotiationId}:`, error);
+        res.status(500).json({ error: 'Server error completing negotiation job: ' + error.message });
     }
 };
 
@@ -1456,7 +1565,9 @@ const verifyNegotiationPayment = async (req, res, io) => {
         }
         
         const transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd);
-        
+        // Calculate payout_week_end_date based on transaction_date
+        const payoutWeekEndDate = getNextFriday(new Date(transaction.paid_at)); // Use transaction.paid_at
+
         const paymentData = {
             related_job_type: 'negotiation',
             client_id: metadataClientId,
@@ -1469,7 +1580,8 @@ const verifyNegotiationPayment = async (req, res, io) => {
             paystack_status: paymentMethod === 'paystack' ? transaction.status : null,
             korapay_status: paymentMethod === 'korapay' ? transaction.status : null,
             transaction_date: new Date(transaction.paid_at).toISOString(),
-            payout_status: 'awaiting_completion',
+            payout_status: 'pending', 
+            payout_week_end_date: payoutWeekEndDate, // ADDED: payout_week_end_date
             currency_paid_by_client: metadataCurrencyPaidFromMeta,
             exchange_rate_used: metadataExchangeRateFromMeta
         };
