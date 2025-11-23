@@ -914,6 +914,24 @@ const initializeDirectUploadPayment = async (req, res, io) => {
             //     korapayCustomer.phone = mobileNumber;
             // }
 
+            // UPDATED: Conditionally build metadata object
+            const metadata = {
+                related_job_id: finalJobId,
+                related_job_type: 'direct_upload',
+                client_id: clientId,
+                // Keep metadata key as 'agreed_price_usd' for KoraPay API compatibility
+                // The value is the quote amount, but the key name is used for consistency with previous integrations
+                agreed_price_usd: quoteAmountUsd, // UPDATED: Use quoteAmountUsd
+                currency_paid: 'KES',
+                exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                amount_paid_kes: amountKes
+            };
+
+            // Conditionally add transcriber_id if it's not null
+            if (transcriberId) {
+                metadata.transcriber_id = transcriberId;
+            }
+            
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
                 reference: reference,
@@ -922,19 +940,7 @@ const initializeDirectUploadPayment = async (req, res, io) => {
                 customer: korapayCustomer,
                 notification_url: KORAPAY_WEBHOOK_URL,
                 // REMOVED: channels: ['card', 'mobile_money'], to match trainingController.js
-                metadata: {
-                    related_job_id: finalJobId,
-                    related_job_type: 'direct_upload',
-                    client_id: clientId,
-                    // UPDATED: Ensure transcriberId is explicitly handled for null
-                    transcriber_id: transcriberId || '', // Send empty string if null
-                    // Keep metadata key as 'agreed_price_usd' for KoraPay API compatibility
-                    // The value is the quote amount, but the key name is used for consistency with previous integrations
-                    agreed_price_usd: quoteAmountUsd, // UPDATED: Use quoteAmountUsd
-                    currency_paid: 'KES',
-                    exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
-                    amount_paid_kes: amountKes
-                }
+                metadata: metadata // UPDATED: Use conditionally built metadata
             };
             
             res.status(200).json({
@@ -1020,7 +1026,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
                 related_job_id: relatedJobId,
                 related_job_type: 'direct_upload',
                 client_id: req.user.userId,
-                transcriber_id: transaction.metadata?.transcriber_id || null,
+                transcriber_id: transaction.metadata?.transcriber_id || null, // Allow null here as it's from KoraPay response
                 agreed_price_usd: actualAmountPaidUsd,
                 currency_paid: metadataCurrencyPaid,
                 exchange_rate_usd_to_kes: metadataExchangeRate,
