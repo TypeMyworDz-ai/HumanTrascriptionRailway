@@ -1,8 +1,8 @@
 const axios = require('axios');
-const supabase = require('..//database');
-const { syncAvailabilityStatus } = require('..//controllers/transcriberController'); 
-const emailService = require('..//emailService');
-const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
+const supabase = require('../database');
+const { syncAvailabilityStatus } = require('../controllers/transcriberController'); 
+const emailService = require('../emailService');
+const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
 const http = require('http');
 const https = require('https');
 
@@ -16,8 +16,8 @@ const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
 
-const getNextFriday = () => {
-    const today = new Date();
+const getNextFriday = (currentDate = new Date()) => {
+    const today = new Date(currentDate);
     const dayOfWeek = today.getDay();
     const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
     const nextFriday = new Date(today);
@@ -526,5 +526,6 @@ module.exports = {
     getClientPaymentHistory,
     getAllPaymentHistoryForAdmin,
     getTranscriberUpcomingPayoutsForAdmin,
-    markPaymentAsPaidOut
+    markPaymentAsPaidOut,
+    getNextFriday // EXPORTED: getNextFriday
 };
