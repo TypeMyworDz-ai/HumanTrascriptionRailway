@@ -2,7 +2,7 @@ const supabase = require('..//database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { syncAvailabilityStatus } = require('./transcriberController'); // Keep for syncAvailabilityStatus
+const { syncAvailabilityStatus } = require('./transcriberController');
 const emailService = require('..//emailService');
 const util = require('util');
 const { getAudioDurationInSeconds } = require('get-audio-duration');
@@ -19,7 +19,7 @@ const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
 const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY;
 const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1';
-const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook'; // UPDATED: Removed REACT_APP_ prefix
+const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook';
 
 
 const httpAgent = new http.Agent({ family: 4 });
@@ -612,7 +612,7 @@ const completeDirectUploadJob = async (req, res, io) => {
         }
 
         if (existingPayment) {
-            // UPDATED: Set payout_status to 'pending' when transcriber completes the job
+            // Set payout_status to 'pending' when transcriber completes the job
             const { error: paymentUpdateError } = await supabase
                 .from('payments')
                 .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
@@ -823,7 +823,7 @@ const initializeDirectUploadPayment = async (req, res, io) => {
     try {
         let jobDetails;
         let transcriberId;
-        let quoteAmountUsd; // UPDATED: Renamed from agreedPriceUsd
+        let quoteAmountUsd; // Renamed from agreedPriceUsd
         let jobStatus;
 
         const { data, error } = await supabase
@@ -838,16 +838,16 @@ const initializeDirectUploadPayment = async (req, res, io) => {
         }
         jobDetails = data;
         transcriberId = data.transcriber_id;
-        quoteAmountUsd = data.quote_amount; // UPDATED: Assigned from data.quote_amount
+        quoteAmountUsd = data.quote_amount; // Assigned from data.quote_amount
         jobStatus = data.status;
         if (jobStatus !== 'pending_review' && jobStatus !== 'transcriber_assigned') {
             console.error(`[initializeDirectUploadPayment] Direct upload job ${finalJobId} status is ${jobStatus}, not 'pending_review' or 'transcriber_assigned'.`);
             return res.status(400).json({ error: `Payment can only be initiated for direct upload jobs awaiting review or with assigned transcriber. Current status: ${jobStatus}` });
         }
 
-        if (Math.round(parsedAmountUsd * 100) !== Math.round(quoteAmountUsd * 100)) { // UPDATED: Used quoteAmountUsd
-            console.error('[initializeDirectUploadPayment] Payment amount mismatch. Provided USD:', parsedAmountUsd, 'Expected Quote Amount (USD):', quoteAmountUsd); // UPDATED: Console log
-            return res.status(400).json({ error: 'Payment amount does not match the agreed quote amount.ᐟ' }); // UPDATED: Error message
+        if (Math.round(parsedAmountUsd * 100) !== Math.round(quoteAmountUsd * 100)) { // Used quoteAmountUsd
+            console.error('[initializeDirectUploadPayment] Payment amount mismatch. Provided USD:', parsedAmountUsd, 'Expected Quote Amount (USD):', quoteAmountUsd); // Console log
+            return res.status(400).json({ error: 'Payment amount does not match the agreed quote amount.ᐟ' }); // Error message
         }
 
         if (paymentMethod === 'paystack') {
@@ -867,10 +867,8 @@ const initializeDirectUploadPayment = async (req, res, io) => {
                         related_job_id: finalJobId,
                         related_job_type: 'direct_upload',
                         client_id: clientId,
-                        // UPDATED: Ensure transcriberId is explicitly handled for null
                         transcriber_id: transcriberId || '', // Send empty string if null
-                        // For Paystack, we can keep 'agreed_price_usd' as it's a generic metadata field
-                        agreed_price_usd: quoteAmountUsd, // UPDATED: Use quoteAmountUsd
+                        agreed_price_usd: quoteAmountUsd, // Use quoteAmountUsd
                         currency_paid: 'KES',
                         exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
                         amount_paid_kes: amountKes
@@ -909,24 +907,21 @@ const initializeDirectUploadPayment = async (req, res, io) => {
                 name: fullName || req.user.full_name || 'Customer',
                 email: finalClientEmail,
             };
-            // REMOVED: Conditionally add mobileNumber to KoraPay customer object
-            // if (mobileNumber) {
-            //     korapayCustomer.phone = mobileNumber;
-            // }
+            // The mobileNumber is not sent in the customer object to KoraPay's API,
+            // as it caused an error 'customer.phone is not allowed'.
 
-            // UPDATED: Conditionally build metadata object
+            // Conditionally build metadata object to adhere to KoraPay's 5-key limit
             const metadata = {
                 related_job_id: finalJobId,
                 related_job_type: 'direct_upload',
                 client_id: clientId,
-                // Keep metadata key as 'agreed_price_usd' for KoraPay API compatibility
-                // The value is the quote amount, but the key name is used for consistency with previous integrations
-                agreed_price_usd: quoteAmountUsd, // UPDATED: Use quoteAmountUsd
+                agreed_price_usd: quoteAmountUsd,
                 currency_paid: 'KES',
-                amount_paid_kes: amountKes
+                // Removed: amount_paid_kes as it's redundant with agreed_price_usd & currency_paid
+                // Removed: exchange_rate_usd_to_kes as it's not allowed
             };
 
-            // Conditionally add transcriber_id if it's not null
+            // Conditionally add transcriber_id if it's not null to stay within 5 keys
             if (transcriberId) {
                 metadata.transcriber_id = transcriberId;
             }
@@ -938,8 +933,7 @@ const initializeDirectUploadPayment = async (req, res, io) => {
                 currency: 'KES',
                 customer: korapayCustomer,
                 notification_url: KORAPAY_WEBHOOK_URL,
-                // REMOVED: channels: ['card', 'mobile_money'], to match trainingController.js
-                metadata: metadata // UPDATED: Use conditionally built metadata
+                metadata: metadata
             };
             
             res.status(200).json({
@@ -955,7 +949,7 @@ const initializeDirectUploadPayment = async (req, res, io) => {
 };
 
 const verifyDirectUploadPayment = async (req, res, io) => {
-    // UPDATED: Extract relatedJobId from req.params as per frontend URL structure
+    // Extract relatedJobId from req.params as per frontend URL structure
     const { reference, jobId: relatedJobId } = req.params; 
     const { paymentMethod = 'paystack' } = req.query;
 
@@ -1031,7 +1025,6 @@ const verifyDirectUploadPayment = async (req, res, io) => {
                 exchange_rate_usd_to_kes: metadataExchangeRate,
                 amount_paid_kes: amountPaidKes
             };
-            // UPDATED: Safely parse transaction.paid_at to handle potential 'Invalid time value'
             transaction.paid_at = transaction.createdAt ? new Date(transaction.createdAt).toISOString() : new Date().toISOString(); 
         }
 
@@ -1055,7 +1048,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
         }
 
         if (Math.round(actualAmountPaidUsd * 100) !== Math.round(metadataAgreedPrice * 100)) {
-            console.error('[verifyDirectUploadPayment] Payment verification amount mismatch. Transaction amount (USD):ᐟ', actualAmountPaidUsd, 'Expected Quote Amount (USD):', metadataAgreedPrice); // UPDATED: Console log
+            console.error('[verifyDirectUploadPayment] Payment verification amount mismatch. Transaction amount (USD):ᐟ', actualAmountPaidUsd, 'Expected Quote Amount (USD):', metadataAgreedPrice); // Console log
             return res.status(400).json({ error: 'Invalid transaction metadata (amount mismatch). Payment charged a different amount than expected.ᐟ' });
         }
         
@@ -1159,7 +1152,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
     }
 };
 
-// NEW: Function to handle direct upload file downloads for transcribers AND clients
+// Function to handle direct upload file downloads for transcribers AND clients
 const downloadDirectUploadFile = async (req, res) => {
     const { jobId, fileName } = req.params;
     const userId = req.user.userId;
@@ -1173,7 +1166,7 @@ const downloadDirectUploadFile = async (req, res) => {
         // Fetch job details to verify status and ownership (if applicable)
         const { data: job, error: jobError } = await supabase
             .from('direct_upload_jobs')
-            .select('id, status, file_name, instruction_files, transcriber_id, client_id') // Added client_id
+            .select('id, status, file_name, instruction_files, transcriber_id, client_id')
             .eq('id', jobId)
             .single();
 
@@ -1191,12 +1184,12 @@ const downloadDirectUploadFile = async (req, res) => {
         }
 
         const isAssignedTranscriber = job.transcriber_id === userId;
-        const isClient = job.client_id === userId; // NEW: Check if the user is the client
+        const isClient = job.client_id === userId;
 
         // Authorization logic:
         if (userType === 'admin') {
             console.log(`[downloadDirectUploadFile] Admin ${userId} downloading file ${fileName} for job ${jobId}.`);
-        } else if (userType === 'client' && isClient) { // NEW: Allow client to download their own files
+        } else if (userType === 'client' && isClient) {
             console.log(`[downloadDirectUploadFile] Client ${userId} downloading file ${fileName} for their job ${jobId}.`);
         } else if (userType === 'transcriber' && job.status === 'available_for_transcriber') {
             // Allow any active transcriber to download for preview
@@ -1227,7 +1220,7 @@ const downloadDirectUploadFile = async (req, res) => {
     }
 };
 
-// NEW: Function to delete a direct upload job by Admin
+// Function to delete a direct upload job by Admin
 const deleteDirectUploadJob = async (req, res, io) => { // Added io parameter for consistency, though not used here
     const { jobId } = req.params;
     const userId = req.user.userId; // Admin ID
@@ -1309,7 +1302,7 @@ const deleteDirectUploadJob = async (req, res, io) => { // Added io parameter fo
 
     } catch (error) {
         console.error(`[deleteDirectUploadJob] UNCAUGHT EXCEPTION for job ${jobId}:`, error);
-        res.status(500).json({ error: error.message || 'Server error deleting direct upload job.ᐟ' });
+        res.status(500).json({ error: 'Server error deleting direct upload job.ᐟ' });
     }
 };
 
