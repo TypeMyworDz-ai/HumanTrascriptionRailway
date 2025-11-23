@@ -923,7 +923,6 @@ const initializeDirectUploadPayment = async (req, res, io) => {
                 // The value is the quote amount, but the key name is used for consistency with previous integrations
                 agreed_price_usd: quoteAmountUsd, // UPDATED: Use quoteAmountUsd
                 currency_paid: 'KES',
-                exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
                 amount_paid_kes: amountKes
             };
 
