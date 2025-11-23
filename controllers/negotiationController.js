@@ -19,11 +19,11 @@ const http = require('http');
 const https = require('https');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
-const CLIENT_URL = process.env.CLIENT_URL || 'http:--localhost:3000';
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
 const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY;
-const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https:--api-sandbox.korapay.com-v1';
-const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http:--localhost:5000-api-payment-korapay-webhook';
+const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1';
+const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook';
 
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
@@ -512,12 +512,28 @@ const getTranscriberNegotiations = async (req, res) => {
       });
     }
 
-    const negotiationsWithClients = negotiations.map(negotiation => {
+    // UPDATED: Fetch transcriber_earning from the payments table for each negotiation
+    const negotiationsWithEarnings = await Promise.all(negotiations.map(async (negotiation) => {
+        const { data: payment, error: paymentError } = await supabase
+            .from('payments')
+            .select('transcriber_earning')
+            .eq('negotiation_id', negotiation.id)
+            .eq('transcriber_id', transcriberId)
+            .single();
+
+        if (paymentError && paymentError.code !== 'PGRST116') { // PGRST116 means no rows found
+            console.error(`[getTranscriberNegotiations] Error fetching payment for negotiation ${negotiation.id}:`, paymentError);
+        }
+
+        const transcriberEarning = payment?.transcriber_earning || 0;
+        console.log(`[getTranscriberNegotiations] Negotiation ${negotiation.id}: agreed_price_usd=${negotiation.agreed_price_usd}, transcriber_earning=${transcriberEarning}`);
+
         const { client, transcriber, ...rest } = negotiation;
 
         return {
             ...rest,
             jobType: 'negotiation', // Explicitly set jobType
+            transcriber_earning: transcriberEarning, // ADDED: Transcriber's actual earning
             client_info: client ? {
                 id: client.id,
                 full_name: client.full_name,
@@ -547,12 +563,12 @@ const getTranscriberNegotiations = async (req, res) => {
                 paypal_email: transcriber.transcriber_paypal_email,
             } : null
         };
-    });
+    }));
 
-    console.log('[getTranscriberNegotiations] Formatted negotiations sent to frontend:ᐟ', negotiationsWithClients.map(n => ({ id: n.id, clientRating: n.client_info.client_average_rating, clientJobs: n.client_info.client_completed_jobs, dueDate: n.due_date, status: n.status })));
+    console.log('[getTranscriberNegotiations] Formatted negotiations sent to frontend:ᐟ', negotiationsWithEarnings.map(n => ({ id: n.id, clientRating: n.client_info.client_average_rating, clientJobs: n.client_info.client_completed_jobs, dueDate: n.due_date, status: n.status, earning: n.transcriber_earning })));
     res.json({
       message: 'Transcriber negotiations retrieved successfully',
-      negotiations: negotiationsWithClients
+      negotiations: negotiationsWithEarnings
     });
 
   } catch (error) {

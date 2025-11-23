@@ -15,10 +15,10 @@ const http = require('http');
 const https = require('https');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
-const CLIENT_URL = process.env.CLIENT_URL || 'http:--localhost:3000';
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
 const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY;
-const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https:--api-sandbox.korapay.com-v1';
+const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1';
 const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook'; // UPDATED: Removed REACT_APP_ prefix
 
 
@@ -414,8 +414,10 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
 
 const getAllDirectUploadJobsForTranscriber = async (req, res) => {
     const transcriberId = req.user.userId;
+    console.log(`[getAllDirectUploadJobsForTranscriber] Fetching all direct upload jobs for transcriber: ${transcriberId}`);
 
     try {
+        // Fetch direct upload jobs assigned to this transcriber
         const { data: jobs, error } = await supabase
             .from('direct_upload_jobs')
             .select(`
@@ -450,9 +452,31 @@ const getAllDirectUploadJobsForTranscriber = async (req, res) => {
             throw error;
         }
 
+        // UPDATED: Fetch transcriber_earning for each direct upload job from the payments table
+        const jobsWithEarnings = await Promise.all(jobs.map(async (job) => {
+            const { data: payment, error: paymentError } = await supabase
+                .from('payments')
+                .select('transcriber_earning')
+                .eq('direct_upload_job_id', job.id)
+                .eq('transcriber_id', transcriberId)
+                .single();
+
+            if (paymentError && paymentError.code !== 'PGRST116') { // PGRST116 means no rows found
+                console.error(`[getAllDirectUploadJobsForTranscriber] Error fetching payment for job ${job.id}:`, paymentError);
+            }
+
+            const transcriberEarning = payment?.transcriber_earning || 0;
+            console.log(`[getAllDirectUploadJobsForTranscriber] Job ${job.id}: quote_amount=${job.quote_amount}, transcriber_earning=${transcriberEarning}`);
+
+            return {
+                ...job,
+                transcriber_earning: transcriberEarning // Add transcriber_earning to the job object
+            };
+        }));
+
         res.status(200).json({
             message: 'Transcriber direct upload jobs retrieved successfully.',
-            jobs: jobs
+            jobs: jobsWithEarnings // Send jobs with earnings
         });
 
     } catch (error) {
@@ -530,12 +554,12 @@ const takeDirectUploadJob = async (req, res, io) => {
         }
 
         res.status(200).json({
-            message: 'Job successfully taken. It is now in progress.&amp;#x27;',
+            message: 'Job successfully taken. It is now in progress.ᐟ',
             job: updatedJob
         });
 
     } catch (error) {
-        console.error('Error taking direct upload job:&amp;#x27;', error);
+        console.error('Error taking direct upload job:ᐟ', error);
         res.status(500).json({ error: 'Server error taking direct upload job.ᐟ' });
     }
 };
@@ -862,7 +886,7 @@ const initializeDirectUploadPayment = async (req, res, io) => {
             );
 
             if (!paystackResponse.data.status) {
-                console.error('[initializeDirectUploadPayment] Paystack initialization failed:', paystackResponse.data.message);
+                console.error('[initializeDirectUploadPayment] Paystack initialization failed:ᐟ', paystackResponse.data.message);
                 return res.status(500).json({ error: paystackResponse.data.message || 'Failed to initialize payment with Paystack.ᐟ' });
             }
 
@@ -1189,7 +1213,6 @@ const downloadDirectUploadFile = async (req, res) => {
             console.error(`[downloadDirectUploadFile] File not found on disk: ${filePath}`);
             return res.status(404).json({ error: 'File not found on server.ᐟ' });
         }
-
     } catch (error) {
         console.error(`[downloadDirectUploadFile] UNCAUGHT EXCEPTION for job ${jobId}, file ${fileName}:`, error);
         res.status(500).json({ error: 'Server error during file download.ᐟ' });

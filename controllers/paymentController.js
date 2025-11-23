@@ -7,11 +7,11 @@ const http = require('http');
 const https = require('https');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
-const CLIENT_URL = process.env.CLIENT_URL || 'http:--localhost:3000';
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 const KORAPAY_SECRET_KEY = process.env.KORAPAY_SECRET_KEY;
 const KORAPAY_PUBLIC_KEY = process.env.KORAPAY_PUBLIC_KEY;
-const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https:--api-sandbox.korapay.com-v1';
-const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http:--localhost:5000-api-payment-korapay-webhook';
+const KORAPAY_BASE_URL = process.env.KORAPAY_BASE_URL || 'https://api-sandbox.korapay.com/v1';
+const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost:5000/api/payment/korapay-webhook';
 
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
@@ -29,6 +29,7 @@ const getNextFriday = () => {
 
 const getTranscriberPaymentHistory = async (req, res) => {
     const transcriberId = req.user.userId;
+    console.log(`[getTranscriberPaymentHistory] Fetching payments for transcriber: ${transcriberId}`);
 
     try {
         const { data: payments, error } = await supabase
@@ -77,11 +78,12 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 )
             `)
             .eq('transcriber_id', transcriberId)
-            .or('payout_status.eq.pending,payout_status.eq.awaiting_completion,payout_status.eq.paid_out') 
+            // UPDATED: Filter only for 'pending' (upcoming) or 'paid_out' (earned)
+            .or('payout_status.eq.pending,payout_status.eq.paid_out') 
             .order('transaction_date', { ascending: false });
 
         if (error) {
-            console.error('Error fetching transcriber payment history:', error);
+            console.error('[getTranscriberPaymentHistory] Error fetching transcriber payment history:', error);
             return res.status(500).json({ error: error.message });
         }
 
@@ -122,6 +124,14 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 completedOn = payment.transaction_date; 
             }
 
+            // Log details for debugging
+            console.log(`[getTranscriberPaymentHistory] Processing payment ${payment.id}:`);
+            console.log(`  - related_job_type: ${payment.related_job_type}`);
+            console.log(`  - payout_status: ${payment.payout_status}`);
+            console.log(`  - job_status (derived): ${jobStatus}`);
+            console.log(`  - transcriber_earning: ${payment.transcriber_earning}`);
+
+
             return {
                 ...payment,
                 jobRequirements: jobRequirements,
@@ -140,16 +150,16 @@ const getTranscriberPaymentHistory = async (req, res) => {
         let totalEarned = 0;
 
         paymentsWithJobDetails.forEach(payout => {
-            const isEligibleForUpcomingPayout =
-                (payout.payout_status === 'pending' || payout.payout_status === 'awaiting_completion') &&
-                (payout.job_status === 'completed' || payout.job_status === 'client_completed');
-
-            if (isEligibleForUpcomingPayout) {
+            // UPDATED: Simplify summation based on payout_status alone
+            if (payout.payout_status === 'pending') {
                 totalUpcomingPayouts += payout.transcriber_earning;
             } else if (payout.payout_status === 'paid_out') {
                 totalEarned += payout.transcriber_earning;
             }
         });
+
+        console.log(`[getTranscriberPaymentHistory] Calculated Total Earned: ${totalEarned}`);
+        console.log(`[getTranscriberPaymentHistory] Calculated Upcoming Payout: ${totalUpcomingPayouts}`);
 
         res.status(200).json({
             message: `Payment history summary for transcriber ${transcriberId} retrieved successfully.`,
@@ -160,7 +170,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Server error fetching transcriber payment history: ', error);
+        console.error('[getTranscriberPaymentHistory] Server error fetching transcriber payment history: ', error);
         res.status(500).json({ error: 'Server error fetching payment history.ᐟ' });
     }
 };
