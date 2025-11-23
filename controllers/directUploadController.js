@@ -717,7 +717,7 @@ const clientCompleteDirectUploadJob = async (req, res, io) => {
         */
 
         if (io && updatedJob.transcriber_id) {
-            io.to(updatedJob.transcriber_id).emit('direct_job_client_completed', {
+            io.to(updatedJob.client_id).emit('direct_job_client_completed', {
                 jobId: updatedJob.id,
                 clientId: clientId,
                 message: `Client has marked your direct upload job '${updatedJob.id.substring(0, 8)}...' as complete and provided feedback!`,
@@ -823,7 +823,7 @@ const initializeDirectUploadPayment = async (req, res, io) => {
     try {
         let jobDetails;
         let transcriberId;
-        let agreedPriceUsd;
+        let quoteAmountUsd; // UPDATED: Renamed from agreedPriceUsd
         let jobStatus;
 
         const { data, error } = await supabase
@@ -838,16 +838,16 @@ const initializeDirectUploadPayment = async (req, res, io) => {
         }
         jobDetails = data;
         transcriberId = data.transcriber_id;
-        agreedPriceUsd = data.quote_amount;
+        quoteAmountUsd = data.quote_amount; // UPDATED: Assigned from data.quote_amount
         jobStatus = data.status;
         if (jobStatus !== 'pending_review' && jobStatus !== 'transcriber_assigned') {
             console.error(`[initializeDirectUploadPayment] Direct upload job ${finalJobId} status is ${jobStatus}, not 'pending_review' or 'transcriber_assigned'.`);
             return res.status(400).json({ error: `Payment can only be initiated for direct upload jobs awaiting review or with assigned transcriber. Current status: ${jobStatus}` });
         }
 
-        if (Math.round(parsedAmountUsd * 100) !== Math.round(agreedPriceUsd * 100)) {
-            console.error('[initializeDirectUploadPayment] Payment amount mismatch. Provided USD:', parsedAmountUsd, 'Agreed USD:', agreedPriceUsd);
-            return res.status(400).json({ error: 'Payment amount does not match the agreed job price.ᐟ' });
+        if (Math.round(parsedAmountUsd * 100) !== Math.round(quoteAmountUsd * 100)) { // UPDATED: Used quoteAmountUsd
+            console.error('[initializeDirectUploadPayment] Payment amount mismatch. Provided USD:', parsedAmountUsd, 'Expected Quote Amount (USD):', quoteAmountUsd); // UPDATED: Console log
+            return res.status(400).json({ error: 'Payment amount does not match the agreed quote amount.ᐟ' }); // UPDATED: Error message
         }
 
         if (paymentMethod === 'paystack') {
@@ -867,8 +867,10 @@ const initializeDirectUploadPayment = async (req, res, io) => {
                         related_job_id: finalJobId,
                         related_job_type: 'direct_upload',
                         client_id: clientId,
-                        transcriber_id: transcriberId,
-                        agreed_price_usd: agreedPriceUsd,
+                        // UPDATED: Ensure transcriberId is explicitly handled for null
+                        transcriber_id: transcriberId || '', // Send empty string if null
+                        // For Paystack, we can keep 'agreed_price_usd' as it's a generic metadata field
+                        agreed_price_usd: quoteAmountUsd, // UPDATED: Use quoteAmountUsd
                         currency_paid: 'KES',
                         exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
                         amount_paid_kes: amountKes
@@ -924,8 +926,11 @@ const initializeDirectUploadPayment = async (req, res, io) => {
                     related_job_id: finalJobId,
                     related_job_type: 'direct_upload',
                     client_id: clientId,
-                    transcriber_id: transcriberId,
-                    agreed_price_usd: agreedPriceUsd,
+                    // UPDATED: Ensure transcriberId is explicitly handled for null
+                    transcriber_id: transcriberId || '', // Send empty string if null
+                    // Keep metadata key as 'agreed_price_usd' for KoraPay API compatibility
+                    // The value is the quote amount, but the key name is used for consistency with previous integrations
+                    agreed_price_usd: quoteAmountUsd, // UPDATED: Use quoteAmountUsd
                     currency_paid: 'KES',
                     exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
                     amount_paid_kes: amountKes
@@ -1031,7 +1036,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
             related_job_type: metadataRelatedJobType,
             client_id: metadataClientId,
             transcriber_id: metadataTranscriberIdRaw,
-            agreed_price_usd: metadataAgreedPrice,
+            agreed_price_usd: metadataAgreedPrice, // This metadata field is what KoraPay sent back
             currency_paid: metadataCurrencyPaidFromMeta,
             exchange_rate_usd_to_kes: metadataExchangeRateFromMeta,
             amount_paid_kes: metadataAmountPaidKes
@@ -1045,7 +1050,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
         }
 
         if (Math.round(actualAmountPaidUsd * 100) !== Math.round(metadataAgreedPrice * 100)) {
-            console.error('Payment verification amount mismatch. Transaction amount (USD):ᐟ', actualAmountPaidUsd, 'Expected USD:', metadataAgreedPrice);
+            console.error('[verifyDirectUploadPayment] Payment verification amount mismatch. Transaction amount (USD):ᐟ', actualAmountPaidUsd, 'Expected Quote Amount (USD):', metadataAgreedPrice); // UPDATED: Console log
             return res.status(400).json({ error: 'Invalid transaction metadata (amount mismatch). Payment charged a different amount than expected.ᐟ' });
         }
         
