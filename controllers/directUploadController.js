@@ -28,8 +28,8 @@ const httpsAgent = new https.Agent({ family: 4 });
 
 const unlinkAsync = util.promisify(fs.unlink);
 
-// Import getNextFriday from paymentController
-const { getNextFriday } = require('..//controllers/paymentController'); 
+// Import getNextFriday from paymentController - CORRECTED PATH
+const { getNextFriday } = require('../controllers/paymentController'); 
 
 const getQuoteAndDeadline = async (audioLengthMinutes, audioQualityParam, deadlineTypeParam, specialRequirements) => {
     const jobParams = {
@@ -114,7 +114,7 @@ const handleQuoteCalculationRequest = async (req, res, io) => {
     try {
         const audioVideoFilePath = audioVideoFile.path;
         if (!fs.existsSync(audioVideoFilePath)) {
-            console.error(`!!! CRITICAL WARNING !!! Audio/Video file NOT found at expected path after upload: ${audioVideoFilePath}`);
+            console.error(`!!! CRITICAL WARNING !!! Audio/Video file NOT found at expected path: ${audioVideoFilePath}`);
             await cleanupFiles();
             return res.status(500).json({ error: 'Uploaded audio/video file not found on server after processing.ᐟ' });
         }
