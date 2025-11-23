@@ -648,9 +648,19 @@ module.exports = (io) => {
     initializeDirectUploadPayment(req, res, io);
   });
 
+  // EXISTING: GET route for verification (e.g., Paystack)
   router.get('/direct-uploads/:jobId/payment/verify/:reference', authMiddleware, (req, res, next) => {
     verifyDirectUploadPayment(req, res, io);
   });
+
+  // NEW: POST route for KoraPay direct upload verification
+  router.post('/direct-uploads/payment/verify-korapay', authMiddleware, (req, res, next) => {
+      if (req.user.userType !== 'client') {
+          return res.status(403).json({ error: 'Access denied. Only clients can verify direct upload payments.' });
+      }
+      verifyDirectUploadPayment(req, res, io);
+  });
+
 
   // Training Payment Routes
   router.post('/training/payment/initialize', authMiddleware, (req, res, next) => {
