@@ -215,8 +215,6 @@ const createDirectUploadJob = async (req, res, io) => {
             console.error(`!!! CRITICAL WARNING !!! Audio/Video file NOT found at expected path: ${audioVideoFilePath}`);
             await cleanupFiles();
             return res.status(500).json({ error: 'Uploaded audio/video file not found on server after processing.ᐟ' });
-        } else {
-            console.log(`Confirmed Audio/Video file exists at: ${audioVideoFilePath}`);
         }
 
         const audioLengthSeconds = await getAudioDurationInSeconds(audioVideoFilePath);
@@ -909,10 +907,10 @@ const initializeDirectUploadPayment = async (req, res, io) => {
                 name: fullName || req.user.full_name || 'Customer',
                 email: finalClientEmail,
             };
-            // Re-introducing: Conditionally add mobileNumber to KoraPay customer object
-            if (mobileNumber) {
-                korapayCustomer.phone = mobileNumber;
-            }
+            // REMOVED: Conditionally add mobileNumber to KoraPay customer object
+            // if (mobileNumber) {
+            //     korapayCustomer.phone = mobileNumber;
+            // }
 
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
@@ -1195,7 +1193,7 @@ const downloadDirectUploadFile = async (req, res) => {
             console.log(`[downloadDirectUploadFile] Transcriber ${userId} downloading file ${fileName} for available job ${jobId}.`);
         } else if (userType === 'transcriber' && (job.status === 'taken' || job.status === 'in_progress' || job.status === 'completed') && isAssignedTranscriber) {
             // Allow assigned transcriber to download for active/completed jobs
-            console.log(`[downloadDirectUploadFile] Assigned Transcriber ${userId} downloading file ${fileName} for job ${jobId} (status: ${job.status}).`);
+            console.log(`[downloadBatchFile] Assigned Transcriber ${userId} downloading file ${fileName} for job ${jobId} (status: ${job.status}).`);
         } else {
             return res.status(403).json({ error: `Access denied. You are not authorized to download this file for job status '${job.status}'.ᐟ` });
         }
@@ -1239,7 +1237,7 @@ const deleteDirectUploadJob = async (req, res, io) => { // Added io parameter fo
 
         if (fetchError || !job) {
             console.error(`Error finding direct upload job ${jobId} for deletion:`, fetchError);
-            return res.status(404).json({ error: 'Direct upload job not found.ᐟ' });
+            return res.status(404).json({ error: 'Job not found.ᐟ' });
         }
 
         // If a transcriber was assigned, free them up
