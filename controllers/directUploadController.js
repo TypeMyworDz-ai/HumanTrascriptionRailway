@@ -1,16 +1,16 @@
-const supabase = require('..//database');
+const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { syncAvailabilityStatus } = require('./transcriberController');
-const emailService = require('..//emailService');
+const emailService = require('../emailService');
 const util = require('util');
 const { getAudioDurationInSeconds } = require('get-audio-duration');
-const { calculatePricePerMinute } = require('..//utils/pricingCalculator');
+const { calculatePricePerMinute } = require('../utils/pricingCalculator');
 const { updateAverageRating } = require('./ratingController');
 
 const axios = require('axios');
-const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES, calculateTranscriberEarning } = require('..//utils/paymentUtils');
+const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES, calculateTranscriberEarning } = require('../utils/paymentUtils');
 const http = require('http');
 const https = require('https');
 
@@ -949,9 +949,18 @@ const initializeDirectUploadPayment = async (req, res, io) => {
 };
 
 const verifyDirectUploadPayment = async (req, res, io) => {
-    // Extract relatedJobId from req.params as per frontend URL structure
-    const { reference, jobId: relatedJobId } = req.params; 
-    const { paymentMethod = 'paystack' } = req.query;
+    let reference, relatedJobId, paymentMethod;
+
+    // Determine how to extract parameters based on request method and payment method
+    if (req.method === 'POST' && req.body.paymentMethod === 'korapay') {
+        // For KoraPay POST verification (from PaymentCallback.js)
+        ({ reference, relatedJobId } = req.body);
+        paymentMethod = 'korapay';
+    } else {
+        // For Paystack GET verification and other cases (e.g., direct KoraPay GET if ever used)
+        ({ reference, jobId: relatedJobId } = req.params); 
+        ({ paymentMethod = 'paystack' } = req.query);
+    }
 
     if (!reference || !relatedJobId) {
         return res.status(400).json({ error: 'Payment reference and direct upload job ID are required for verification.ᐟ' });
