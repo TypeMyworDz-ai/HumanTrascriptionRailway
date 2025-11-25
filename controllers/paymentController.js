@@ -204,6 +204,8 @@ const getClientPaymentHistory = async (req, res) => {
                 direct_upload_job:direct_upload_jobs!direct_upload_job_id(id, status, client_instructions, agreed_deadline_hours, quote_amount)
             `)
             .eq('client_id', clientId)
+            // Filter to include only successfully completed payments by the client
+            .or('paystack_status.eq.success,korapay_status.eq.success') 
             .order('transaction_date', { ascending: false });
 
         if (error) {

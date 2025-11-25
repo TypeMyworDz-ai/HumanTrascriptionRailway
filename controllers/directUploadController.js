@@ -1,16 +1,16 @@
-const supabase = require('..//database');
+const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { syncAvailabilityStatus } = require('.//transcriberController');
-const emailService = require('..//emailService');
+const { syncAvailabilityStatus } = require('./transcriberController');
+const emailService = require('../emailService');
 const util = require('util');
 const { getAudioDurationInSeconds } = require('get-audio-duration');
-const { calculatePricePerMinute } = require('..//utils/pricingCalculator');
-const { updateAverageRating } = require('.//ratingController');
+const { calculatePricePerMinute } = require('../utils/pricingCalculator');
+const { updateAverageRating } = require('./ratingController');
 
 const axios = require('axios');
-const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES, calculateTranscriberEarning } = require('..//utils/paymentUtils');
+const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES, calculateTranscriberEarning } = require('../utils/paymentUtils');
 const http = require('http');
 const https = require('https');
 
@@ -29,7 +29,7 @@ const httpsAgent = new https.Agent({ family: 4 });
 const unlinkAsync = util.promisify(fs.unlink);
 
 // Import getNextFriday from paymentController - CORRECTED PATH
-const { getNextFriday } = require('..//controllers/paymentController'); 
+const { getNextFriday } = require('../controllers/paymentController'); 
 
 const getQuoteAndDeadline = async (audioLengthMinutes, audioQualityParam, deadlineTypeParam, specialRequirements) => {
     const jobParams = {
@@ -862,7 +862,7 @@ const clientCompleteDirectUploadJob = async (req, res, io) => {
                 if (updateCountError) {
                     console.error(`[clientCompleteDirectUploadJob] Error updating transcriber_completed_jobs for ${updatedJob.transcriber_id}:`, updateCountError);
                 } else {
-                    console.log(`[clientCompleteDirectUploadJob] Incremented transcriber_completed_jobs for ${updatedUser.transcriber_id} to ${newCompletedJobsCount}.`);
+                    console.log(`[clientCompleteDirectUploadJob] Incremented transcriber_completed_jobs for ${updatedJob.transcriber_id} to ${newCompletedJobsCount}.`);
                 }
             }
         }
@@ -1097,7 +1097,7 @@ const initializeDirectUploadPayment = async (req, res, io) => {
             }
             
             const korapayData = {
-                key: KORAPAY_PUBLIC_KEY,
+                key: KORAPAY_PUBLIC_PUBLIC_KEY,
                 reference: reference,
                 amount: amountInKes,
                 currency: 'KES',
@@ -1207,6 +1207,32 @@ const verifyDirectUploadPayment = async (req, res, io) => {
             transaction.paid_at = transaction.createdAt ? new Date(transaction.createdAt).toISOString() : new Date().toISOString(); 
         }
 
+        // --- START OF NEW DUPLICATE PAYMENT CHECK ---
+        const { data: existingPayment, error: existingPaymentError } = await supabase
+            .from('payments')
+            .select('id, paystack_status, korapay_status')
+            .or(`paystack_reference.eq.${reference},korapay_reference.eq.${reference}`)
+            .eq('direct_upload_job_id', relatedJobId)
+            .single();
+
+        if (existingPaymentError && existingPaymentError.code !== 'PGRST116') { // PGRST116 means no rows found
+            console.error(`[verifyDirectUploadPayment] Error checking for existing payment record for reference ${reference}:`, existingPaymentError);
+            return res.status(500).json({ error: 'Server error during payment verification.ᐟ' });
+        }
+
+        if (existingPayment) {
+            // If an existing payment is found and its status indicates it's already processed, return early.
+            // This prevents duplicate entries for the same successful transaction.
+            const isPaystackSuccess = existingPayment.paystack_status === 'success';
+            const isKorapaySuccess = existingPayment.korapay_status === 'success';
+
+            if (isPaystackSuccess || isKorapaySuccess) {
+                console.warn(`[verifyDirectUploadPayment] Payment with reference ${reference} for job ${relatedJobId} already processed. Preventing duplicate entry.`);
+                return res.status(200).json({ message: 'Payment already processed and recorded.ᐟ', transaction: transaction });
+            }
+        }
+        // --- END OF NEW DUPLICATE PAYMENT CHECK ---
+
 
         const {
             related_job_id: metadataRelatedJobId,
@@ -1246,6 +1272,8 @@ const verifyDirectUploadPayment = async (req, res, io) => {
             return res.status(404).json({ error: 'Direct upload job not found for verification.ᐟ' });
         }
         currentJob = data;
+        // The previous job status check is still valid for preventing re-processing the job logic,
+        // but the new payment reference check above handles duplicate payment *record creation*.
         if (currentJob.status === 'available_for_transcriber' || currentJob.status === 'taken' || currentJob.status === 'in_progress' || currentJob.status === 'completed' || currentJob.status === 'client_completed') {
              return res.status(200).json({ message: 'Payment already processed and direct upload job already active.ᐟ' });
         }
@@ -1275,7 +1303,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
         paymentData.direct_upload_job_id = relatedJobId;
         paymentData.negotiation_id = null;
 
-        console.log('[verifyDirectUploadPayment] Final paymentData before insertion:&#39;', paymentData); 
+        console.log('[verifyDirectUploadPayment] Final paymentData before insertion:', paymentData); 
 
         const { data: paymentRecord, error: paymentError } = await supabase
             .from('payments')
