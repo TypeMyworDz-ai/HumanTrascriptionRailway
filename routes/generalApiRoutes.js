@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('../database');
-const authMiddleware = require('../middleware/authMiddleware');
+const supabase = require('..//database');
+const authMiddleware = require('..//middleware/authMiddleware');
 const fs = require('fs');
 const path = require('path');
 
@@ -24,7 +24,7 @@ const {
   markNegotiationJobCompleteByTranscriber,
   initializeNegotiationPayment, // NEW: Import negotiation-specific payment initiation
   verifyNegotiationPayment // NEW: Import negotiation-specific payment verification
-} = require('../controllers/negotiationController');
+} = require('..//controllers/negotiationController');
 
 // Import admin controller functions
 const {
@@ -46,7 +46,7 @@ const {
     getJobByIdForAdmin,
     getAllDisputesForAdmin,
     getAdminUserId
-} = require('../controllers/adminController');
+} = require('..//controllers/adminController');
 
 // Import chat controller functions
 const {
@@ -60,7 +60,7 @@ const {
     sendJobMessage,
     uploadChatAttachment,
     handleChatAttachmentUpload
-} = require('../controllers/chatController');
+} = require('..//controllers/chatController');
 
 // MODIFIED: Import ONLY general payment history functions from paymentController.js
 const {
@@ -69,19 +69,19 @@ const {
     getAllPaymentHistoryForAdmin,
     getTranscriberUpcomingPayoutsForAdmin,
     markPaymentAsPaidOut
-} = require('../controllers/paymentController');
+} = require('..//controllers/paymentController');
 
 // NEW: Import rating controller functions
 const {
     rateUserByAdmin,
     getTranscriberRatings,
     getClientRating
-} = require('../controllers/ratingController');
+} = require('..//controllers/ratingController');
 
 // UPDATED: Import setTranscriberOnlineStatus from transcriberController
-const { updateTranscriberProfile, syncAvailabilityStatus, setTranscriberOnlineStatus } = require('../controllers/transcriberController');
+const { updateTranscriberProfile, syncAvailabilityStatus, setTranscriberOnlineStatus } = require('..//controllers/transcriberController');
 // NEW: Import updateClientProfile from authController
-const { updateClientProfile } = require('../controllers/authController');
+const { updateClientProfile } = require('..//controllers/authController');
 
 // NEW: Import functions from directUploadController.js
 const {
@@ -91,7 +91,8 @@ const {
     takeDirectUploadJob,
     completeDirectUploadJob,
     clientCompleteDirectUploadJob,
-    getAllDirectUploadJobsForTranscriber,
+    getTranscriberDirectUploadJobsHistory, // RENAMED: from getAllDirectUploadJobsForTranscriber
+    getTranscriberActiveDirectUploadJob, // NEW: Import the new function
     getAllDirectUploadJobsForAdmin,
     handleQuoteCalculationRequest,
     initializeDirectUploadPayment, // NEW: Import direct upload-specific payment initiation
@@ -100,7 +101,7 @@ const {
     deleteDirectUploadJob, // NEW: Import the delete direct upload job function
     cancelDirectUploadJob, // NEW: Import the cancel direct upload job function
     getDirectUploadJobDetails // NEW: Import the new function
-} = require('../controllers/directUploadController');
+} = require('..//controllers/directUploadController');
 
 // NEW: Import training controller functions
 const {
@@ -116,7 +117,7 @@ const {
     completeTraining,
     initializeTrainingPayment, // NEW: Import training-specific payment initiation
     verifyKorapayTrainingPayment // NEW: Import training-specific KoraPay verification
-} = require('../controllers/trainingController');
+} = require('..//controllers/trainingController');
 
 // Import multer for direct use in this file for error handling
 const multer = require('multer');
@@ -566,7 +567,7 @@ module.exports = (io) => {
 
   router.post('/user/chat/send-message', authMiddleware, (req, res, next) => {
       if (req.user.userType === 'admin') {
-          return res.status(403).json({ error: 'Admins should use their dedicated message sending route.&amp;amp;amp;amp;#x27;' });
+          return res.status(403).json({ error: 'Admins should use their dedicated message sending route.&amp;amp;amp;amp;amp;#x27;' });
       }
       sendUserDirectMessage(req, res, io);
   });
@@ -808,109 +809,21 @@ module.exports = (io) => {
 
   // NEW: Transcriber endpoint to get all direct upload jobs assigned to them (status 'taken')
   // This is used by TranscriberJobs.js to display active direct upload jobs
-  router.get('/transcriber/direct-jobs', authMiddleware, async (req, res) => {
-    const transcriberId = req.user.userId;
+  // THIS ROUTE IS NOW FOR THE SINGLE ACTIVE JOB
+  router.get('/transcriber/direct-jobs/active', authMiddleware, (req, res, next) => { // NEW ROUTE
     if (req.user.userType !== 'transcriber') {
-      return res.status(403).json({ error: 'Access denied. Only transcribers can view their assigned direct upload jobs.' });
+      return res.status(403).json({ error: 'Access denied. Only transcribers can view their active direct upload jobs.' });
     }
-    try {
-      console.log(`[GET /transcriber/direct-jobs] Fetching active direct upload jobs for transcriberId: ${transcriberId}`);
-      const { data: jobs, error } = await supabase
-        .from('direct_upload_jobs')
-        .select(`
-          id,
-          file_name,
-          file_url,
-          file_size_mb,
-          audio_length_minutes,
-          client_instructions,
-          instruction_files,
-          quote_amount,
-          price_per_minute_usd,
-          currency,
-          agreed_deadline_hours,
-          status,
-          audio_quality_param,
-          deadline_type_param,
-          special_requirements,
-          created_at,
-          taken_at,
-          transcriber_id,
-          client_id,
-          client:users!client_id(full_name, email, client_average_rating, client_completed_jobs)
-        `)
-        .eq('transcriber_id', transcriberId)
-        .eq('status', 'taken')
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error(`[GET /transcriber/direct-jobs] Supabase error:`, error);
-        throw error;
-      }
-      console.log(`[GET /transcriber/direct-jobs] Found ${jobs.length} jobs for transcriberId ${transcriberId}. Jobs:`, jobs.map(j => ({ id: j.id, status: j.status, transcriber_id: j.transcriber_id, taken_at: j.taken_at })));
-
-      res.status(200).json({
-        message: 'Assigned direct upload jobs retrieved successfully.',
-        jobs: jobs
-      });
-
-    } catch (fetchError) {
-      console.error('[GET /transcriber/direct-jobs] Error fetching assigned direct upload jobs for transcriber:', fetchError);
-      res.status(500).json({ error: 'Server error fetching assigned direct upload jobs.' });
-    }
+    getTranscriberActiveDirectUploadJob(req, res, io); // Call the new function
   });
 
   // NEW: Transcriber endpoint to get ALL direct upload jobs assigned to them (for Completed Jobs view)
-  router.get('/transcriber/direct-jobs/all', authMiddleware, async (req, res) => {
-    const transcriberId = req.user.userId;
+  // This route now calls the history function
+  router.get('/transcriber/direct-jobs/history', authMiddleware, (req, res, next) => { // RENAMED ROUTE
     if (req.user.userType !== 'transcriber') {
-        return res.status(403).json({ error: 'Access denied. Only transcribers can view their direct upload jobs.' });
+        return res.status(403).json({ error: 'Access denied. Only transcribers can view their direct upload jobs history.' });
     }
-    try {
-        console.log(`[GET /transcriber/direct-jobs/all] Fetching all direct upload jobs for transcriberId: ${transcriberId}`);
-        const { data: jobs, error } = await supabase
-            .from('direct_upload_jobs')
-            .select(`
-                id,
-                file_name,
-                file_url,
-                file_size_mb,
-                audio_length_minutes,
-                client_instructions,
-                instruction_files,
-                quote_amount,
-                price_per_minute_usd,
-                currency,
-                agreed_deadline_hours,
-                status,
-                audio_quality_param,
-                deadline_type_param,
-                special_requirements,
-                created_at,
-                taken_at,
-                transcriber_id,
-                client_id,
-                client:users!client_id(id, full_name, email, client_average_rating, client_completed_jobs),
-                transcriber:users!transcriber_id(id, full_name, email, transcriber_average_rating, transcriber_completed_jobs)
-            `)
-            .eq('transcriber_id', transcriberId)
-            .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error(`[GET /transcriber/direct-jobs/all] Supabase error:`, error);
-        throw error;
-      }
-      console.log(`[GET /transcriber/direct-jobs/all] Found ${jobs.length} jobs for transcriberId ${transcriberId}.`);
-
-      res.status(200).json({
-        message: 'All assigned direct upload jobs retrieved successfully.',
-        jobs: jobs
-      });
-
-    } catch (fetchError) {
-        console.error('[GET /transcriber/direct-jobs/all] Error fetching all assigned direct upload jobs for transcriber:', fetchError);
-        res.status(500).json({ error: 'Server error fetching all assigned direct upload jobs.' });
-    }
+    getTranscriberDirectUploadJobsHistory(req, res, io); // Call the renamed function
   });
 
 

@@ -418,12 +418,12 @@ const getAvailableDirectUploadJobsForTranscriber = async (req, res) => {
     }
 };
 
-const getAllDirectUploadJobsForTranscriber = async (req, res) => {
+// Renamed from getAllDirectUploadJobsForTranscriber
+const getTranscriberDirectUploadJobsHistory = async (req, res) => {
     const transcriberId = req.user.userId;
-    console.log(`[getAllDirectUploadJobsForTranscriber] Fetching all direct upload jobs for transcriber: ${transcriberId}`);
+    console.log(`[getTranscriberDirectUploadJobsHistory] Fetching all direct upload jobs history for transcriber: ${transcriberId}`);
 
     try {
-        // Fetch direct upload jobs assigned to this transcriber
         const { data: jobs, error } = await supabase
             .from('direct_upload_jobs')
             .select(`
@@ -450,17 +450,16 @@ const getAllDirectUploadJobsForTranscriber = async (req, res) => {
                 client_feedback_rating, 
                 client:users!client_id(full_name, email)
             `)
-            .eq('transcriber_id', transcriberId) 
+            .eq('transcriber_id', transcriberId)
             .order('created_at', { ascending: false });
 
         if (error) {
-            console.error(`[getAllDirectUploadJobsForTranscriber] Supabase error fetching direct upload jobs for transcriber ${transcriberId}:`, error);
+            console.error(`[getTranscriberDirectUploadJobsHistory] Supabase error fetching direct upload jobs history for transcriber ${transcriberId}:`, error);
             throw error;
         }
 
         const jobsWithEarnings = await Promise.all(jobs.map(async (job) => {
-            // NEW LOGS: Inspect the raw job data from Supabase
-            console.log(`[getAllDirectUploadJobsForTranscriber] RAW JOB DATA for ${job.id}:`, {
+            console.log(`[getTranscriberDirectUploadJobsHistory] RAW JOB DATA for ${job.id}:`, {
                 completed_at: job.completed_at,
                 client_completed_at: job.client_completed_at,
                 transcriber_comment: job.transcriber_comment,
@@ -472,42 +471,122 @@ const getAllDirectUploadJobsForTranscriber = async (req, res) => {
 
             const { data: payment, error: paymentError } = await supabase
                 .from('payments')
-                .select('transcriber_earning, payout_status') // Select payout_status to check if it's awaiting_completion
+                .select('transcriber_earning, payout_status')
                 .eq('direct_upload_job_id', job.id)
-                .eq('transcriber_id', transcriberId) // Ensure we fetch payment for THIS transcriber
+                .eq('transcriber_id', transcriberId)
                 .single();
 
-            if (paymentError && paymentError.code !== 'PGRST116') { // PGRST116 means no rows found
-                console.error(`[getAllDirectUploadJobsForTranscriber] Error fetching payment for job ${job.id}:`, paymentError);
+            if (paymentError && paymentError.code !== 'PGRST116') {
+                console.error(`[getTranscriberDirectUploadJobsHistory] Error fetching payment for job ${job.id}:`, paymentError);
             }
 
-            // NEW LOGS: Inspect the raw payment data
-            console.log(`[getAllDirectUploadJobsForTranscriber] RAW PAYMENT DATA for job ${job.id}:`, {
+            console.log(`[getTranscriberDirectUploadJobsHistory] RAW PAYMENT DATA for job ${job.id}:`, {
                 payment: payment,
                 paymentError: paymentError
             });
 
-            // Only assign transcriber_earning if payout_status is 'pending' or 'paid_out'
             const transcriberEarning = (payment?.payout_status === 'pending' || payment?.payout_status === 'paid_out')
                 ? payment?.transcriber_earning || 0
                 : 0; 
             
-            console.log(`[getAllDirectUploadJobsForTranscriber] For job ${job.id}, calculated transcriberEarning: ${transcriberEarning} (payout_status: ${payment?.payout_status})`); 
+            console.log(`[getTranscriberDirectUploadJobsHistory] For job ${job.id}, calculated transcriberEarning: ${transcriberEarning} (payout_status: ${payment?.payout_status})`); 
 
             return {
                 ...job,
-                transcriber_earning: transcriberEarning // Add transcriber_earning to the job object
+                transcriber_earning: transcriberEarning
             };
         }));
 
         res.status(200).json({
-            message: 'Transcriber direct upload jobs retrieved successfully.',
-            jobs: jobsWithEarnings // Send jobs with earnings
+            message: 'Transcriber direct upload jobs history retrieved successfully.',
+            jobs: jobsWithEarnings
         });
 
     } catch (error) {
-        console.error('[getAllDirectUploadJobsForTranscriber] Error fetching transcriber direct upload jobs:', error);
-        res.status(500).json({ error: 'Server error fetching transcriber direct upload jobs.ᐟ' });
+        console.error('[getTranscriberDirectUploadJobsHistory] Error fetching transcriber direct upload jobs history:', error);
+        res.status(500).json({ error: 'Server error fetching transcriber direct upload jobs history.ᐟ' });
+    }
+};
+
+// NEW: Function to get a single active direct upload job for a transcriber
+const getTranscriberActiveDirectUploadJob = async (req, res) => {
+    const transcriberId = req.user.userId;
+    console.log(`[getTranscriberActiveDirectUploadJob] Fetching active direct upload job for transcriber: ${transcriberId}`);
+
+    try {
+        const { data: job, error } = await supabase
+            .from('direct_upload_jobs')
+            .select(`
+                id,
+                file_name,
+                file_url,
+                file_size_mb,
+                audio_length_minutes,
+                client_instructions,
+                instruction_files,
+                quote_amount,
+                price_per_minute_usd,
+                currency,
+                agreed_deadline_hours,
+                status,
+                audio_quality_param,
+                deadline_type_param,
+                special_requirements,
+                created_at,
+                completed_at, 
+                client_completed_at, 
+                transcriber_comment, 
+                client_feedback_comment, 
+                client_feedback_rating, 
+                client:users!client_id(full_name, email)
+            `)
+            .eq('transcriber_id', transcriberId) 
+            .or('status.eq.taken,status.eq.in_progress') // Filter for in-progress jobs only
+            .limit(1) // Limit to only one job
+            .order('created_at', { ascending: false })
+            .single(); // Use .single() to get a single object or null
+
+        if (error && error.code !== 'PGRST116') { // PGRST116 means no rows found, which is expected if no active job
+            console.error(`[getTranscriberActiveDirectUploadJob] Supabase error fetching active direct upload job for transcriber ${transcriberId}:`, error);
+            throw error;
+        }
+
+        if (!job) {
+            console.log(`[getTranscriberActiveDirectUploadJob] No active direct upload job found for transcriber ${transcriberId}.`);
+            return res.status(200).json({
+                message: 'No active direct upload job found.',
+                job: null
+            });
+        }
+
+        const { data: payment, error: paymentError } = await supabase
+            .from('payments')
+            .select('transcriber_earning, payout_status')
+            .eq('direct_upload_job_id', job.id)
+            .eq('transcriber_id', transcriberId)
+            .single();
+
+        if (paymentError && paymentError.code !== 'PGRST116') {
+            console.error(`[getTranscriberActiveDirectUploadJob] Error fetching payment for job ${job.id}:`, paymentError);
+        }
+
+        const transcriberEarning = (payment?.payout_status === 'pending' || payment?.payout_status === 'paid_out')
+            ? payment?.transcriber_earning || 0
+            : 0; 
+        
+        const jobWithEarnings = {
+            ...job,
+            transcriber_earning: transcriberEarning
+        };
+
+        res.status(200).json({
+            message: 'Active direct upload job retrieved successfully.',
+            job: jobWithEarnings
+        });
+
+    } catch (error) {
+        console.error('[getTranscriberActiveDirectUploadJob] Error fetching active direct upload job:', error);
+        res.status(500).json({ error: 'Server error fetching active direct upload job.ᐟ' });
     }
 };
 
@@ -977,7 +1056,6 @@ const initializeDirectUploadPayment = async (req, res, io) => {
     }
 
     if (paymentMethod === 'paystack' && !PAYSTACK_SECRET_KEY) {
-        console.error('[initializeDirectUploadPayment] PAYSTACK_SECRET_KEY is not set.ᐟ');
         return res.status(500).json({ error: 'Paystack service not configured.ᐟ' });
     }
     if (paymentMethod === 'korapay' && !KORAPAY_SECRET_KEY) {
@@ -1585,7 +1663,8 @@ module.exports = {
     cancelDirectUploadJob, // NEW: Export the cancelDirectUploadJob function
     completeDirectUploadJob,
     clientCompleteDirectUploadJob,
-    getAllDirectUploadJobsForTranscriber, 
+    getTranscriberDirectUploadJobsHistory, // Renamed and Exported
+    getTranscriberActiveDirectUploadJob, // NEW: Export the new function
     getAllDirectUploadJobsForAdmin,
     initializeDirectUploadPayment,
     verifyDirectUploadPayment,
