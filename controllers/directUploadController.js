@@ -1097,7 +1097,7 @@ const initializeDirectUploadPayment = async (req, res, io) => {
             }
             
             const korapayData = {
-                key: KORAPAY_PUBLIC_PUBLIC_KEY,
+                key: KORAPAY_PUBLIC_KEY, // Corrected from KORAPAY_PUBLIC_PUBLIC_KEY
                 reference: reference,
                 amount: amountInKes,
                 currency: 'KES',
