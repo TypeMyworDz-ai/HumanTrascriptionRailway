@@ -11,8 +11,7 @@ const authRoutes = require('./routes/authRoutes');
 const audioRoutes = require('./routes/audioRoutes');
 const transcriberRoutes = require('./routes/transcriberRoutes');
 const generalApiRoutes = require('./routes/generalApiRoutes');
-// FIX: setOnlineStatus is now in authController, not transcriberController
-const { setOnlineStatus } = require('./controllers/transcriberController'); // Keep this for now, but ensure it's updated in transcriberController to only update 'users'
+// REMOVED: const { setOnlineStatus } = require('./controllers/transcriberController'); // This import is no longer needed here
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -46,20 +45,20 @@ io.on('connection', (socket) => {
     socket.join(userId);
     console.log(`Socket ${socket.id} automatically joined room for user ${userId} from handshake query.`);
 
-    // FIX: Fetch user_type and then call setOnlineStatus (which now updates only 'users' table)
-    supabase.from('users').select('user_type').eq('id', userId).single()
-      .then(({ data, error }) => {
-        if (error) {
-          console.error(`Error fetching user type for socket connection ${userId}:`, error);
-          return;
-        }
-        // Only set online status if it's a transcriber
-        if (data && data.user_type === 'transcriber') {
-          setOnlineStatus(userId, true) // setOnlineStatus is now expected to update only 'users' table
-            .then(() => console.log(`Transcriber ${userId} set to online on socket connect.`))
-            .catch(err => console.error(`Failed to set transcriber ${userId} online on connect:`, err));
-        }
-      });
+    // REMOVED: Direct call to setOnlineStatus. This is now handled by AuthContext on login.
+    // The previous logic here was:
+    // supabase.from('users').select('user_type').eq('id', userId).single()
+    //   .then(({ data, error }) => {
+    //     if (error) {
+    //       console.error(`Error fetching user type for socket connection ${userId}:`, error);
+    //       return;
+    //     }
+    //     if (data && data.user_type === 'transcriber') {
+    //       setOnlineStatus(userId, true)
+    //         .then(() => console.log(`Transcriber ${userId} set to online on socket connect.`))
+    //         .catch(err => console.error(`Failed to set transcriber ${userId} online on connect:`, err));
+    //     }
+    //   });
 
     // This 'joinUserRoom' listener is now redundant for initial connect, but kept for explicit calls if any
     socket.on('joinUserRoom', (roomUserId) => {
@@ -76,22 +75,22 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', (reason) => {
     console.log(`User disconnected from WebSocket: ${socket.id} (Reason: ${reason})`);
-    if (socket.userId) {
-      // FIX: Fetch user_type and then call setOnlineStatus (which now updates only 'users' table)
-      supabase.from('users').select('user_type').eq('id', socket.userId).single()
-        .then(({ data, error }) => {
-          if (error) {
-            console.error(`Error fetching user type for socket disconnect ${socket.userId}:`, error);
-            return;
-          }
-          // Only set offline status if it's a transcriber
-          if (data && data.user_type === 'transcriber') {
-            setOnlineStatus(socket.userId, false) // setOnlineStatus is now expected to update only 'users' table
-              .then(() => console.log(`Transcriber ${socket.userId} set to offline on socket disconnect.`))
-              .catch(err => console.error(`Failed to set transcriber ${socket.userId} offline on disconnect:`, err));
-          }
-        });
-    }
+    // REMOVED: Direct call to setOnlineStatus. This is now handled by AuthContext on logout.
+    // The previous logic here was:
+    // if (socket.userId) {
+    //   supabase.from('users').select('user_type').eq('id', socket.userId).single()
+    //     .then(({ data, error }) => {
+    //       if (error) {
+    //         console.error(`Error fetching user type for socket disconnect ${socket.userId}:`, error);
+    //         return;
+    //       }
+    //       if (data && data.user_type === 'transcriber') {
+    //         setOnlineStatus(socket.userId, false)
+    //           .then(() => console.log(`Transcriber ${socket.userId} set to offline on socket disconnect.`))
+    //           .catch(err => console.error(`Failed to set transcriber ${socket.userId} offline on disconnect:`, err));
+    //       }
+    //     });
+    // }
   });
 
   socket.on('error', (error) => {
@@ -185,7 +184,7 @@ app.get('/', (req, res) => {
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   console.log('Socket.IO is listening for connections.');
-  console.log('Allowed CORS Origins:', ALLOWED_ORIGINS);
+  console.log('Allowed CORS Origins: ', ALLOWED_ORIGINS);
 });
 
 module.exports = { io, server, app };

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('..//database');
-const authMiddleware = require('..//middleware/authMiddleware');
+const supabase = require('../database');
+const authMiddleware = require('../middleware/authMiddleware');
 const fs = require('fs');
 const path = require('path');
 
@@ -24,7 +24,7 @@ const {
   markNegotiationJobCompleteByTranscriber,
   initializeNegotiationPayment, // NEW: Import negotiation-specific payment initiation
   verifyNegotiationPayment // NEW: Import negotiation-specific payment verification
-} = require('..//controllers/negotiationController');
+} = require('../controllers/negotiationController');
 
 // Import admin controller functions
 const {
@@ -46,7 +46,7 @@ const {
     getJobByIdForAdmin,
     getAllDisputesForAdmin,
     getAdminUserId
-} = require('..//controllers/adminController');
+} = require('../controllers/adminController');
 
 // Import chat controller functions
 const {
@@ -60,7 +60,7 @@ const {
     sendJobMessage,
     uploadChatAttachment,
     handleChatAttachmentUpload
-} = require('..//controllers/chatController');
+} = require('../controllers/chatController');
 
 // MODIFIED: Import ONLY general payment history functions from paymentController.js
 const {
@@ -69,19 +69,19 @@ const {
     getAllPaymentHistoryForAdmin,
     getTranscriberUpcomingPayoutsForAdmin,
     markPaymentAsPaidOut
-} = require('..//controllers/paymentController');
+} = require('../controllers/paymentController');
 
 // NEW: Import rating controller functions
 const {
     rateUserByAdmin,
     getTranscriberRatings,
     getClientRating
-} = require('..//controllers/ratingController');
+} = require('../controllers/ratingController');
 
-// NEW: Import updateTranscriberProfile and syncAvailabilityStatus from transcriberController
-const { updateTranscriberProfile, syncAvailabilityStatus } = require('..//controllers/transcriberController');
+// UPDATED: Import setTranscriberOnlineStatus from transcriberController
+const { updateTranscriberProfile, syncAvailabilityStatus, setTranscriberOnlineStatus } = require('../controllers/transcriberController');
 // NEW: Import updateClientProfile from authController
-const { updateClientProfile } = require('..//controllers/authController');
+const { updateClientProfile } = require('../controllers/authController');
 
 // NEW: Import functions from directUploadController.js
 const {
@@ -96,8 +96,9 @@ const {
     initializeDirectUploadPayment, // NEW: Import direct upload-specific payment initiation
     verifyDirectUploadPayment, // NEW: Import direct upload-specific payment verification
     downloadDirectUploadFile, // NEW: Import the download function
-    deleteDirectUploadJob // NEW: Import the delete direct upload job function
-} = require('..//controllers/directUploadController');
+    deleteDirectUploadJob, // NEW: Import the delete direct upload job function
+    cancelDirectUploadJob // NEW: Import the cancel direct upload job function
+} = require('../controllers/directUploadController');
 
 // NEW: Import training controller functions
 const {
@@ -113,7 +114,7 @@ const {
     completeTraining,
     initializeTrainingPayment, // NEW: Import training-specific payment initiation
     verifyKorapayTrainingPayment // NEW: Import training-specific KoraPay verification
-} = require('..//controllers/trainingController');
+} = require('../controllers/trainingController');
 
 // Import multer for direct use in this file for error handling
 const multer = require('multer');
@@ -563,7 +564,7 @@ module.exports = (io) => {
 
   router.post('/user/chat/send-message', authMiddleware, (req, res, next) => {
       if (req.user.userType === 'admin') {
-          return res.status(403).json({ error: 'Admins should use their dedicated message sending route.&amp;#x27;' });
+          return res.status(403).json({ error: 'Admins should use their dedicated message sending route.&amp;amp;amp;#x27;' });
       }
       sendUserDirectMessage(req, res, io);
   });
@@ -936,6 +937,14 @@ module.exports = (io) => {
       return res.status(403).json({ error: 'Access denied. Only transcribers can take direct upload jobs.' });
     }
     takeDirectUploadJob(req, res, io);
+  });
+
+  // NEW: Transcriber cancels a direct upload job
+  router.put('/transcriber/direct-jobs/:jobId/cancel', authMiddleware, (req, res, next) => {
+    if (req.user.userType !== 'transcriber') {
+      return res.status(403).json({ error: 'Access denied. Only transcribers can cancel direct upload jobs.' });
+    }
+    cancelDirectUploadJob(req, res, io);
   });
 
   router.put('/transcriber/direct-jobs/:jobId/complete', authMiddleware, (req, res, next) => {

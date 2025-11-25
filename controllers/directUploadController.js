@@ -1,16 +1,16 @@
-const supabase = require('..//database');
+const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { syncAvailabilityStatus } = require('./transcriberController');
-const emailService = require('..//emailService');
+const emailService = require('../emailService');
 const util = require('util');
 const { getAudioDurationInSeconds } = require('get-audio-duration');
-const { calculatePricePerMinute } = require('..//utils/pricingCalculator');
+const { calculatePricePerMinute } = require('../utils/pricingCalculator');
 const { updateAverageRating } = require('./ratingController');
 
 const axios = require('axios');
-const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES, calculateTranscriberEarning } = require('..//utils/paymentUtils');
+const { convertUsdToKes, EXCHANGE_RATE_USD_TO_KES, calculateTranscriberEarning } = require('../utils/paymentUtils');
 const http = require('http');
 const https = require('https');
 
@@ -317,6 +317,11 @@ const getDirectUploadJobsForClient = async (req, res) => {
                 deadline_type_param,
                 special_requirements,
                 created_at,
+                completed_at,
+                client_completed_at,
+                transcriber_comment,
+                client_feedback_comment,
+                client_feedback_rating,
                 transcriber_id,
                 client:users!client_id(id, full_name, email, client_average_rating, client_completed_jobs),
                 transcriber:users!transcriber_id(id, full_name, email, transcriber_average_rating, transcriber_completed_jobs)
@@ -453,28 +458,41 @@ const getAllDirectUploadJobsForTranscriber = async (req, res) => {
             throw error;
         }
 
-        // UPDATED: Fetch transcriber_earning for each direct upload job from the payments table
         const jobsWithEarnings = await Promise.all(jobs.map(async (job) => {
+            // NEW LOGS: Inspect the raw job data from Supabase
+            console.log(`[getAllDirectUploadJobsForTranscriber] RAW JOB DATA for ${job.id}:`, {
+                completed_at: job.completed_at,
+                client_completed_at: job.client_completed_at,
+                transcriber_comment: job.transcriber_comment,
+                client_feedback_comment: job.client_feedback_comment,
+                client_feedback_rating: job.client_feedback_rating,
+                quote_amount: job.quote_amount,
+                status: job.status
+            });
+
             const { data: payment, error: paymentError } = await supabase
                 .from('payments')
                 .select('transcriber_earning, payout_status') // Select payout_status to check if it's awaiting_completion
                 .eq('direct_upload_job_id', job.id)
-                .eq('transcriber_id', transcriberId)
+                .eq('transcriber_id', transcriberId) // Ensure we fetch payment for THIS transcriber
                 .single();
 
             if (paymentError && paymentError.code !== 'PGRST116') { // PGRST116 means no rows found
                 console.error(`[getAllDirectUploadJobsForTranscriber] Error fetching payment for job ${job.id}:`, paymentError);
             }
 
+            // NEW LOGS: Inspect the raw payment data
+            console.log(`[getAllDirectUploadJobsForTranscriber] RAW PAYMENT DATA for job ${job.id}:`, {
+                payment: payment,
+                paymentError: paymentError
+            });
+
             // Only assign transcriber_earning if payout_status is 'pending' or 'paid_out'
-            // Otherwise, it means the client has paid, but the transcriber hasn't completed the job yet,
-            // or the payment is still in 'awaiting_completion'
             const transcriberEarning = (payment?.payout_status === 'pending' || payment?.payout_status === 'paid_out')
                 ? payment?.transcriber_earning || 0
                 : 0; 
             
-            console.log(`[getAllDirectUploadJobsForTranscriber] For job ${job.id}, fetched payment:`, payment); 
-            console.log(`[getAllDirectUploadJobsForTranscriber] For job ${job.id}, transcriberEarning: ${transcriberEarning}`); 
+            console.log(`[getAllDirectUploadJobsForTranscriber] For job ${job.id}, calculated transcriberEarning: ${transcriberEarning} (payout_status: ${payment?.payout_status})`); 
 
             return {
                 ...job,
@@ -545,6 +563,20 @@ const takeDirectUploadJob = async (req, res, io) => {
             return res.status(409).json({ error: 'Job not found, already taken, or no longer available.ᐟ' });
         }
 
+        // UPDATED: Update the payment record with the transcriber_id
+        const { error: paymentUpdateError } = await supabase
+            .from('payments')
+            .update({ transcriber_id: transcriberId, updated_at: new Date().toISOString() })
+            .eq('direct_upload_job_id', jobId)
+            .is('transcriber_id', null); // Only update if transcriber_id is currently null
+
+        if (paymentUpdateError) {
+            console.error(`[takeDirectUploadJob] Error updating payment record with transcriber_id for job ${jobId}:`, paymentUpdateError);
+            // Do not throw, as job taking should still succeed
+        } else {
+            console.log(`[takeDirectUploadJob] Payment record for job ${jobId} updated with transcriber_id: ${transcriberId}`);
+        }
+
         // Wrap non-critical operations in try-catch to prevent a full server error
         try {
             await syncAvailabilityStatus(transcriberId, updatedJob.id);
@@ -555,12 +587,14 @@ const takeDirectUploadJob = async (req, res, io) => {
 
         if (io) {
             try {
+                // Notify the client that their job has been taken
                 io.to(updatedJob.client_id).emit('direct_job_taken', {
                     jobId: updatedJob.id,
                     transcriberName: req.user.full_name,
                     message: `Your direct upload job has been taken by ${req.user.full_name}!`,
                     newStatus: 'taken'
                 });
+                // Notify all transcribers that this job is no longer available
                 io.emit('direct_upload_job_taken', {
                     jobId: updatedJob.id,
                     newStatus: 'taken'
@@ -580,6 +614,74 @@ const takeDirectUploadJob = async (req, res, io) => {
     } catch (error) {
         console.error('Error taking direct upload job:ᐟ', error);
         res.status(500).json({ error: 'Server error taking direct upload job.ᐟ' });
+    }
+};
+
+// NEW: Function for transcriber to cancel a direct upload job
+const cancelDirectUploadJob = async (req, res, io) => {
+    const { jobId } = req.params;
+    const transcriberId = req.user.userId;
+
+    try {
+        // Fetch job to verify ownership and status
+        const { data: job, error: jobFetchError } = await supabase
+            .from('direct_upload_jobs')
+            .select('id, client_id, transcriber_id, status')
+            .eq('id', jobId)
+            .eq('transcriber_id', transcriberId)
+            .single();
+
+        if (jobFetchError || !job) {
+            return res.status(404).json({ error: 'Job not found or not assigned to you.ᐟ' });
+        }
+
+        // Only allow cancellation if the job is 'taken' or 'in_progress'
+        if (job.status !== 'taken' && job.status !== 'in_progress') {
+            return res.status(400).json({ error: `Job status is '${job.status}'. Only 'taken' or 'in_progress' jobs can be cancelled.ᐟ` });
+        }
+
+        // Update direct_upload_jobs table
+        const { data: updatedJob, error: jobUpdateError } = await supabase
+            .from('direct_upload_jobs')
+            .update({
+                transcriber_id: null, // Unassign transcriber
+                status: 'available_for_transcriber', // Make it available again
+                taken_at: null, // Clear taken timestamp
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', jobId)
+            .select()
+            .single();
+
+        if (jobUpdateError) throw jobUpdateError;
+
+        // Update transcriber's current_job_id to null
+        await syncAvailabilityStatus(transcriberId, null);
+
+        // Notify client and all transcribers via Socket.IO
+        if (io) {
+            // Notify the client that their job is available again
+            io.to(updatedJob.client_id).emit('direct_job_cancelled', {
+                jobId: updatedJob.id,
+                message: `Your direct upload job ${updatedJob.id.substring(0, 8)}... is now available again as the transcriber cancelled.`,
+                newStatus: 'available_for_transcriber'
+            });
+            // Notify all transcribers that this job is available again
+            io.emit('direct_upload_job_available_again', {
+                jobId: updatedJob.id,
+                newStatus: 'available_for_transcriber'
+            });
+            console.log(`Emitted 'direct_job_cancelled' to client ${updatedJob.client_id} and 'direct_upload_job_available_again' to all transcribers.`);
+        }
+
+        res.status(200).json({
+            message: 'Direct upload job successfully cancelled and made available again.ᐟ',
+            job: updatedJob
+        });
+
+    } catch (error) {
+        console.error('[cancelDirectUploadJob] UNCAUGHT EXCEPTION:', error);
+        res.status(500).json({ error: 'Server error cancelling direct upload job.ᐟ' });
     }
 };
 
@@ -633,9 +735,8 @@ const completeDirectUploadJob = async (req, res, io) => {
         }
 
         if (existingPayment) {
-            // UPDATED: This block is now redundant for setting to 'pending' as verifyDirectUploadPayment
-            // now sets payout_status to 'pending' immediately. However, it's harmless and ensures
-            // status is 'pending' if it was somehow missed or an old record.
+            // This block ensures payout_status is 'pending' once the transcriber completes the job.
+            // This is crucial for the transcriber earnings display.
             const { error: paymentUpdateError } = await supabase
                 .from('payments')
                 .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
@@ -653,12 +754,14 @@ const completeDirectUploadJob = async (req, res, io) => {
         await syncAvailabilityStatus(transcriberId, null);
 
         if (io) {
+            // Notify the client that their job has been completed by the transcriber
             io.to(updatedJob.client_id).emit('direct_job_completed', {
                 jobId: updatedJob.id,
                 transcriberName: req.user.full_name,
                 message: `Your direct upload job '${updatedJob.id.substring(0, 8)}...' has been submitted for client review!`,
                 newStatus: 'completed'
             });
+            // Notify all transcribers (or just the current one) about the job completion
             io.emit('direct_job_completed_transcriber_side', { 
                 jobId: updatedJob.id,
                 message: `Direct upload job '${updatedJob.id.substring(0, 8)}...' submitted. Awaiting client review.`,
@@ -722,25 +825,23 @@ const clientCompleteDirectUploadJob = async (req, res, io) => {
             await updateAverageRating(job.transcriber_id, clientFeedbackRating, 'transcriber');
         }
 
-        // REMOVED: This payment update is no longer needed here, as payout_status is set to 'pending' when transcriber submits.
-        // The payment should already be in 'pending' status if the transcriber completed it.
-        /*
+        // UPDATED: Ensure payment status is 'pending' when client marks as complete
+        // This is crucial for the transcriber earnings display
         const { error: paymentUpdateError } = await supabase
             .from('payments')
             .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
             .eq('direct_upload_job_id', jobId)
-            .eq('transcriber_id', job.transcriber_id) 
-            .eq('payout_status', 'awaiting_completion'); 
+            .eq('transcriber_id', job.transcriber_id) // Ensure we update the correct payment record
+            .or('payout_status.eq.awaiting_completion,payout_status.eq.pending'); // Update if awaiting completion or already pending
 
         if (paymentUpdateError) {
             console.error(`[clientCompleteDirectUploadJob] Error updating payment record for direct upload job ${jobId} to 'pending':`, paymentUpdateError);
         } else {
             console.log(`[clientCompleteDirectUploadJob] Payment record for direct upload job ${jobId} updated to 'pending' payout status.`);
         }
-        */
-
+        
         if (io && updatedJob.transcriber_id) {
-            io.to(updatedJob.client_id).emit('direct_job_client_completed', {
+            io.to(updatedJob.transcriber_id).emit('direct_job_client_completed', { // This should be to transcriber_id
                 jobId: updatedJob.id,
                 clientId: clientId,
                 message: `Client has marked your direct upload job '${updatedJob.id.substring(0, 8)}...' as complete and provided feedback!`,
@@ -750,7 +851,12 @@ const clientCompleteDirectUploadJob = async (req, res, io) => {
                     rating: clientFeedbackRating
                 }
             });
-            console.log(`Emitted 'direct_job_client_completed' to transcriber ${updatedJob.transcriber_id}`);
+            // Emit to client as well to update their view
+            io.to(updatedJob.client_id).emit('direct_job_client_completed_client_side', {
+                jobId: updatedJob.id,
+                newStatus: 'client_completed'
+            });
+            console.log(`Emitted 'direct_job_client_completed' to transcriber ${updatedJob.transcriber_id} and client ${updatedJob.client_id}`);
         }
 
         res.status(200).json({
@@ -1087,7 +1193,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
         let currentJob;
         let updateTable = 'direct_upload_jobs';
         let updateStatusColumn = 'status';
-        let newJobStatus = 'available_for_transcriber';
+        let newJobStatus = 'available_for_transcriber'; // Default status after payment
 
         const { data, error } = await supabase
             .from('direct_upload_jobs')
@@ -1099,7 +1205,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
             return res.status(404).json({ error: 'Direct upload job not found for verification.ᐟ' });
         }
         currentJob = data;
-        if (currentJob.status === 'available_for_transcriber' || currentJob.status === 'taken' || currentJob.status === 'in_progress') {
+        if (currentJob.status === 'available_for_transcriber' || currentJob.status === 'taken' || currentJob.status === 'in_progress' || currentJob.status === 'completed' || currentJob.status === 'client_completed') {
              return res.status(200).json({ message: 'Payment already processed and direct upload job already active.ᐟ' });
         }
         
@@ -1110,7 +1216,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
         const paymentData = {
             related_job_type: 'direct_upload',
             client_id: metadataClientId,
-            transcriber_id: finalTranscriberId,
+            transcriber_id: finalTranscriberId, // This might be null if no transcriber assigned at payment time
             amount: actualAmountPaidUsd,
             transcriber_earning: transcriberPayAmount,
             currency: 'USD',
@@ -1119,7 +1225,7 @@ const verifyDirectUploadPayment = async (req, res, io) => {
             paystack_status: paymentMethod === 'paystack' ? transaction.status : null,
             korapay_status: paymentMethod === 'korapay' ? transaction.status : null,
             transaction_date: new Date(transaction.paid_at).toISOString(),
-            payout_status: 'pending', 
+            payout_status: 'pending', // Set to pending immediately upon client payment
             payout_week_end_date: payoutWeekEndDate, // ADDED: payout_week_end_date
             currency_paid_by_client: metadataCurrencyPaidFromMeta,
             exchange_rate_used: metadataExchangeRateFromMeta
@@ -1350,6 +1456,7 @@ module.exports = {
     getDirectUploadJobsForClient,
     getAvailableDirectUploadJobsForTranscriber,
     takeDirectUploadJob,
+    cancelDirectUploadJob, // NEW: Export the cancelDirectUploadJob function
     completeDirectUploadJob,
     clientCompleteDirectUploadJob,
     getAllDirectUploadJobsForTranscriber, 
@@ -1357,5 +1464,5 @@ module.exports = {
     initializeDirectUploadPayment,
     verifyDirectUploadPayment,
     downloadDirectUploadFile,
-    deleteDirectUploadJob // NEW: Export the deleteDirectUploadJob function
+    deleteDirectUploadJob
 };

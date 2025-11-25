@@ -1,94 +1,130 @@
-const supabase = require('..//database');
+const supabase = require('../database');
 const path = require('path');
 const fs = require('fs');
-const emailService = require('..//emailService');
+const emailService = require('../emailService');
 const { updateAverageRating } = require('./ratingController');
-const { calculateTranscriberEarning } = require('..//utils/paymentUtils');
-const { getNextFriday } = require('..//utils/paymentUtils');
+const { calculateTranscriberEarning } = require('../utils/paymentUtils');
+const { getNextFriday } = require('../controllers/paymentController'); // Corrected path for getNextFriday
 
-// REMOVED: const { syncAvailabilityStatus } = require('./transcriberController'); // This controller already exports it.
-
-const syncAvailabilityStatus = async (userId, currentJobId = null) => {
-    if (!userId) {
-        console.warn('syncAvailabilityStatus: userId is null or undefined. Skipping availability sync.');
+// --- UPDATED: Function to synchronize transcriber's availability status and current job ---
+const syncAvailabilityStatus = async (transcriberId, newJobId = null) => {
+    if (!transcriberId) {
+        console.warn('syncAvailabilityStatus: transcriberId is null or undefined. Skipping availability sync.');
         return;
     }
 
-    const updateData = {
-        current_job_id: currentJobId,
-        updated_at: new Date().toISOString()
-    };
-
     try {
-        const { error: userError } = await supabase
+        const { data: user, error: fetchError } = await supabase
             .from('users')
-            .update(updateData)
-            .eq('id', userId);
-
-        if (userError) {
-            console.error(`Supabase error updating user availability in 'users' table for ${userId}:`, userError);
-            throw userError;
-        }
-        console.log(`User ${userId} availability synced: current_job_id=${currentJobId}`);
-    } catch (error) {
-        console.error(`syncAvailabilityStatus: Uncaught error for user ${userId}:`, error);
-        throw error;
-    }
-};
-
-const setOnlineStatus = async (userId, isOnline) => {
-    console.log(`[setOnlineStatus] Attempting to set user ${userId} is_online to ${isOnline}`);
-    try {
-        const { data: currentUser, error: fetchError } = await supabase
-            .from('users')
-            .select('current_job_id')
-            .eq('id', userId)
-            .eq('user_type', 'transcriber')
+            .select('transcriber_status') // Only need transcriber_status for logic
+            .eq('id', transcriberId)
             .single();
 
-        if (fetchError || !currentUser) {
-            console.error(`[setOnlineStatus] Error fetching current user data for ${userId}:`, fetchError);
+        if (fetchError || !user) {
+            console.error(`[syncAvailabilityStatus] Error fetching user ${transcriberId}:`, fetchError || 'User not found.');
+            return;
         }
 
-        const updateData = {
-            is_online: isOnline,
+        let updateData = {
+            current_job_id: newJobId,
             updated_at: new Date().toISOString()
         };
 
-        if (isOnline && (!currentUser || !currentUser.current_job_id)) {
-            updateData.current_job_id = null;
-            console.log(`[setOnlineStatus] User ${userId} is coming online and has no active job. Setting current_job_id to null.`);
+        // Logic for is_online:
+        // If a new job is assigned (newJobId is NOT null), set is_online to false.
+        // If no new job is assigned (newJobId IS null, meaning job completed or cancelled),
+        // set is_online to true if they are an active transcriber.
+        if (newJobId) {
+            updateData.is_online = false;
+            console.log(`[syncAvailabilityStatus] Transcriber ${transcriberId} is now OFFLINE and assigned to job ${newJobId}.`);
+        } else {
+            // No new job assigned (job completed or cancelled)
+            if (user.transcriber_status === 'active_transcriber') {
+                updateData.is_online = true; // Go online after completing/cancelling a job
+                console.log(`[syncAvailabilityStatus] Transcriber ${transcriberId} is now ONLINE and unassigned from job.`);
+            } else {
+                updateData.is_online = false; // Stay offline if not an active transcriber
+                console.log(`[syncAvailabilityStatus] Transcriber ${transcriberId} is OFFLINE and unassigned from job (not active).`);
+            }
         }
 
-        const { data, error } = await supabase
+        const { error: updateError } = await supabase
             .from('users')
             .update(updateData)
-            .eq('id', userId)
-            .eq('user_type', 'transcriber');
+            .eq('id', transcriberId);
 
-        if (error) {
-            console.error(`[setOnlineStatus] Supabase error setting online status for user ${userId} to ${isOnline}:`, error);
-            throw error;
-        }
-        console.log(`[setOnlineStatus] User ${userId} is_online status successfully set to ${isOnline}. Supabase response data:`, data);
-
-        const { data: verifiedUser, error: verifyError } = await supabase
-            .from('users')
-            .select('current_job_id')
-            .eq('id', userId)
-            .single();
-
-        if (verifyError) {
-            console.error(`[setOnlineStatus] Error verifying current_job_id for user ${userId}:`, verifyError);
-        } else {
-            console.log(`[setOnlineStatus] VERIFICATION: User ${userId} current_job_id after update: ${verifiedUser ? verifiedUser.current_job_id : 'Not found'}`);
+        if (updateError) {
+            console.error(`[syncAvailabilityStatus] Error updating availability for ${transcriberId}:`, updateError);
         }
 
     } catch (error) {
-        console.error('[setOnlineStatus] Uncaught error:', error);
-        throw error;
+        console.error(`[syncAvailabilityStatus] UNCAUGHT EXCEPTION for ${transcriberId}:`, error);
     }
 };
+
+// --- NEW: Function to set is_online status directly (e.g., used on login) ---
+const setTranscriberOnlineStatus = async (transcriberId, isOnline, io = null) => {
+    if (!transcriberId) {
+        console.warn('setTranscriberOnlineStatus: transcriberId is null or undefined. Skipping status update.');
+        return;
+    }
+
+    try {
+        const { data: user, error: fetchError } = await supabase
+            .from('users')
+            .select('transcriber_status, current_job_id')
+            .eq('id', transcriberId)
+            .single();
+
+        if (fetchError || !user) {
+            console.error(`[setTranscriberOnlineStatus] Error fetching user ${transcriberId}:`, fetchError || 'User not found.');
+            return; // Don't throw, just log and exit
+        }
+
+        // Prevent going online if not an active transcriber or already has a job
+        if (isOnline && user.transcriber_status !== 'active_transcriber') {
+            console.warn(`[setTranscriberOnlineStatus] Transcriber ${transcriberId} cannot go online: Not an active transcriber.`);
+            isOnline = false; // Force offline if not active
+        }
+        if (isOnline && user.current_job_id) {
+            console.warn(`[setTranscriberOnlineStatus] Transcriber ${transcriberId} cannot go online: Has active job ${user.current_job_id}.`);
+            isOnline = false; // Force offline if has active job
+        }
+
+
+        const { data: updatedUser, error: updateError } = await supabase
+            .from('users')
+            .update({
+                is_online: isOnline,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', transcriberId)
+            .select('id, is_online, full_name') // Select relevant fields for response
+            .single();
+
+        if (updateError) {
+            console.error(`[setTranscriberOnlineStatus] Error updating online status for ${transcriberId}:`, updateError);
+            return;
+        }
+
+        const statusMessage = updatedUser.is_online ? 'online' : 'offline';
+        console.log(`[setTranscriberOnlineStatus] Transcriber ${updatedUser.full_name} (${updatedUser.id}) is now ${statusMessage}.`);
+
+        if (io) {
+            io.emit('transcriber_status_changed', {
+                userId: updatedUser.id,
+                isOnline: updatedUser.is_online,
+                fullName: updatedUser.full_name
+            });
+        }
+        return updatedUser.is_online; // Return the new status
+    } catch (error) {
+        console.error(`[setTranscriberOnlineStatus] UNCAUGHT EXCEPTION for ${transcriberId}:`, error);
+        return false;
+    }
+};
+
+// --- Original Functions from your provided file ---
 
 const submitTest = async (req, res) => {
   try {
@@ -617,8 +653,6 @@ const completeJob = async (req, res, next, io) => {
     }
 };
 
-// REMOVED: getTranscriberUpcomingPayouts is now in paymentController.js
-
 const updateTranscriberProfile = async (req, res) => {
     const { userId } = req.params;
     const { transcriber_mpesa_number, transcriber_paypal_email, transcriber_status, transcriber_user_level } = req.body;
@@ -669,7 +703,6 @@ module.exports = {
   counterNegotiation,
   completeJob,
   syncAvailabilityStatus,
-  setOnlineStatus,
+  setTranscriberOnlineStatus, // Renamed and exported
   updateTranscriberProfile,
-  // REMOVED: getTranscriberUpcomingPayouts is now in paymentController.js
 };
