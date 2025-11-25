@@ -1207,31 +1207,24 @@ const verifyDirectUploadPayment = async (req, res, io) => {
             transaction.paid_at = transaction.createdAt ? new Date(transaction.createdAt).toISOString() : new Date().toISOString(); 
         }
 
-        // --- START OF NEW DUPLICATE PAYMENT CHECK ---
-        const { data: existingPayment, error: existingPaymentError } = await supabase
+        // --- START OF DUPLICATE PAYMENT CHECK ---
+        const { data: existingPayments, error: existingPaymentError } = await supabase
             .from('payments')
-            .select('id, paystack_status, korapay_status')
+            .select('id')
             .or(`paystack_reference.eq.${reference},korapay_reference.eq.${reference}`)
             .eq('direct_upload_job_id', relatedJobId)
-            .single();
+            .limit(1); // Use limit(1) to check for existence without error if multiple exist
 
-        if (existingPaymentError && existingPaymentError.code !== 'PGRST116') { // PGRST116 means no rows found
+        if (existingPaymentError) {
             console.error(`[verifyDirectUploadPayment] Error checking for existing payment record for reference ${reference}:`, existingPaymentError);
             return res.status(500).json({ error: 'Server error during payment verification.ᐟ' });
         }
 
-        if (existingPayment) {
-            // If an existing payment is found and its status indicates it's already processed, return early.
-            // This prevents duplicate entries for the same successful transaction.
-            const isPaystackSuccess = existingPayment.paystack_status === 'success';
-            const isKorapaySuccess = existingPayment.korapay_status === 'success';
-
-            if (isPaystackSuccess || isKorapaySuccess) {
-                console.warn(`[verifyDirectUploadPayment] Payment with reference ${reference} for job ${relatedJobId} already processed. Preventing duplicate entry.`);
-                return res.status(200).json({ message: 'Payment already processed and recorded.ᐟ', transaction: transaction });
-            }
+        if (existingPayments && existingPayments.length > 0) {
+            console.warn(`[verifyDirectUploadPayment] A payment record for reference ${reference} and job ${relatedJobId} already exists. Preventing duplicate insertion.`);
+            return res.status(200).json({ message: 'Payment already processed and recorded.ᐟ', transaction: transaction });
         }
-        // --- END OF NEW DUPLICATE PAYMENT CHECK ---
+        // --- END OF DUPLICATE PAYMENT CHECK ---
 
 
         const {
