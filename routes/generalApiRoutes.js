@@ -91,13 +91,15 @@ const {
     takeDirectUploadJob,
     completeDirectUploadJob,
     clientCompleteDirectUploadJob,
+    getAllDirectUploadJobsForTranscriber,
     getAllDirectUploadJobsForAdmin,
     handleQuoteCalculationRequest,
     initializeDirectUploadPayment, // NEW: Import direct upload-specific payment initiation
     verifyDirectUploadPayment, // NEW: Import direct upload-specific payment verification
     downloadDirectUploadFile, // NEW: Import the download function
     deleteDirectUploadJob, // NEW: Import the delete direct upload job function
-    cancelDirectUploadJob // NEW: Import the cancel direct upload job function
+    cancelDirectUploadJob, // NEW: Import the cancel direct upload job function
+    getDirectUploadJobDetails // NEW: Import the new function
 } = require('../controllers/directUploadController');
 
 // NEW: Import training controller functions
@@ -564,7 +566,7 @@ module.exports = (io) => {
 
   router.post('/user/chat/send-message', authMiddleware, (req, res, next) => {
       if (req.user.userType === 'admin') {
-          return res.status(403).json({ error: 'Admins should use their dedicated message sending route.&amp;amp;amp;#x27;' });
+          return res.status(403).json({ error: 'Admins should use their dedicated message sending route.&amp;amp;amp;amp;#x27;' });
       }
       sendUserDirectMessage(req, res, io);
   });
@@ -917,6 +919,12 @@ module.exports = (io) => {
       return res.status(403).json({ error: 'Access denied. Only clients can view their direct upload jobs.' });
     }
     getDirectUploadJobsForClient(req, res, io);
+  });
+
+  // NEW: Endpoint for non-admin users to get details of a single direct upload job
+  router.get('/direct-jobs/:jobId', authMiddleware, (req, res, next) => {
+    // Authorization is handled within getDirectUploadJobDetails
+    getDirectUploadJobDetails(req, res, next);
   });
 
   router.get('/transcriber/direct-jobs/available', authMiddleware, (req, res, next) => {

@@ -35,8 +35,6 @@ const { getNextFriday } = require('..//controllers/paymentController');
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024;
 
-// Removed the duplicate getNextFriday function as it's now imported.
-
 const negotiationFileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = 'uploads/negotiation_files';
@@ -101,7 +99,7 @@ const uploadTempNegotiationFile = multer({
 
 const getAvailableTranscribers = async (req, res) => {
   try {
-    console.log('Fetching available transcribers...');
+    console.log('Fetching available transcribers... (Using .is(null) for UUID check)');
 
     const { data: transcribers, error } = await supabase
       .from('users')
@@ -121,7 +119,7 @@ const getAvailableTranscribers = async (req, res) => {
       `)
       .eq('user_type', 'transcriber')
       .eq('is_online', true)
-      .is('current_job_id', null)
+      .is('current_job_id', null) // MODIFIED: Only check if current_job_id is null
       .eq('transcriber_status', 'active_transcriber');
 
     if (error) {
@@ -151,10 +149,10 @@ const getAvailableTranscribers = async (req, res) => {
         }
       }));
 
-    availableTranscribers.sort((a, b) => b.average_rating - a.average_rating);
+    availableTranscribers.sort((a, b) => b.average_rating - a.average_rating); // Corrected typo here
 
     if (availableTranscribers.length === 0 && process.env.NODE_ENV === 'development') {
-      console.log('No transcribers found, creating sample data...');
+      console.log('No transcribers found, creating sample data... (This block is for development only)');
 
       const sampleUsers = [
         { full_name: 'Sarah Wanjiku', email: 'sarah@example.com', password_hash: '$2b$10$sample.hash.for.demo', user_type: 'transcriber', is_online: true, current_job_id: null, transcriber_status: 'active_transcriber', transcriber_user_level: 'transcriber', transcriber_average_rating: 4.5, transcriber_completed_jobs: 15 },
@@ -181,7 +179,7 @@ const getAvailableTranscribers = async (req, res) => {
             .insert(sampleTranscriberMarkers);
 
         if (insertProfileError) {
-          console.error('Error creating sample transcriber marker profiles:', insertProfileError);
+          console.error('Error creating sample transcriber marker profiles:ᐟ', insertProfileError);
         } else {
           availableTranscribers = insertedUsers.map(user => ({
             id: user.id,
@@ -211,7 +209,7 @@ const getAvailableTranscribers = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Get available transcribers error:', error);
+    console.error('Get available transcribers error:ᐟ', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -254,7 +252,7 @@ const createNegotiation = async (req, res, next, io) => {
       .eq('id', transcriber_id)
       .eq('user_type', 'transcriber')
       .eq('is_online', true)
-      .is('current_job_id', null)
+      .is('current_job_id', null) // MODIFIED: Only check for null for availability
       .eq('transcriber_status', 'active_transcriber')
       .single();
 
@@ -262,9 +260,11 @@ const createNegotiation = async (req, res, next, io) => {
       if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
       }
-      console.error('createNegotiation: Transcriber not found or not available. Supabase Error:', transcriberError);
+      console.error('createNegotiation: Transcriber not found or not available. Supabase Error:ᐟ', transcriberError);
       return res.status(404).json({ error: 'Transcriber not found, not online, or not available for new jobs.ᐟ' });
     }
+    // This check is redundant if .is('current_job_id', null) is used above and enforced by Supabase.
+    // However, keeping it as a safeguard for now.
     if (transcriberUser.current_job_id) {
         if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
         return res.status(400).json({ error: 'Transcriber is currently busy with an active job.ᐟ' });
@@ -279,7 +279,7 @@ const createNegotiation = async (req, res, next, io) => {
       .single();
 
     if (existingNegError && existingNegError.code !== 'PGRST116') {
-        console.error('createNegotiation: Supabase error checking existing negotiation:', existingNegError);
+        console.error('createNegotiation: Supabase error checking existing negotiation:ᐟ', existingNegError);
         if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
       }
@@ -319,7 +319,7 @@ const createNegotiation = async (req, res, next, io) => {
       .single();
 
     if (insertError) {
-      console.error('createNegotiation: Supabase error inserting new negotiation:', insertError);
+      console.error('createNegotiation: Supabase error inserting new negotiation:ᐟ', insertError);
       if (fs.existsSync(permanentFilePath)) {
         fs.unlinkSync(permanentFilePath);
       }
@@ -359,7 +359,7 @@ const createNegotiation = async (req, res, next, io) => {
     });
 
   } catch (error) {
-    console.error('createNegotiation: UNCAUGHT EXCEPTION:', error);
+    console.error('createNegotiation: UNCAUGHT EXCEPTION:ᐟ', error);
     res.status(500).json({ error: error.message || 'Failed to create negotiation due to server error.ᐟ' });
   }
 };
@@ -990,7 +990,7 @@ const clientCounterBack = async (req, res, io) => {
             .single();
 
         if (updateError) {
-            console.error('Client counter back: Supabase error updating negotiation:', updateError);
+            console.error('Client counter back: Supabase error updating negotiation:ᐟ', updateError);
             throw updateError;
         }
 
@@ -1673,6 +1673,7 @@ module.exports = {
     clientRejectCounter,
     clientCounterBack,
     markJobCompleteByClient,
+    markNegotiationJobCompleteByTranscriber, // NEW: Export the new function
     initializeNegotiationPayment,
     verifyNegotiationPayment
 };

@@ -1,15 +1,16 @@
-const supabase = require('../database');
+const supabase = require('..//database');
 const path = require('path');
 const fs = require('fs');
-const emailService = require('../emailService');
-const { updateAverageRating } = require('./ratingController');
-const { calculateTranscriberEarning } = require('../utils/paymentUtils');
-const { getNextFriday } = require('../controllers/paymentController'); // Corrected path for getNextFriday
+const emailService = require('..//emailService');
+const { updateAverageRating } = require('.//ratingController');
+const { calculateTranscriberEarning } = require('..//utils/paymentUtils');
+const { getNextFriday } = require('..//controllers/paymentController'); // Corrected path for getNextFriday
 
 // --- UPDATED: Function to synchronize transcriber's availability status and current job ---
 const syncAvailabilityStatus = async (transcriberId, newJobId = null) => {
+    console.log(`[syncAvailabilityStatus] Called with transcriberId: ${transcriberId}, newJobId: ${newJobId}`); // NEW LOG
     if (!transcriberId) {
-        console.warn('syncAvailabilityStatus: transcriberId is null or undefined. Skipping availability sync.');
+        console.warn('[syncAvailabilityStatus] transcriberId is null or undefined. Skipping availability sync.');
         return;
     }
 
@@ -48,13 +49,17 @@ const syncAvailabilityStatus = async (transcriberId, newJobId = null) => {
             }
         }
 
+        console.log(`[syncAvailabilityStatus] Attempting to update user ${transcriberId} with data:`, updateData); // NEW LOG
+
         const { error: updateError } = await supabase
             .from('users')
             .update(updateData)
             .eq('id', transcriberId);
 
         if (updateError) {
-            console.error(`[syncAvailabilityStatus] Error updating availability for ${transcriberId}:`, updateError);
+            console.error(`[syncAvailabilityStatus] Error updating availability for ${transcriberId}:`, updateError); // NEW LOG
+        } else {
+            console.log(`[syncAvailabilityStatus] Successfully updated availability for ${transcriberId}.`); // NEW LOG
         }
 
     } catch (error) {
@@ -64,8 +69,9 @@ const syncAvailabilityStatus = async (transcriberId, newJobId = null) => {
 
 // --- NEW: Function to set is_online status directly (e.g., used on login) ---
 const setTranscriberOnlineStatus = async (transcriberId, isOnline, io = null) => {
+    console.log(`[setTranscriberOnlineStatus] Called with transcriberId: ${transcriberId}, isOnline: ${isOnline}`); // NEW LOG
     if (!transcriberId) {
-        console.warn('setTranscriberOnlineStatus: transcriberId is null or undefined. Skipping status update.');
+        console.warn('[setTranscriberOnlineStatus] transcriberId is null or undefined. Skipping status update.');
         return;
     }
 
@@ -83,27 +89,29 @@ const setTranscriberOnlineStatus = async (transcriberId, isOnline, io = null) =>
 
         // Prevent going online if not an active transcriber or already has a job
         if (isOnline && user.transcriber_status !== 'active_transcriber') {
-            console.warn(`[setTranscriberOnlineStatus] Transcriber ${transcriberId} cannot go online: Not an active transcriber.`);
+            console.warn(`[setTranscriberOnlineStatus] Transcriber ${transcriberId} cannot go online: Not an active transcriber. Forcing offline.`); // NEW LOG
             isOnline = false; // Force offline if not active
         }
         if (isOnline && user.current_job_id) {
-            console.warn(`[setTranscriberOnlineStatus] Transcriber ${transcriberId} cannot go online: Has active job ${user.current_job_id}.`);
+            console.warn(`[setTranscriberOnlineStatus] Transcriber ${transcriberId} cannot go online: Has active job ${user.current_job_id}. Forcing offline.`); // NEW LOG
             isOnline = false; // Force offline if has active job
         }
 
+        const updateData = {
+            is_online: isOnline,
+            updated_at: new Date().toISOString()
+        };
+        console.log(`[setTranscriberOnlineStatus] Attempting to update user ${transcriberId} with data:`, updateData); // NEW LOG
 
         const { data: updatedUser, error: updateError } = await supabase
             .from('users')
-            .update({
-                is_online: isOnline,
-                updated_at: new Date().toISOString()
-            })
+            .update(updateData)
             .eq('id', transcriberId)
             .select('id, is_online, full_name') // Select relevant fields for response
             .single();
 
         if (updateError) {
-            console.error(`[setTranscriberOnlineStatus] Error updating online status for ${transcriberId}:`, updateError);
+            console.error(`[setTranscriberOnlineStatus] Error updating online status for ${transcriberId}:`, updateError); // NEW LOG
             return;
         }
 
