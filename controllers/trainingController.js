@@ -19,7 +19,7 @@ const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
 
-const TRAINING_FEE_USD = 2.00;
+const TRAINING_FEE_USD = 50.00; // Updated training fee to 50 USD
 
 
 const trainingRoomFileStorage = multer.diskStorage({
@@ -494,8 +494,8 @@ const initializeTrainingPayment = async (req, res, io) => {
                     client_id: traineeId,
                     agreed_price_usd: TRAINING_FEE_USD,
                     currency_paid: 'KES',
-                    exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
                     amount_paid_kes: amountKes
+                    // REMOVED: exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES, // Removed as per KoraPay API rejection
                 }
             };
             
