@@ -9,8 +9,8 @@ const {
     sendNegotiationAcceptedEmail,
     sendPaymentConfirmationEmail,
     sendNegotiationRejectedEmail,
-    sendJobCompletedEmailToTranscriber, // NEW: Imported from emailService
-    sendJobCompletedEmailToClient      // NEW: Imported from emailService
+    sendJobCompletedEmailToTranscriber,
+    sendJobCompletedEmailToClient
 } = require('../emailService');
 
 const axios = require('axios');
@@ -436,7 +436,8 @@ const getClientNegotiations = async (req, res) => {
         return {
             ...negotiation,
             jobType: 'negotiation',
-            client_info: transcriberData ? {
+            // Corrected: Renamed 'client_info' back to 'transcriber_info'
+            transcriber_info: transcriberData ? { 
                 id: transcriberData.id,
                 full_name: transcriberData.full_name,
                 email: transcriberData.email,
@@ -452,7 +453,7 @@ const getClientNegotiations = async (req, res) => {
         };
     });
 
-    console.log('[getClientNegotiations] Formatted negotiations sent to frontend:ᐟ', negotiationsWithTranscribers.map(n => ({ id: n.id, transcriberRating: n.client_info.transcriber_average_rating, transcriberJobs: n.client_info.transcriber_completed_jobs, dueDate: n.due_date, status: n.status })));
+    console.log('[getClientNegotiations] Formatted negotiations sent to frontend:ᐟ', negotiationsWithTranscribers.map(n => ({ id: n.id, transcriberRating: n.transcriber_info.transcriber_average_rating, transcriberJobs: n.transcriber_info.transcriber_completed_jobs, dueDate: n.due_date, status: n.status })));
     res.json({
       message: 'Negotiations retrieved successfully',
       negotiations: negotiationsWithTranscribers
