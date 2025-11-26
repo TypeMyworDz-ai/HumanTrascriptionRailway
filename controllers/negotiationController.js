@@ -1162,13 +1162,15 @@ const markJobCompleteByClient = async (req, res, io) => {
 };
 
 const initializeNegotiationPayment = async (req, res, io) => {
-    console.log('[initializeNegotiationPayment] Received request body:', req.body);
+    console.log('[initializeNegotiationPayment] Received req.params:', req.params); // Added for debugging
+    console.log('[initializeNegotiationPayment] Received req.body:', req.body);     // Added for debugging
 
-    const { negotiationId, amount, email, paymentMethod = 'paystack', mobileNumber } = req.body;
+    const { negotiationId } = req.params; // Correctly get negotiationId from URL parameters
+    const { amount, email, paymentMethod = 'paystack', mobileNumber } = req.body; // Get amount and email from request body
     const clientId = req.user.userId;
 
-    const finalJobId = negotiationId;
-    const finalClientEmail = email;
+    const finalJobId = negotiationId; // Use negotiationId from params
+    const finalClientEmail = email;   // Use email from body
 
     console.log(`[initializeNegotiationPayment] Destructured parameters - negotiationId: ${finalJobId}, amount: ${amount}, clientEmail: ${finalClientEmail}, clientId: ${clientId}, paymentMethod: ${paymentMethod}, mobileNumber: ${mobileNumber}`);
 
@@ -1432,8 +1434,6 @@ const verifyNegotiationPayment = async (req, res, io) => {
 
             if (currentJobError || !currentJobData) {
                 console.error(`Error fetching current job data for transcriber_id fallback for negotiation ${relatedJobId}: `, currentJobError);
-                // If we can't get it, it will remain null, which needs to be addressed if it's a critical field.
-                // For now, allow it to be null if we can't find it.
                 finalTranscriberId = null; 
             } else {
                 finalTranscriberId = currentJobData.transcriber_id;
