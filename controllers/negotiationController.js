@@ -436,7 +436,6 @@ const getClientNegotiations = async (req, res) => {
         return {
             ...negotiation,
             jobType: 'negotiation',
-            // Corrected: Renamed 'client_info' back to 'transcriber_info'
             transcriber_info: transcriberData ? { 
                 id: transcriberData.id,
                 full_name: transcriberData.full_name,
@@ -1065,7 +1064,6 @@ const markJobCompleteByClient = async (req, res, io) => {
         if (updateError) throw updateError;
 
         // UPDATED: Update payment payout_status to 'pending' when client completes negotiation job
-        // Added more logging for debugging payment update issues
         console.log(`[markJobCompleteByClient] Attempting to update payment for negotiationId: ${negotiationId}, transcriber_id: ${negotiation.transcriber_id}`);
         const { error: paymentUpdateError } = await supabase
             .from('payments')
@@ -1420,7 +1418,27 @@ const verifyNegotiationPayment = async (req, res, io) => {
             amount_paid_kes: metadataAmountPaidKes
         } = transaction.metadata;
 
-        const finalTranscriberId = (metadataTranscriberIdRaw === '' || metadataTranscriberIdRaw === undefined) ? null : metadataTranscriberIdRaw;
+        // UPDATED: Ensure finalTranscriberId always has a value, falling back to currentJob.transcriber_id
+        let finalTranscriberId;
+        if (metadataTranscriberIdRaw && metadataTranscriberIdRaw !== '') {
+            finalTranscriberId = metadataTranscriberIdRaw;
+        } else {
+            // Fetch currentJob to get transcriber_id if not in metadata
+            const { data: currentJobData, error: currentJobError } = await supabase
+                .from('negotiations')
+                .select('transcriber_id')
+                .eq('id', relatedJobId)
+                .single();
+
+            if (currentJobError || !currentJobData) {
+                console.error(`Error fetching current job data for transcriber_id fallback for negotiation ${relatedJobId}: `, currentJobError);
+                // If we can't get it, it will remain null, which needs to be addressed if it's a critical field.
+                // For now, allow it to be null if we can't find it.
+                finalTranscriberId = null; 
+            } else {
+                finalTranscriberId = currentJobData.transcriber_id;
+            }
+        }
 
         if (metadataRelatedJobId !== relatedJobId || metadataRelatedJobType !== 'negotiation') {
             console.error('Metadata job ID or type mismatch:ᐟ', metadataRelatedJobId, relatedJobId, metadataRelatedJobType);
@@ -1456,7 +1474,7 @@ const verifyNegotiationPayment = async (req, res, io) => {
         const paymentData = {
             related_job_type: 'negotiation',
             client_id: metadataClientId,
-            transcriber_id: finalTranscriberId,
+            transcriber_id: finalTranscriberId, // Use the determined finalTranscriberId
             amount: actualAmountPaidUsd,
             transcriber_earning: transcriberPayAmount,
             currency: 'USD',
