@@ -480,17 +480,81 @@ const sendPayoutConfirmationEmail = async (transcriber, payment) => {
     }
 };
 
+// NEW: Function to send email to transcriber when a client marks a negotiation job as complete
+const sendJobCompletedEmailToTranscriber = async (transcriber, client, negotiation) => {
+    try {
+        await transporter.sendMail({
+            from: FROM_ADDRESS,
+            to: transcriber.email,
+            subject: `Job Completed by Client: Negotiation #${negotiation.id} - TypeMyworDz`,
+            html: `
+                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 20px auto; padding: 20px; border: 1px solid #eee; border-radius: 8px; background-color: #f9f9f9;">
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <img src="${LOGO_URL}" alt="TypeMyworDz Logo" style="max-width: 150px; height: auto; display: block; margin: 0 auto;">
+                        <h1 style="color: #6a0dad; margin-top: 15px;">Your Job Has Been Marked as Complete!</h1>
+                    </div>
+                    <p style="font-size: 16px;">Hello ${transcriber.full_name || 'Transcriber'},</p>
+                    <p style="font-size: 16px;">Client <strong>${client.full_name || 'Client'}</strong> has marked negotiation job <strong>#${negotiation.id}</strong> as complete.</p>
+                    <p style="font-size: 16px;">Your earnings for this job are now in 'pending' payout status and will be processed according to our payment schedule.</p>
+                    <p style="font-size: 16px;">You can view your updated payment history on your dashboard.</p>
+                    <p style="font-size: 16px;"><a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/transcriber-payments" style="color: #6a0dad; text-decoration: none; font-weight: bold;">View Payment History</a></p>
+                    <p style="font-size: 14px; color: #666;">Best regards,<br>The TypeMyworDz Team</p>
+                    <div style="text-align: center; margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; font-size: 12px; color: #999;">
+                        &copy; ${new Date().getFullYear()} TypeMyworDz. All rights reserved.
+                    </div>
+                </div>
+            `,
+        });
+        console.log(`Job completed email sent to transcriber ${transcriber.email} for negotiation #${negotiation.id}`);
+    } catch (error) {
+        console.error(`Error sending job completed email to transcriber ${transcriber.email} for negotiation #${negotiation.id}:`, error);
+    }
+};
+
+// NEW: Function to send email to client as confirmation that they marked a negotiation job as complete
+const sendJobCompletedEmailToClient = async (client, transcriber, negotiation) => {
+    try {
+        await transporter.sendMail({
+            from: FROM_ADDRESS,
+            to: client.email,
+            subject: `Confirmation: Job Marked Complete - Negotiation #${negotiation.id} - TypeMyworDz`,
+            html: `
+                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 20px auto; padding: 20px; border: 1px solid #eee; border-radius: 8px; background-color: #f9f9f9;">
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <img src="${LOGO_URL}" alt="TypeMyworDz Logo" style="max-width: 150px; height: auto; display: block; margin: 0 auto;">
+                        <h1 style="color: #6a0dad; margin-top: 15px;">You Marked Your Job as Complete!</h1>
+                    </div>
+                    <p style="font-size: 16px;">Hello ${client.full_name || 'Client'},</p>
+                    <p style="font-size: 16px;">This is a confirmation that you have successfully marked negotiation job <strong>#${negotiation.id}</strong> as complete.</p>
+                    <p style="font-size: 16px;">Thank you for your feedback! The transcriber, <strong>${transcriber.full_name || 'Transcriber'}</strong>, has been notified.</p>
+                    <p style="font-size: 16px;">You can review your completed jobs and transcriber feedback on your dashboard.</p>
+                    <p style="font-size: 16px;"><a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/client-dashboard" style="color: #6a0dad; text-decoration: none; font-weight: bold;">View Completed Jobs</a></p>
+                    <p style="font-size: 14px; color: #666;">Best regards,<br>The TypeMyworDz Team</p>
+                    <div style="text-align: center; margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; font-size: 12px; color: #999;">
+                        &copy; ${new Date().getFullYear()} TypeMyworDz. All rights reserved.
+                    </div>
+                </div>
+            `,
+        });
+        console.log(`Job completed confirmation email sent to client ${client.email} for negotiation #${negotiation.id}`);
+    } catch (error) {
+        console.error(`Error sending job completed confirmation email to client ${client.email} for negotiation #${negotiation.id}:`, error);
+    }
+};
+
 
 module.exports = {
     sendWelcomeEmail,
     sendTranscriberTestSubmittedEmail,
     sendTranscriberTestResultEmail,
     sendNewNegotiationRequestEmail,
-    sendTranscriberCounterOfferEmail, // NEW: Export the new function
-    sendClientCounterBackEmail,   // NEW: Export the new function
+    sendTranscriberCounterOfferEmail,
+    sendClientCounterBackEmail,
     sendNegotiationAcceptedEmail,
     sendPaymentConfirmationEmail,
     sendNegotiationRejectedEmail,
     sendTrainingCompletionEmail,
-    sendPayoutConfirmationEmail, // NEW: Export the new payout confirmation function
+    sendPayoutConfirmationEmail,
+    sendJobCompletedEmailToTranscriber, // NEW: Export the new function
+    sendJobCompletedEmailToClient,      // NEW: Export the new function
 };

@@ -9,8 +9,8 @@ const {
     sendNegotiationAcceptedEmail,
     sendPaymentConfirmationEmail,
     sendNegotiationRejectedEmail,
-    sendJobCompletedEmailToTranscriber,
-    sendJobCompletedEmailToClient
+    sendJobCompletedEmailToTranscriber, // NEW: Imported from emailService
+    sendJobCompletedEmailToClient      // NEW: Imported from emailService
 } = require('../emailService');
 
 const axios = require('axios');
@@ -436,7 +436,7 @@ const getClientNegotiations = async (req, res) => {
         return {
             ...negotiation,
             jobType: 'negotiation',
-            client_info: transcriberData ? { // Renamed transcriber_info to client_info for frontend consistency
+            client_info: transcriberData ? {
                 id: transcriberData.id,
                 full_name: transcriberData.full_name,
                 email: transcriberData.email,
@@ -1064,17 +1064,19 @@ const markJobCompleteByClient = async (req, res, io) => {
         if (updateError) throw updateError;
 
         // UPDATED: Update payment payout_status to 'pending' when client completes negotiation job
+        // Added more logging for debugging payment update issues
+        console.log(`[markJobCompleteByClient] Attempting to update payment for negotiationId: ${negotiationId}, transcriber_id: ${negotiation.transcriber_id}`);
         const { error: paymentUpdateError } = await supabase
             .from('payments')
             .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
             .eq('negotiation_id', negotiationId)
-            .eq('transcriber_id', negotiation.transcriber_id) // Ensure we target the correct transcriber's payment
-            .eq('payout_status', 'awaiting_completion'); // Only update if it's awaiting completion
+            .eq('transcriber_id', negotiation.transcriber_id)
+            .eq('payout_status', 'awaiting_completion');
 
         if (paymentUpdateError) {
             console.error(`[markJobCompleteByClient] Error updating payment record for negotiation ${negotiationId} to 'pending':`, paymentUpdateError);
         } else {
-            console.log(`[markJobCompleteByClient] Payment record for negotiation ${negotiationId} updated to 'pending' payout status.`);
+            console.log(`[markJobCompleteByClient] Payment record for negotiation ${negotiationId} updated to 'pending' payout status. Rows affected: ${paymentUpdateError ? 0 : 1}.`);
         }
 
 
@@ -1282,8 +1284,6 @@ const initializeNegotiationPayment = async (req, res, io) => {
                 name: req.user.full_name || 'Customer',
                 email: finalClientEmail,
             };
-            // Removed explicit channels array to let KoraPay determine defaults for KES.
-            // No mobileNumber field for negotiation payments from client side currently.
             
             const korapayData = {
                 key: KORAPAY_PUBLIC_KEY,
@@ -1403,7 +1403,6 @@ const verifyNegotiationPayment = async (req, res, io) => {
                 exchange_rate_usd_to_kes: metadataExchangeRate,
                 amount_paid_usd: actualAmountPaidUsd
             };
-            // UPDATED: Safely parse transaction.paid_at to handle potential 'Invalid time value'
             const parsedCreatedAt = new Date(transaction.createdAt);
             transaction.paid_at = !isNaN(parsedCreatedAt.getTime()) ? parsedCreatedAt.toISOString() : new Date().toISOString();
         }
