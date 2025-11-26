@@ -1,4 +1,4 @@
-const supabase = require('..//database');
+const supabase = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -11,10 +11,10 @@ const {
     sendNegotiationRejectedEmail,
     sendJobCompletedEmailToTranscriber,
     sendJobCompletedEmailToClient
-} = require('..//emailService');
+} = require('../emailService');
 
 const axios = require('axios');
-const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
+const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
 const http = require('http');
 const https = require('https');
 
@@ -28,12 +28,19 @@ const KORAPAY_WEBHOOK_URL = process.env.KORAPAY_WEBHOOK_URL || 'http://localhost
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
 
-const { syncAvailabilityStatus } = require('.//transcriberController');
-
-// Import getNextFriday from paymentController
-const { getNextFriday } = require('..//controllers/paymentController'); 
+const { syncAvailabilityStatus } = require('./transcriberController');
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024;
+
+const getNextFriday = () => {
+    const today = new Date();
+    const dayOfWeek = today.getDay();
+    const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
+    const nextFriday = new Date(today);
+    nextFriday.setDate(today.getDate() + daysUntilFriday);
+    nextFriday.setHours(23, 59, 59, 999);
+    return nextFriday.toISOString();
+};
 
 const negotiationFileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -99,7 +106,7 @@ const uploadTempNegotiationFile = multer({
 
 const getAvailableTranscribers = async (req, res) => {
   try {
-    console.log('Fetching available transcribers... (Using .is(null) for UUID check)');
+    console.log('Fetching available transcribers...');
 
     const { data: transcribers, error } = await supabase
       .from('users')
@@ -119,7 +126,7 @@ const getAvailableTranscribers = async (req, res) => {
       `)
       .eq('user_type', 'transcriber')
       .eq('is_online', true)
-      .is('current_job_id', null) // MODIFIED: Only check if current_job_id is null
+      .is('current_job_id', null)
       .eq('transcriber_status', 'active_transcriber');
 
     if (error) {
@@ -149,10 +156,10 @@ const getAvailableTranscribers = async (req, res) => {
         }
       }));
 
-    availableTranscribers.sort((a, b) => b.average_rating - a.average_rating); // Corrected typo here
+    availableTranscribers.sort((a, b) => b.average_rating - a.average_rating);
 
     if (availableTranscribers.length === 0 && process.env.NODE_ENV === 'development') {
-      console.log('No transcribers found, creating sample data... (This block is for development only)');
+      console.log('No transcribers found, creating sample data...');
 
       const sampleUsers = [
         { full_name: 'Sarah Wanjiku', email: 'sarah@example.com', password_hash: '$2b$10$sample.hash.for.demo', user_type: 'transcriber', is_online: true, current_job_id: null, transcriber_status: 'active_transcriber', transcriber_user_level: 'transcriber', transcriber_average_rating: 4.5, transcriber_completed_jobs: 15 },
@@ -179,7 +186,7 @@ const getAvailableTranscribers = async (req, res) => {
             .insert(sampleTranscriberMarkers);
 
         if (insertProfileError) {
-          console.error('Error creating sample transcriber marker profiles:ᐟ', insertProfileError);
+          console.error('Error creating sample transcriber marker profiles:', insertProfileError);
         } else {
           availableTranscribers = insertedUsers.map(user => ({
             id: user.id,
@@ -209,7 +216,7 @@ const getAvailableTranscribers = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Get available transcribers error:ᐟ', error);
+    console.error('Get available transcribers error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -252,7 +259,7 @@ const createNegotiation = async (req, res, next, io) => {
       .eq('id', transcriber_id)
       .eq('user_type', 'transcriber')
       .eq('is_online', true)
-      .is('current_job_id', null) // MODIFIED: Only check for null for availability
+      .is('current_job_id', null)
       .eq('transcriber_status', 'active_transcriber')
       .single();
 
@@ -260,11 +267,9 @@ const createNegotiation = async (req, res, next, io) => {
       if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
       }
-      console.error('createNegotiation: Transcriber not found or not available. Supabase Error:ᐟ', transcriberError);
+      console.error('createNegotiation: Transcriber not found or not available. Supabase Error:', transcriberError);
       return res.status(404).json({ error: 'Transcriber not found, not online, or not available for new jobs.ᐟ' });
     }
-    // This check is redundant if .is('current_job_id', null) is used above and enforced by Supabase.
-    // However, keeping it as a safeguard for now.
     if (transcriberUser.current_job_id) {
         if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
         return res.status(400).json({ error: 'Transcriber is currently busy with an active job.ᐟ' });
@@ -279,7 +284,7 @@ const createNegotiation = async (req, res, next, io) => {
       .single();
 
     if (existingNegError && existingNegError.code !== 'PGRST116') {
-        console.error('createNegotiation: Supabase error checking existing negotiation:ᐟ', existingNegError);
+        console.error('createNegotiation: Supabase error checking existing negotiation:', existingNegError);
         if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
       }
@@ -319,7 +324,7 @@ const createNegotiation = async (req, res, next, io) => {
       .single();
 
     if (insertError) {
-      console.error('createNegotiation: Supabase error inserting new negotiation:ᐟ', insertError);
+      console.error('createNegotiation: Supabase error inserting new negotiation:', insertError);
       if (fs.existsSync(permanentFilePath)) {
         fs.unlinkSync(permanentFilePath);
       }
@@ -359,7 +364,7 @@ const createNegotiation = async (req, res, next, io) => {
     });
 
   } catch (error) {
-    console.error('createNegotiation: UNCAUGHT EXCEPTION:ᐟ', error);
+    console.error('createNegotiation: UNCAUGHT EXCEPTION:', error);
     res.status(500).json({ error: error.message || 'Failed to create negotiation due to server error.ᐟ' });
   }
 };
@@ -386,14 +391,7 @@ const getClientNegotiations = async (req, res) => {
         client_feedback_comment, 
         client_feedback_rating,  
         client_id,
-        transcriber_id,
-        transcriber:users!transcriber_id (
-            id,
-            full_name,
-            email,
-            transcriber_average_rating,
-            transcriber_completed_jobs
-        )
+        transcriber_id
       `)
       .eq('client_id', clientId)
       .order('created_at', { ascending: false });
@@ -410,23 +408,42 @@ const getClientNegotiations = async (req, res) => {
       });
     }
 
+    const transcriberIds = [...new Set(negotiations.map(n => n.transcriber_id).filter(Boolean))];
+    let transcriberMap = new Map();
+
+    if (transcriberIds.length > 0) {
+        const { data: transcribers, error: transcriberFetchError } = await supabase
+            .from('users')
+            .select(`
+                id,
+                full_name,
+                email,
+                transcriber_average_rating,
+                transcriber_completed_jobs
+            `)
+            .in('id', transcriberIds);
+
+        if (transcriberFetchError) {
+            console.error('Error fetching transcriber details:', transcriberFetchError);
+        } else {
+            transcribers.forEach(t => transcriberMap.set(t.id, t));
+        }
+    }
+
     const negotiationsWithTranscribers = negotiations.map(negotiation => {
-        const { transcriber, ...rest } = negotiation;
-
-        const transcriberProfileData = transcriber || {};
-        console.log(`[getClientNegotiations] Processing negotiation ${negotiation.id}: Transcriber profile data:`, transcriberProfileData);
-
+        const transcriberData = transcriberMap.get(negotiation.transcriber_id);
+        
         return {
-            ...rest,
-            jobType: 'negotiation', // ADDED: Explicitly set jobType for frontend
-            transcriber_info: transcriber ? {
-                id: transcriber.id,
-                full_name: transcriber.full_name,
-                email: transcriber.email,
-                transcriber_average_rating: transcriberProfileData.transcriber_average_rating || 0.0,
-                transcriber_completed_jobs: transcriberProfileData.transcriber_completed_jobs || 0,
+            ...negotiation,
+            jobType: 'negotiation',
+            client_info: transcriberData ? { // Renamed transcriber_info to client_info for frontend consistency
+                id: transcriberData.id,
+                full_name: transcriberData.full_name,
+                email: transcriberData.email,
+                transcriber_average_rating: transcriberData.transcriber_average_rating || 0.0,
+                transcriber_completed_jobs: transcriberData.transcriber_completed_jobs || 0,
             } : {
-                id: rest.transcriber_id,
+                id: negotiation.transcriber_id,
                 full_name: 'Unknown Transcriber',
                 email: 'unknown@example.com',
                 transcriber_average_rating: 0.0,
@@ -435,7 +452,7 @@ const getClientNegotiations = async (req, res) => {
         };
     });
 
-    console.log('[getClientNegotiations] Formatted negotiations sent to frontend:ᐟ', negotiationsWithTranscribers.map(n => ({ id: n.id, transcriberRating: n.transcriber_info.transcriber_average_rating, transcriberJobs: n.transcriber_info.transcriber_completed_jobs, dueDate: n.due_date, status: n.status })));
+    console.log('[getClientNegotiations] Formatted negotiations sent to frontend:ᐟ', negotiationsWithTranscribers.map(n => ({ id: n.id, transcriberRating: n.client_info.transcriber_average_rating, transcriberJobs: n.client_info.transcriber_completed_jobs, dueDate: n.due_date, status: n.status })));
     res.json({
       message: 'Negotiations retrieved successfully',
       negotiations: negotiationsWithTranscribers
@@ -507,28 +524,12 @@ const getTranscriberNegotiations = async (req, res) => {
       });
     }
 
-    // UPDATED: Fetch transcriber_earning from the payments table for each negotiation
-    const negotiationsWithEarnings = await Promise.all(negotiations.map(async (negotiation) => {
-        const { data: payment, error: paymentError } = await supabase
-            .from('payments')
-            .select('transcriber_earning')
-            .eq('negotiation_id', negotiation.id)
-            .eq('transcriber_id', transcriberId)
-            .single();
-
-        if (paymentError && paymentError.code !== 'PGRST116') { // PGRST116 means no rows found
-            console.error(`[getTranscriberNegotiations] Error fetching payment for negotiation ${negotiation.id}:`, paymentError);
-        }
-
-        const transcriberEarning = payment?.transcriber_earning || 0;
-        console.log(`[getTranscriberNegotiations] Negotiation ${negotiation.id}: agreed_price_usd=${negotiation.agreed_price_usd}, transcriber_earning=${transcriberEarning}`);
-
+    const negotiationsWithClients = negotiations.map(negotiation => {
         const { client, transcriber, ...rest } = negotiation;
 
         return {
             ...rest,
-            jobType: 'negotiation', // Explicitly set jobType
-            transcriber_earning: transcriberEarning, // ADDED: Transcriber's actual earning
+            jobType: 'negotiation',
             client_info: client ? {
                 id: client.id,
                 full_name: client.full_name,
@@ -558,12 +559,12 @@ const getTranscriberNegotiations = async (req, res) => {
                 paypal_email: transcriber.transcriber_paypal_email,
             } : null
         };
-    }));
+    });
 
-    console.log('[getTranscriberNegotiations] Formatted negotiations sent to frontend:ᐟ', negotiationsWithEarnings.map(n => ({ id: n.id, clientRating: n.client_info.client_average_rating, clientJobs: n.client_info.client_completed_jobs, dueDate: n.due_date, status: n.status, earning: n.transcriber_earning })));
+    console.log('[getTranscriberNegotiations] Formatted negotiations sent to frontend:ᐟ', negotiationsWithClients.map(n => ({ id: n.id, clientRating: n.client_info.client_average_rating, clientJobs: n.client_info.client_completed_jobs, dueDate: n.due_date, status: n.status })));
     res.json({
       message: 'Transcriber negotiations retrieved successfully',
-      negotiations: negotiationsWithEarnings
+      negotiations: negotiationsWithClients
     });
 
   } catch (error) {
@@ -990,7 +991,7 @@ const clientCounterBack = async (req, res, io) => {
             .single();
 
         if (updateError) {
-            console.error('Client counter back: Supabase error updating negotiation:ᐟ', updateError);
+            console.error('Client counter back: Supabase error updating negotiation:', updateError);
             throw updateError;
         }
 
@@ -1017,7 +1018,6 @@ const clientCounterBack = async (req, res, io) => {
         res.status(500).json({ error: error.message || 'Failed to send counter-offer due to server error.ᐟ' });
     }
 };
-
 
 const markJobCompleteByClient = async (req, res, io) => {
     try {
@@ -1064,34 +1064,17 @@ const markJobCompleteByClient = async (req, res, io) => {
         if (updateError) throw updateError;
 
         // UPDATED: Update payment payout_status to 'pending' when client completes negotiation job
-        // This should now correctly target payments that were marked 'pending' upon client payment.
-        if (negotiation.transcriber_id) {
-            const { data: payment, error: paymentFetchError } = await supabase
-                .from('payments')
-                .select('id, payout_status')
-                .eq('negotiation_id', negotiationId)
-                .eq('transcriber_id', negotiation.transcriber_id)
-                .single();
+        const { error: paymentUpdateError } = await supabase
+            .from('payments')
+            .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
+            .eq('negotiation_id', negotiationId)
+            .eq('transcriber_id', negotiation.transcriber_id) // Ensure we target the correct transcriber's payment
+            .eq('payout_status', 'awaiting_completion'); // Only update if it's awaiting completion
 
-            if (paymentFetchError && paymentFetchError.code !== 'PGRST116') {
-                console.error(`[markJobCompleteByClient] Error fetching payment record for negotiation ${negotiationId}:`, paymentFetchError);
-            }
-
-            // Only update if payment exists and is not already 'paid_out'
-            if (payment && payment.payout_status !== 'paid_out') { 
-                const { error: paymentUpdateError } = await supabase
-                    .from('payments')
-                    .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
-                    .eq('id', payment.id);
-
-                if (paymentUpdateError) {
-                    console.error(`[markJobCompleteByClient] Error updating payment record for negotiation ${negotiationId} to 'pending':`, paymentUpdateError);
-                } else {
-                    console.log(`[markJobCompleteByClient] Payment record for negotiation ${negotiationId} updated to 'pending' payout status.`);
-                }
-            } else if (!payment) {
-                console.warn(`[markJobCompleteByClient] No payment record found for negotiation ${negotiationId} and transcriber ${negotiation.transcriber_id}.`);
-            }
+        if (paymentUpdateError) {
+            console.error(`[markJobCompleteByClient] Error updating payment record for negotiation ${negotiationId} to 'pending':`, paymentUpdateError);
+        } else {
+            console.log(`[markJobCompleteByClient] Payment record for negotiation ${negotiationId} updated to 'pending' payout status.`);
         }
 
 
@@ -1174,102 +1157,6 @@ const markJobCompleteByClient = async (req, res, io) => {
     } catch (error) {
         console.error('Error marking job as complete by client:ᐟ', error);
         res.status(500).json({ error: error.message || 'Failed to mark job as complete due to server error.ᐟ' });
-    }
-};
-
-const markNegotiationJobCompleteByTranscriber = async (req, res, io) => {
-    try {
-        const { negotiationId } = req.params;
-        const transcriberId = req.user.userId;
-        const { transcriberComment } = req.body;
-
-        const { data: negotiation, error: jobError } = await supabase
-            .from('negotiations')
-            .select('client_id, transcriber_id, status')
-            .eq('id', negotiationId)
-            .eq('transcriber_id', transcriberId)
-            .single();
-
-        if (jobError || !negotiation) {
-            console.error(`[markNegotiationJobCompleteByTranscriber] Job fetch error or not found:`, jobError);
-            return res.status(404).json({ error: 'Job not found or not assigned to you.ᐟ' });
-        }
-        if (negotiation.status !== 'hired') {
-            return res.status(400).json({ error: `Job is not currently 'hired'. Current status: ${negotiation.status}.ᐟ` });
-        }
-
-        const { data: updatedNegotiation, error: updateError } = await supabase
-            .from('negotiations')
-            .update({
-                status: 'completed_by_transcriber', // NEW status: Transcriber completed, awaiting client review
-                transcriber_response: transcriberComment, // Using transcriber_response for their final comment
-                completed_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-            })
-            .eq('id', negotiationId)
-            .select()
-            .single();
-
-        if (updateError) {
-            console.error(`[markNegotiationJobCompleteByTranscriber] Supabase update error for negotiation ${negotiationId}:`, updateError);
-            throw updateError;
-        }
-
-        // UPDATED: The payment payout_status should already be 'pending' from client payment.
-        // This block is now redundant for setting to 'pending', but confirms status.
-        const { data: existingPayment, error: paymentFetchError } = await supabase
-            .from('payments')
-            .select('id, payout_status')
-            .eq('negotiation_id', negotiationId)
-            .eq('transcriber_id', transcriberId)
-            .single();
-
-        if (paymentFetchError && paymentFetchError.code !== 'PGRST116') {
-             console.error(`[markNegotiationJobCompleteByTranscriber] Error fetching payment record for negotiation ${negotiationId}:`, paymentFetchError);
-        }
-
-        if (existingPayment && existingPayment.payout_status !== 'paid_out') {
-            // Ensure status is 'pending' if it's not already 'paid_out'
-            const { error: paymentUpdateError } = await supabase
-                .from('payments')
-                .update({ payout_status: 'pending', updated_at: new Date().toISOString() })
-                .eq('id', existingPayment.id);
-
-            if (paymentUpdateError) {
-                console.error(`[markNegotiationJobCompleteByTranscriber] Error updating payment record for negotiation ${negotiationId} to 'pending':`, paymentUpdateError);
-            } else {
-                console.log(`[markNegotiationJobCompleteByTranscriber] Payment record for negotiation ${negotiationId} updated to 'pending' payout status.`);
-            }
-        } else if (!existingPayment) {
-            console.warn(`[markNegotiationJobCompleteByTranscriber] No existing payment record found for negotiation ${negotiationId} and transcriber ${transcriberId}. A payment record should have been created upon client payment.`);
-        }
-
-
-        await syncAvailabilityStatus(transcriberId, null); // Free up transcriber
-
-        // Emit socket event to the client
-        if (io && updatedNegotiation.client_id) {
-            io.to(updatedNegotiation.client_id).emit('negotiation_completed_by_transcriber', {
-                negotiationId: updatedNegotiation.id,
-                transcriberName: req.user.full_name,
-                message: `Transcriber ${req.user.full_name} has submitted your negotiation job for review!`,
-                newStatus: 'completed_by_transcriber'
-            });
-            io.emit('negotiation_completed_transcriber_side', { // For other transcribers to update their view if needed
-                negotiationId: updatedNegotiation.id,
-                message: `Negotiation job '${updatedNegotiation.id.substring(0, 8)}...' submitted by transcriber.`,
-                newStatus: 'completed_by_transcriber'
-            });
-        }
-
-        res.status(200).json({
-            message: 'Negotiation job submitted successfully for client review.ᐟ',
-            negotiation: updatedNegotiation
-        });
-
-    } catch (error) {
-        console.error(`[markNegotiationJobCompleteByTranscriber] UNCAUGHT EXCEPTION for negotiation ${negotiationId}:`, error);
-        res.status(500).json({ error: 'Server error completing negotiation job: ' + error.message });
     }
 };
 
@@ -1565,9 +1452,7 @@ const verifyNegotiationPayment = async (req, res, io) => {
         }
         
         const transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd);
-        // Calculate payout_week_end_date based on transaction_date
-        const payoutWeekEndDate = getNextFriday(new Date(transaction.paid_at)); // Use transaction.paid_at
-
+        
         const paymentData = {
             related_job_type: 'negotiation',
             client_id: metadataClientId,
@@ -1580,8 +1465,7 @@ const verifyNegotiationPayment = async (req, res, io) => {
             paystack_status: paymentMethod === 'paystack' ? transaction.status : null,
             korapay_status: paymentMethod === 'korapay' ? transaction.status : null,
             transaction_date: new Date(transaction.paid_at).toISOString(),
-            payout_status: 'pending', 
-            payout_week_end_date: payoutWeekEndDate, // ADDED: payout_week_end_date
+            payout_status: 'awaiting_completion',
             currency_paid_by_client: metadataCurrencyPaidFromMeta,
             exchange_rate_used: metadataExchangeRateFromMeta
         };
@@ -1673,7 +1557,6 @@ module.exports = {
     clientRejectCounter,
     clientCounterBack,
     markJobCompleteByClient,
-    markNegotiationJobCompleteByTranscriber, // NEW: Export the new function
     initializeNegotiationPayment,
     verifyNegotiationPayment
 };
