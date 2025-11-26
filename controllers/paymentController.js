@@ -1,8 +1,8 @@
 const axios = require('axios');
-const supabase = require('../database');
-const { syncAvailabilityStatus } = require('../controllers/transcriberController'); 
-const emailService = require('../emailService');
-const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('../utils/paymentUtils');
+const supabase = require('..//database');
+const { syncAvailabilityStatus } = require('..//controllers/transcriberController'); 
+const emailService = require('..//emailService');
+const { calculateTranscriberEarning, convertUsdToKes, EXCHANGE_RATE_USD_TO_KES } = require('..//utils/paymentUtils');
 const http = require('http');
 const https = require('https');
 
@@ -78,7 +78,7 @@ const getTranscriberPaymentHistory = async (req, res) => {
                 )
             `)
             .eq('transcriber_id', transcriberId)
-            // This filter is correct as it only considers 'pending' and 'paid_out' for history
+            // Filter to include only 'pending' and 'paid_out' payments for history and exclude 'voided_by_cancellation'
             .or('payout_status.eq.pending,payout_status.eq.paid_out') 
             .order('transaction_date', { ascending: false });
 

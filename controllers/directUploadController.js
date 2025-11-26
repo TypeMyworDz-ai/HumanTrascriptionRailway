@@ -751,6 +751,20 @@ const cancelDirectUploadJob = async (req, res, io) => {
 
         if (jobUpdateError) throw jobUpdateError;
 
+        // NEW: Update the payment record's payout_status to 'voided_by_cancellation'
+        const { error: paymentUpdateError } = await supabase
+            .from('payments')
+            .update({ payout_status: 'voided_by_cancellation', updated_at: new Date().toISOString() })
+            .eq('direct_upload_job_id', jobId)
+            .eq('transcriber_id', transcriberId);
+
+        if (paymentUpdateError) {
+            console.error(`[cancelDirectUploadJob] Error updating payment record to 'voided_by_cancellation' for job ${jobId}:`, paymentUpdateError);
+            // Log the error but do not prevent job cancellation from succeeding
+        } else {
+            console.log(`[cancelDirectUploadJob] Payment record for job ${jobId} updated to 'voided_by_cancellation'.`);
+        }
+
         // Update transcriber's current_job_id to null
         await syncAvailabilityStatus(transcriberId, null);
 
@@ -1118,7 +1132,7 @@ const initializeDirectUploadPayment = async (req, res, io) => {
                         transcriber_id: transcriberId || '', // Send empty string if null
                         agreed_price_usd: quoteAmountUsd, // Use quoteAmountUsd
                         currency_paid: 'KES',
-                        exchange_rate_usd_to_kes: EXCHANGE_RATE_TO_KES,
+                        exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
                         amount_paid_kes: amountKes
                     }
                 },
