@@ -491,11 +491,9 @@ const initializeTrainingPayment = async (req, res, io) => {
                 metadata: {
                     related_job_id: traineeId,
                     related_job_type: 'training',
-                    client_id: traineeId,
                     agreed_price_usd: TRAINING_FEE_USD,
                     currency_paid: 'KES',
                     amount_paid_kes: amountKes
-                    // REMOVED: exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES, // Removed as per KoraPay API rejection
                 }
             };
             
