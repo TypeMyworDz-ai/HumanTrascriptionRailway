@@ -1118,7 +1118,7 @@ const initializeDirectUploadPayment = async (req, res, io) => {
                         transcriber_id: transcriberId || '', // Send empty string if null
                         agreed_price_usd: quoteAmountUsd, // Use quoteAmountUsd
                         currency_paid: 'KES',
-                        exchange_rate_usd_to_kes: EXCHANGE_RATE_USD_TO_KES,
+                        exchange_rate_usd_to_kes: EXCHANGE_RATE_TO_KES,
                         amount_paid_kes: amountKes
                     }
                 },
@@ -1225,6 +1225,39 @@ const verifyDirectUploadPayment = async (req, res, io) => {
     }
 
     try {
+        // --- START OF ENHANCED DUPLICATE PAYMENT CHECK ---
+        let existingPaymentQuery;
+        if (paymentMethod === 'korapay') {
+            existingPaymentQuery = supabase
+                .from('payments')
+                .select('id, korapay_status')
+                .eq('direct_upload_job_id', relatedJobId)
+                .eq('korapay_reference', reference)
+                .or('korapay_status.eq.success,korapay_status.eq.settled'); // Check for success or settled status
+        } else if (paymentMethod === 'paystack') {
+            existingPaymentQuery = supabase
+                .from('payments')
+                .select('id, paystack_status')
+                .eq('direct_upload_job_id', relatedJobId)
+                .eq('paystack_reference', reference)
+                .eq('paystack_status', 'success'); // Check for success status
+        }
+
+        if (existingPaymentQuery) {
+            const { data: existingPayments, error: existingPaymentError } = await existingPaymentQuery;
+
+            if (existingPaymentError) {
+                console.error(`[verifyDirectUploadPayment] Error checking for existing payment record for reference ${reference}:`, existingPaymentError);
+                return res.status(500).json({ error: 'Server error during payment verification.ᐟ' });
+            }
+
+            if (existingPayments && existingPayments.length > 0) {
+                console.warn(`[verifyDirectUploadPayment] A successful payment record for reference ${reference} and job ${relatedJobId} already exists. Preventing duplicate insertion.`);
+                return res.status(200).json({ message: 'Payment already processed and recorded.ᐟ', transaction: existingPayments[0] }); // Return existing payment info
+            }
+        }
+        // --- END OF ENHANCED DUPLICATE PAYMENT CHECK ---
+
         let transaction;
         let metadataCurrencyPaid;
         let metadataExchangeRate;
@@ -1275,8 +1308,8 @@ const verifyDirectUploadPayment = async (req, res, io) => {
             transaction.metadata = {
                 related_job_id: relatedJobId,
                 related_job_type: 'direct_upload',
-                client_id: req.user.userId,
-                transcriber_id: transaction.metadata?.transcriber_id || null, // Allow null here as it's from KoraPay response
+                client_id: req.user.userId, 
+                transcriber_id: transaction.metadata?.transcriber_id || null, 
                 agreed_price_usd: actualAmountPaidUsd,
                 currency_paid: metadataCurrencyPaid,
                 exchange_rate_usd_to_kes: metadataExchangeRate,
@@ -1285,32 +1318,12 @@ const verifyDirectUploadPayment = async (req, res, io) => {
             transaction.paid_at = transaction.createdAt ? new Date(transaction.createdAt).toISOString() : new Date().toISOString(); 
         }
 
-        // --- START OF DUPLICATE PAYMENT CHECK ---
-        const { data: existingPayments, error: existingPaymentError } = await supabase
-            .from('payments')
-            .select('id')
-            .or(`paystack_reference.eq.${reference},korapay_reference.eq.${reference}`)
-            .eq('direct_upload_job_id', relatedJobId)
-            .limit(1); // Use limit(1) to check for existence without error if multiple exist
-
-        if (existingPaymentError) {
-            console.error(`[verifyDirectUploadPayment] Error checking for existing payment record for reference ${reference}:`, existingPaymentError);
-            return res.status(500).json({ error: 'Server error during payment verification.ᐟ' });
-        }
-
-        if (existingPayments && existingPayments.length > 0) {
-            console.warn(`[verifyDirectUploadPayment] A payment record for reference ${reference} and job ${relatedJobId} already exists. Preventing duplicate insertion.`);
-            return res.status(200).json({ message: 'Payment already processed and recorded.ᐟ', transaction: transaction });
-        }
-        // --- END OF DUPLICATE PAYMENT CHECK ---
-
-
         const {
             related_job_id: metadataRelatedJobId,
             related_job_type: metadataRelatedJobType,
             client_id: metadataClientId,
             transcriber_id: metadataTranscriberIdRaw,
-            agreed_price_usd: metadataAgreedPrice, // This metadata field is what KoraPay sent back
+            agreed_price_usd: metadataAgreedPrice, 
             currency_paid: metadataCurrencyPaidFromMeta,
             exchange_rate_usd_to_kes: metadataExchangeRateFromMeta,
             amount_paid_kes: metadataAmountPaidKes
@@ -1324,14 +1337,14 @@ const verifyDirectUploadPayment = async (req, res, io) => {
         }
 
         if (Math.round(actualAmountPaidUsd * 100) !== Math.round(metadataAgreedPrice * 100)) {
-            console.error('[verifyDirectUploadPayment] Payment verification amount mismatch. Transaction amount (USD):ᐟ', actualAmountPaidUsd, 'Expected Quote Amount (USD):', metadataAgreedPrice); // Console log
+            console.error('[verifyDirectUploadPayment] Payment verification amount mismatch. Transaction amount (USD):ᐟ', actualAmountPaidUsd, 'Expected Quote Amount (USD):', metadataAgreedPrice); 
             return res.status(400).json({ error: 'Invalid transaction metadata (amount mismatch). Payment charged a different amount than expected.ᐟ' });
         }
         
         let currentJob;
         let updateTable = 'direct_upload_jobs';
         let updateStatusColumn = 'status';
-        let newJobStatus = 'available_for_transcriber'; // Default status after payment
+        let newJobStatus = 'available_for_transcriber'; 
 
         const { data, error } = await supabase
             .from('direct_upload_jobs')
@@ -1343,20 +1356,19 @@ const verifyDirectUploadPayment = async (req, res, io) => {
             return res.status(404).json({ error: 'Direct upload job not found for verification.ᐟ' });
         }
         currentJob = data;
-        // The previous job status check is still valid for preventing re-processing the job logic,
-        // but the new payment reference check above handles duplicate payment *record creation*.
+        
+        // This check is for job *status*, not payment record. We keep it as it prevents re-processing job state.
         if (currentJob.status === 'available_for_transcriber' || currentJob.status === 'taken' || currentJob.status === 'in_progress' || currentJob.status === 'completed' || currentJob.status === 'client_completed') {
              return res.status(200).json({ message: 'Payment already processed and direct upload job already active.ᐟ' });
         }
         
         const transcriberPayAmount = calculateTranscriberEarning(actualAmountPaidUsd);
-        // Calculate payout_week_end_date based on transaction_date
-        const payoutWeekEndDate = getNextFriday(new Date(transaction.paid_at)); // Use transaction.paid_at
+        const payoutWeekEndDate = getNextFriday(new Date(transaction.paid_at)); 
 
         const paymentData = {
             related_job_type: 'direct_upload',
             client_id: metadataClientId,
-            transcriber_id: finalTranscriberId, // This might be null if no transcriber assigned at payment time
+            transcriber_id: finalTranscriberId, 
             amount: actualAmountPaidUsd,
             transcriber_earning: transcriberPayAmount,
             currency: 'USD',
@@ -1365,8 +1377,8 @@ const verifyDirectUploadPayment = async (req, res, io) => {
             paystack_status: paymentMethod === 'paystack' ? transaction.status : null,
             korapay_status: paymentMethod === 'korapay' ? transaction.status : null,
             transaction_date: new Date(transaction.paid_at).toISOString(),
-            payout_status: 'pending', // Set to pending immediately upon client payment
-            payout_week_end_date: payoutWeekEndDate, // ADDED: payout_week_end_date
+            payout_status: 'pending', 
+            payout_week_end_date: payoutWeekEndDate, 
             currency_paid_by_client: metadataCurrencyPaidFromMeta,
             exchange_rate_used: metadataExchangeRateFromMeta
         };
